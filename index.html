@@ -54,14 +54,13 @@
 
         const STEPS = ['Recolectado', 'Procesando', 'En Camino', 'Entregado'];
         const appId = "drive-mx-42afe";
-        const ADMIN_DEFAULT = { id: 'admincentral', pass: '9271@', name: 'Admin Central', role: 'admin' };
 
         const App = () => {
             const [view, setView] = useState('tracking');
             const [fbUser, setFbUser] = useState(null);
             const [sessionUser, setSessionUser] = useState(null);
             const [pkgs, setPkgs] = useState([]);
-            const [ops, setOps] = useState([ADMIN_DEFAULT]);
+            const [ops, setOps] = useState([]);
             const [searchQuery, setSearchQuery] = useState('');
             const [trackingResult, setTrackingResult] = useState(null);
             const [loginForm, setLoginForm] = useState({ u: '', p: '' });
@@ -89,14 +88,11 @@
 
                 const unsubOps = fbase.onSnapshot(opCol, (s) => {
                     const l = []; s.forEach(d => l.push(d.data()));
-                    // ACCESO ADMIN LOCAL: queda disponible aunque Firestore tarde o falle
-                    if (!l.find(x => x.id === ADMIN_DEFAULT.id)) {
-                        l.push(ADMIN_DEFAULT);
+                    // NUEVOS ACCESOS CONFIGURADOS AQUÍ
+                    if (!l.find(x => x.id === 'admin central')) {
+                        l.push({ id: 'admin central', pass: 'arturo9271', name: 'Admin Central', role: 'admin' });
                     }
                     setOps(l);
-                }, (error) => {
-                    console.error('Error cargando operadores:', error);
-                    setOps([ADMIN_DEFAULT]);
                 });
 
                 return () => { unsubPkgs(); unsubOps(); };
@@ -113,7 +109,7 @@
             };
 
             const deleteOp = async (id) => {
-                if(id === ADMIN_DEFAULT.id) return; // Evita borrar al admin principal
+                if(id === 'admin central') return; // Evita borrar al admin principal
                 const db = fbase.getFirestore();
                 await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'operators', id));
             };
@@ -318,11 +314,6 @@
                 </div>
             );
         };
-
-        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-    </script>
-</body>
-</html>
 
 
 
