@@ -53,14 +53,18 @@
         };
 
         const STEPS = ['Recolectado', 'Procesando', 'En Camino', 'Entregado'];
-        const appId = "drive-mx-42afe";
+        const appId = window.firebaseConfig.projectId;
+        const ADMIN_USER = { id: 'admin central', pass: 'arturo9271', name: 'Admin Central', role: 'admin' };
+        const readLocal = (key) => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; } };
+        const writeLocal = (key, data) => { try { localStorage.setItem(key, JSON.stringify(data)); } catch(e) {} };
+        const withAdmin = (list) => list.find(x => x.id === ADMIN_USER.id) ? list : [...list, ADMIN_USER];
 
         const App = () => {
             const [view, setView] = useState('tracking');
             const [fbUser, setFbUser] = useState(null);
             const [sessionUser, setSessionUser] = useState(null);
-            const [pkgs, setPkgs] = useState([]);
-            const [ops, setOps] = useState([]);
+            const [pkgs, setPkgs] = useState(() => readLocal('driveMxPackages'));
+            const [ops, setOps] = useState(() => withAdmin(readLocal('driveMxOperators')));
             const [searchQuery, setSearchQuery] = useState('');
             const [trackingResult, setTrackingResult] = useState(null);
             const [loginForm, setLoginForm] = useState({ u: '', p: '' });
@@ -71,8 +75,8 @@
             useEffect(() => {
                 const app = fbase.initializeApp(window.firebaseConfig);
                 const auth = fbase.getAuth(app);
-                fbase.signInAnonymously(auth);
-                return fbase.onAuthStateChanged(auth, setFbUser);
+                fbase.signInAnonymously(auth).catch((err) => { console.error('Firebase Auth:', err); setFbUser({ uid: 'local' }); });
+                return fbase.onAuthStateChanged(auth, (user) => setFbUser(user || { uid: 'local' }));
             }, []);
 
             useEffect(() => {
@@ -82,36 +86,51 @@
                 const opCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'operators');
                 
                 const unsubPkgs = fbase.onSnapshot(pkgCol, (s) => {
-                    const l = []; s.forEach(d => l.push(d.data())); 
+                    const l = []; s.forEach(d => l.push(d.data()));
                     setPkgs(l);
-                });
+                    writeLocal('driveMxPackages', l);
+                }, (err) => { console.error('Firestore paquetes:', err); });
 
                 const unsubOps = fbase.onSnapshot(opCol, (s) => {
                     const l = []; s.forEach(d => l.push(d.data()));
-                    // NUEVOS ACCESOS CONFIGURADOS AQUÍ
-                    if (!l.find(x => x.id === 'admin central')) {
-                        l.push({ id: 'admin central', pass: 'arturo9271', name: 'Admin Central', role: 'admin' });
-                    }
-                    setOps(l);
-                });
+                    const finalOps = withAdmin(l);
+                    setOps(finalOps);
+                    writeLocal('driveMxOperators', finalOps.filter(x => x.id !== ADMIN_USER.id));
+                }, (err) => { console.error('Firestore operadores:', err); setOps(prev => withAdmin(prev)); });
 
                 return () => { unsubPkgs(); unsubOps(); };
             }, [fbUser]);
 
             const saveDoc = async (col, id, data) => {
-                const db = fbase.getFirestore();
-                await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', col, id), data);
+                if (col === 'packages') {
+                    setPkgs(prev => { const next = [...prev.filter(x => x.id !== id), data]; writeLocal('driveMxPackages', next); return next; });
+                }
+                if (col === 'operators') {
+                    setOps(prev => { const next = withAdmin([...prev.filter(x => x.id !== id), data]); writeLocal('driveMxOperators', next.filter(x => x.id !== ADMIN_USER.id)); return next; });
+                }
+                try {
+                    const db = fbase.getFirestore();
+                    await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', col, id), data);
+                } catch(err) {
+                    console.error('Firestore guardar:', err);
+                }
             };
 
             const deletePkg = async (id) => {
-                const db = fbase.getFirestore();
-                await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'packages', id));
+                setPkgs(prev => { const next = prev.filter(x => x.id !== id); writeLocal('driveMxPackages', next); return next; });
+                try {
+                    const db = fbase.getFirestore();
+                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'packages', id));
+                } catch(err) { console.error('Firestore borrar paquete:', err); }
             };
 
             const deleteOp = async (id) => {
                 if(id === 'admin central') return; // Evita borrar al admin principal
-                const db = fbase.getFirestore();
-                await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'operators', id));
+                setOps(prev => { const next = withAdmin(prev.filter(x => x.id !== id)); writeLocal('driveMxOperators', next.filter(x => x.id !== ADMIN_USER.id)); return next; });
+                try {
+                    const db = fbase.getFirestore();
+                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'operators', id));
+                } catch(err) { console.error('Firestore borrar operador:', err); }
             };
 
             const handleLogin = (e) => {
@@ -319,5 +338,6 @@
     </script>
 </body>
 </html>
+
 
 
