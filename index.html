@@ -54,13 +54,14 @@
 
         const STEPS = ['Recolectado', 'Procesando', 'En Camino', 'Entregado'];
         const appId = "drive-mx-42afe";
+        const ADMIN_DEFAULT = { id: 'admin central', pass: 'arturo9271', name: 'Admin Central', role: 'admin' };
 
         const App = () => {
             const [view, setView] = useState('tracking');
             const [fbUser, setFbUser] = useState(null);
             const [sessionUser, setSessionUser] = useState(null);
             const [pkgs, setPkgs] = useState([]);
-            const [ops, setOps] = useState([]);
+            const [ops, setOps] = useState([ADMIN_DEFAULT]);
             const [searchQuery, setSearchQuery] = useState('');
             const [trackingResult, setTrackingResult] = useState(null);
             const [loginForm, setLoginForm] = useState({ u: '', p: '' });
@@ -88,11 +89,14 @@
 
                 const unsubOps = fbase.onSnapshot(opCol, (s) => {
                     const l = []; s.forEach(d => l.push(d.data()));
-                    // NUEVOS ACCESOS CONFIGURADOS AQUÍ
-                    if (!l.find(x => x.id === 'admin central')) {
-                        l.push({ id: 'admin central', pass: 'arturo9271', name: 'Admin Central', role: 'admin' });
+                    // ACCESO ADMIN LOCAL: queda disponible aunque Firestore tarde o falle
+                    if (!l.find(x => x.id === ADMIN_DEFAULT.id)) {
+                        l.push(ADMIN_DEFAULT);
                     }
                     setOps(l);
+                }, (error) => {
+                    console.error('Error cargando operadores:', error);
+                    setOps([ADMIN_DEFAULT]);
                 });
 
                 return () => { unsubPkgs(); unsubOps(); };
@@ -319,4 +323,5 @@
     </script>
 </body>
 </html>
+
 
