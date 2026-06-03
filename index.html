@@ -127,16 +127,34 @@
 
             const notifyStatusChange = async ({ guiaId, telefonoCliente, estadoAnterior, estadoNuevo }) => {
                 if (!telefonoCliente || estadoAnterior === estadoNuevo || !SMS_STATUS_MESSAGES[estadoNuevo]) return;
+
+                const payload = { guiaId, telefonoCliente, estadoAnterior, estadoNuevo };
+
                 try {
-                    const res = await fetch('/api/twilio-status-sms', {
+                    let res = await fetch('/api/twilio-status', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ guiaId, telefonoCliente, estadoAnterior, estadoNuevo })
+                        body: JSON.stringify(payload)
                     });
+
+                    // Compatibilidad: si tu proyecto todavía usa el nombre anterior, intenta también esta ruta.
+                    if (res.status === 404) {
+                        res = await fetch('/api/twilio-status-sms', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                    }
+
                     const result = await res.json().catch(() => ({}));
-                    if (!res.ok) console.error('Twilio SMS error:', result);
+
+                    if (!res.ok || !result.ok) {
+                        console.error('Twilio SMS error:', result);
+                        alert('El estado se guardó, pero el SMS no se pudo enviar. Revisa los logs de Vercel/Twilio.');
+                    }
                 } catch (err) {
                     console.error('Twilio SMS fetch error:', err);
+                    alert('El estado se guardó, pero no se pudo conectar con la API de SMS.');
                 }
             };
 
