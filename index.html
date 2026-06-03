@@ -29,13 +29,13 @@
         import { getFirestore, doc, setDoc, collection, onSnapshot, deleteDoc, query } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         
         const firebaseConfig = {
-            apiKey: "AIzaSyBExKX8fzOcXbFMT9lBQBldt_5AXr9FjSk",
-            authDomain: "drive-mx-42afe.firebaseapp.com",
-            projectId: "drive-mx-42afe",
-            storageBucket: "drive-mx-42afe.firebasestorage.app",
-            messagingSenderId: "144683559774",
-            appId: "1:144683559774:web:b38f43f4f5eb3d0c637dcf",
-            measurementId: "G-4FQD4F54N0"
+            apiKey: "AIzaSyDOK0wHv1gV5_wB4OSbYjDcL9lmLEg_Rdo",
+            authDomain: "drivemx-paqueteria.firebaseapp.com",
+            projectId: "drivemx-paqueteria",
+            storageBucket: "drivemx-paqueteria.firebasestorage.app",
+            messagingSenderId: "486434579543",
+            appId: "1:486434579543:web:8fe53f54b1446644236f12",
+            measurementId: "G-QDWX6CHWRM"
         };
 
         window.firebaseConfig = firebaseConfig;
@@ -53,7 +53,7 @@
         };
 
         const STEPS = ['Recolectado', 'Procesando', 'En Camino', 'Entregado'];
-        const appId = "drive-mx-42afe";
+        const appId = "drivemx-paqueteria";
 
         const App = () => {
             const [view, setView] = useState('tracking');
@@ -314,9 +314,3 @@
                 </div>
             );
         };
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
