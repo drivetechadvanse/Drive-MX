@@ -72,6 +72,7 @@
             const [pkgForm, setPkgForm] = useState({ id: '', o: '', d: '', op: '' });
             const [pkgImageFile, setPkgImageFile] = useState(null);
             const [pkgImagePreview, setPkgImagePreview] = useState('');
+            const [pkgSaveStatus, setPkgSaveStatus] = useState('');
             const [isSavingPkg, setIsSavingPkg] = useState(false);
             const [staffForm, setStaffForm] = useState({ u: '', p: '', n: '' });
             const [showStaffModal, setShowStaffModal] = useState(false);
@@ -137,53 +138,67 @@
                 } catch(err) { console.error('Firestore borrar operador:', err); }
             };
 
-            const handleLogin = (e) => {
-                e.preventDefault();
-                const match = ops.find(o => o.id.toLowerCase() === loginForm.u.toLowerCase() && String(o.pass) === String(loginForm.p));
-                if (match) { 
-                    setSessionUser(match); 
-                    setView(match.role === 'admin' ? 'admin' : 'operator'); 
-                } else { 
-                    alert("Credenciales incorrectas."); 
-                }
-            };
+            const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(reader.error);
+                reader.readAsDataURL(file);
+            });
 
-            const validatePngFile = (file) => {
+            const isValidPng = (file) => {
                 if (!file) return true;
-                const hasPngExtension = file.name.toLowerCase().endsWith('.png');
-                const hasPngMime = file.type === 'image/png';
-                return hasPngExtension && hasPngMime;
+                const nameOk = file.name.toLowerCase().endsWith('.png');
+                const typeOk = file.type === 'image/png';
+                return nameOk && typeOk;
             };
 
-            const handlePkgImageChange = (e) => {
+            const handlePkgImageChange = async (e) => {
                 const file = e.target.files && e.target.files[0] ? e.target.files[0] : null;
+                setPkgSaveStatus('');
+
                 if (!file) {
                     setPkgImageFile(null);
                     setPkgImagePreview('');
                     return;
                 }
 
-                if (!validatePngFile(file)) {
-                    alert('Solo se permiten imágenes PNG válidas (.png / image/png).');
+                if (!isValidPng(file)) {
+                    alert('Archivo no válido. Debe tener extensión .png y tipo image/png.');
                     e.target.value = '';
                     setPkgImageFile(null);
                     setPkgImagePreview('');
                     return;
                 }
 
-                setPkgImageFile(file);
-                setPkgImagePreview(URL.createObjectURL(file));
+                try {
+                    const dataUrl = await fileToDataUrl(file);
+                    setPkgImageFile(file);
+                    setPkgImagePreview(dataUrl);
+                } catch (err) {
+                    console.error('Lectura PNG:', err);
+                    alert('No se pudo leer el PNG seleccionado. Intenta con otra imagen PNG.');
+                    e.target.value = '';
+                    setPkgImageFile(null);
+                    setPkgImagePreview('');
+                }
             };
 
-            const uploadPkgPng = async (guideId) => {
-                if (!pkgImageFile) return '';
+            const uploadPngToStorage = async (guideId, file) => {
+                if (!file) return '';
                 const storage = fbase.getStorage();
-                const cleanGuideId = guideId.replace(/[^a-zA-Z0-9_-]/g, '_');
-                const cleanFileName = pkgImageFile.name.replace(/[^a-zA-Z0-9_.-]/g, '_');
-                const storagePath = `packages/${cleanGuideId}/${Date.now()}_${cleanFileName}`;
+                const safeGuide = guideId.replace(/[^a-zA-Z0-9_-]/g, '_');
+                const safeName = file.name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+                const storagePath = `packages/${safeGuide}/${Date.now()}_${safeName}`;
                 const storageRef = fbase.ref(storage, storagePath);
-                const snapshot = await fbase.uploadBytes(storageRef, pkgImageFile, { contentType: 'image/png' });
+                const snapshot = await fbase.uploadBytes(storageRef, file, { contentType: 'image/png' });
                 return await fbase.getDownloadURL(snapshot.ref);
+            };
+
+            const resetPkgImageInput = () => {
+                setPkgImageFile(null);
+                setPkgImagePreview('');
+                const input = document.getElementById('pkg-png-input');
+                if (input) input.value = '';
             };
 
             const handleCreatePackage = async (e) => {
@@ -196,33 +211,70 @@
                     return;
                 }
 
-                if (pkgImageFile && !validatePngFile(pkgImageFile)) {
-                    alert('Solo se permiten imágenes PNG válidas (.png / image/png).');
+                if (pkgImageFile && !isValidPng(pkgImageFile)) {
+                    alert('Archivo no válido. Debe tener extensión .png y tipo image/png.');
                     return;
                 }
 
                 setIsSavingPkg(true);
+                setPkgSaveStatus('Guardando guía...');
+
+                let imageUrl = '';
+                let imageDataUrl = '';
+                let imageUploadError = '';
+
                 try {
-                    const imageUrl = await uploadPkgPng(guideId);
-                    const n = {
+                    if (pkgImageFile) {
+                        setPkgSaveStatus('Leyendo PNG...');
+                        imageDataUrl = pkgImagePreview || await fileToDataUrl(pkgImageFile);
+
+                        try {
+                            setPkgSaveStatus('Subiendo PNG a Firebase Storage...');
+                            imageUrl = await uploadPngToStorage(guideId, pkgImageFile);
+                        } catch (storageErr) {
+                            console.error('Firebase Storage PNG:', storageErr);
+                            imageUploadError = storageErr && storageErr.message ? storageErr.message : String(storageErr);
+                            setPkgSaveStatus('Storage no permitió la subida; guardando respaldo local en Firestore...');
+                        }
+                    }
+
+                    const newPkg = {
                         ...pkgForm,
                         id: guideId,
                         status: 'Recolectado',
                         currentStep: 0,
-                        ...(imageUrl ? { imageUrl } : {})
+                        ...(imageUrl ? { imageUrl } : {}),
+                        ...(imageDataUrl ? { imageDataUrl } : {}),
+                        ...(pkgImageFile ? { imageName: pkgImageFile.name, imageType: 'image/png' } : {}),
+                        ...(imageUploadError ? { imageUploadError } : {})
                     };
 
-                    await saveDoc('packages', n.id, n);
+                    setPkgSaveStatus('Guardando datos en Firestore...');
+                    await saveDoc('packages', newPkg.id, newPkg);
                     setPkgForm({ id: '', o: '', d: '', op: '' });
-                    setPkgImageFile(null);
-                    setPkgImagePreview('');
-                    const fileInput = document.getElementById('pkg-png-input');
-                    if (fileInput) fileInput.value = '';
-                } catch(err) {
-                    console.error('Storage/Firestore guardar paquete:', err);
-                    alert('No se pudo subir la imagen PNG o guardar el paquete. Revisa permisos de Firebase Storage.');
+                    resetPkgImageInput();
+                    setPkgSaveStatus(imageUploadError ? 'Guía creada. Storage falló por permisos/configuración; se guardó respaldo en Firestore.' : 'Guía creada con PNG.');
+
+                    if (imageUploadError) {
+                        alert('La guía se creó, pero Firebase Storage rechazó la subida. Revisa reglas/permisos de Storage. La imagen quedó como respaldo en Firestore para poder verse.');
+                    }
+                } catch (err) {
+                    console.error('Crear guía:', err);
+                    alert('No se pudo crear la guía: ' + (err && err.message ? err.message : String(err)));
+                    setPkgSaveStatus('Error al crear la guía.');
                 } finally {
                     setIsSavingPkg(false);
+                }
+            };
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                const match = ops.find(o => o.id.toLowerCase() === loginForm.u.toLowerCase() && String(o.pass) === String(loginForm.p));
+                if (match) { 
+                    setSessionUser(match); 
+                    setView(match.role === 'admin' ? 'admin' : 'operator'); 
+                } else { 
+                    alert("Credenciales incorrectas."); 
                 }
             };
 
@@ -283,10 +335,11 @@
                                             <div><p className="text-[8px] font-black text-slate-400 uppercase">Origen</p><p className="text-[11px] font-bold uppercase">{trackingResult.o}</p></div>
                                             <div className="border-l border-slate-200 pl-4"><p className="text-[8px] font-black text-slate-400 uppercase">Destino</p><p className="text-[11px] font-bold uppercase">{trackingResult.d}</p></div>
                                         </div>
-                                        {trackingResult.imageUrl && (
+                                        {(trackingResult.imageUrl || trackingResult.imageDataUrl) && (
                                             <div className="bg-slate-50 p-3 rounded-2xl">
-                                                <p className="text-[8px] font-black text-slate-400 uppercase mb-2">Imagen del envío</p>
-                                                <img src={trackingResult.imageUrl} alt={`Imagen del envío ${trackingResult.id}`} className="w-full max-h-64 object-cover rounded-xl border border-slate-100" />
+                                                <p className="text-[8px] font-black text-slate-400 uppercase mb-2">Imagen PNG del envío</p>
+                                                <img src={trackingResult.imageUrl || trackingResult.imageDataUrl} alt={`Imagen PNG del envío ${trackingResult.id}`} className="w-full max-h-64 object-cover rounded-xl border border-slate-100" />
+                                                {trackingResult.imageUploadError && <p className="text-[8px] font-bold text-amber-600 mt-2">Storage rechazó la subida; imagen mostrada desde respaldo Firestore.</p>}
                                             </div>
                                         )}
                                         <div className="flex justify-between relative px-2">
@@ -324,10 +377,9 @@
                                             <div className="space-y-2">
                                                 <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest">Imagen PNG del envío</label>
                                                 <input id="pkg-png-input" type="file" accept=".png,image/png" className="input-field" onChange={handlePkgImageChange} />
-                                                <p className="text-[8px] font-bold text-slate-400 uppercase">Solo archivos .png con tipo image/png</p>
-                                                {pkgImagePreview && (
-                                                    <img src={pkgImagePreview} alt="Vista previa PNG" className="w-full max-h-40 object-cover rounded-2xl border border-slate-100" />
-                                                )}
+                                                <p className="text-[8px] font-bold text-slate-400 uppercase">Solo .png con MIME image/png</p>
+                                                {pkgImagePreview && <img src={pkgImagePreview} alt="Vista previa PNG" className="w-full max-h-40 object-cover rounded-2xl border border-slate-100" />}
+                                                {pkgSaveStatus && <p className="text-[9px] font-bold text-red-500">{pkgSaveStatus}</p>}
                                             </div>
                                             <button type="submit" disabled={isSavingPkg} className="w-full btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{isSavingPkg ? 'Guardando...' : 'Crear Guía'}</button>
                                         </form>
@@ -344,7 +396,7 @@
                                                         <tr key={p.id} className="text-[10px] font-bold text-slate-600">
                                                             <td className="px-6 py-4 text-red-600 font-black">#{p.id}</td>
                                                             <td className="px-6 py-4">{p.o} → {p.d}</td>
-                                                            <td className="px-6 py-4">{p.imageUrl ? <img src={p.imageUrl} alt={`PNG ${p.id}`} className="w-12 h-12 object-cover rounded-xl border border-slate-100" /> : <span className="text-[8px] text-slate-300 uppercase">Sin PNG</span>}</td>
+                                                            <td className="px-6 py-4">{(p.imageUrl || p.imageDataUrl) ? <img src={p.imageUrl || p.imageDataUrl} alt={`PNG ${p.id}`} className="w-12 h-12 object-cover rounded-xl border border-slate-100" /> : <span className="text-[8px] text-slate-300 uppercase">Sin PNG</span>}</td>
                                                             <td className="px-6 py-4"><span className="px-2 py-1 bg-slate-100 rounded-full text-[8px] uppercase">{p.status}</span></td>
                                                             <td className="px-6 py-4 text-right"><button onClick={() => deletePkg(p.id)} className="text-slate-300 hover:text-red-500"><Icons.Trash /></button></td>
                                                         </tr>
@@ -388,7 +440,7 @@
                                     {pkgs.filter(p => p.op === sessionUser.id).map(p => (
                                         <div key={p.id} className="card-glass p-6 space-y-6">
                                             <div className="flex justify-between items-center"><h3 className="text-xl font-black text-red-600">#{p.id}</h3><span className="text-[9px] font-black uppercase text-slate-400">{p.o} → {p.d}</span></div>
-                                            {p.imageUrl && <img src={p.imageUrl} alt={`Imagen del envío ${p.id}`} className="w-full max-h-48 object-cover rounded-2xl border border-slate-100" />}
+                                            {(p.imageUrl || p.imageDataUrl) && <img src={p.imageUrl || p.imageDataUrl} alt={`Imagen PNG del envío ${p.id}`} className="w-full max-h-48 object-cover rounded-2xl border border-slate-100" />}
                                             <div className="grid grid-cols-2 gap-2">
                                                 {STEPS.map((s, i) => (
                                                     <button key={s} onClick={() => saveDoc('packages', p.id, { ...p, status: s, currentStep: i })} className={`p-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${p.status === s ? 'bg-red-500 border-red-500 text-white shadow-lg' : 'border-slate-100 text-slate-400'}`}>{s}</button>
