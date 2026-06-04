@@ -22,3 +22,5 @@ El panel admin del HTML guarda y usa:
 - contraseña de aplicación Gmail
 - correo base receptor
 
+
+
