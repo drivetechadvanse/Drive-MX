@@ -75,7 +75,43 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    const url = `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`;
+    const url = `https://graph.facebook.com/v23.0/${phoneNumberId}/messages`;
+
+    const templateName = process.env.WHATSAPP_TEMPLATE_NAME || 'estado_guia';
+    const templateLang = process.env.WHATSAPP_TEMPLATE_LANG || 'es_MX';
+
+    // IMPORTANTE: Para notificaciones automáticas de estatus usamos plantilla.
+    // La plantilla debe tener 2 variables en el BODY:
+    // {{1}} = número de guía
+    // {{2}} = nuevo estatus
+    const whatsappPayload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'template',
+      template: {
+        name: templateName,
+        language: { code: templateLang },
+        components: [
+          {
+            type: 'body',
+            parameters: [
+              { type: 'text', text: String(guiaId) },
+              { type: 'text', text: String(estadoNuevo) }
+            ]
+          }
+        ]
+      }
+    };
+
+    console.log('WhatsApp request:', {
+      guiaId,
+      estadoAnterior,
+      estadoNuevo,
+      to,
+      phoneNumberId,
+      templateName,
+      templateLang
+    });
 
     const response = await fetch(url, {
       method: 'POST',
@@ -83,15 +119,7 @@ module.exports = async function handler(req, res) {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to,
-        type: 'text',
-        text: {
-          preview_url: false,
-          body
-        }
-      })
+      body: JSON.stringify(whatsappPayload)
     });
 
     const data = await response.json().catch(() => ({}));
@@ -136,3 +164,4 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
