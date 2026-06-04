@@ -27,6 +27,7 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getFirestore, doc, setDoc, collection, onSnapshot, deleteDoc, query } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
         
         const firebaseConfig = {
             apiKey: "AIzaSyDOK0wHv1gV5_wB4OSbYjDcL9lmLEg_Rdo",
@@ -39,7 +40,7 @@
         };
 
         window.firebaseConfig = firebaseConfig;
-        window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, getFirestore, doc, setDoc, collection, onSnapshot, deleteDoc, query };
+        window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, getFirestore, doc, setDoc, collection, onSnapshot, deleteDoc, query, getStorage, ref, uploadBytes, getDownloadURL };
     </script>
 
     <script type="text/babel" data-presets="react">
@@ -71,7 +72,10 @@
             const [loginForm, setLoginForm] = useState({ u: '', p: '' });
             const [pkgForm, setPkgForm] = useState({ id: '', o: '', d: '', op: '' });
             const [staffForm, setStaffForm] = useState({ u: '', p: '', n: '' });
-            const [productForm, setProductForm] = useState({ id: '', name: '', price: '', stock: '', image: '', active: true });
+            const [productForm, setProductForm] = useState({ id: '', name: '', price: '', stock: '', image: '', imageUrl: '', active: true });
+            const [productImageFile, setProductImageFile] = useState(null);
+            const [productImagePreview, setProductImagePreview] = useState('');
+            const [productUploading, setProductUploading] = useState(false);
             const [editingProductId, setEditingProductId] = useState(null);
             const [showStaffModal, setShowStaffModal] = useState(false);
 
@@ -147,36 +151,72 @@
             };
 
             const resetProductForm = () => {
-                setProductForm({ id: '', name: '', price: '', stock: '', image: '', active: true });
+                setProductForm({ id: '', name: '', price: '', stock: '', image: '', imageUrl: '', active: true });
+                setProductImageFile(null);
+                setProductImagePreview('');
+                setProductUploading(false);
                 setEditingProductId(null);
             };
 
-            const handleProductSubmit = (e) => {
+            const handleProductImageSelect = (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                if (!file.type.startsWith('image/')) {
+                    alert('Selecciona un archivo de imagen válido.');
+                    return;
+                }
+                setProductImageFile(file);
+                setProductImagePreview(URL.createObjectURL(file));
+            };
+
+            const uploadProductImage = async (productId) => {
+                if (!productImageFile) return productForm.imageUrl || productForm.image || '';
+                const storage = fbase.getStorage();
+                const safeName = productImageFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+                const imageRef = fbase.ref(storage, `products/${productId}/${Date.now()}-${safeName}`);
+                await fbase.uploadBytes(imageRef, productImageFile);
+                return await fbase.getDownloadURL(imageRef);
+            };
+
+            const handleProductSubmit = async (e) => {
                 e.preventDefault();
                 const id = editingProductId || productForm.id || `prod_${Date.now()}`;
-                const product = {
-                    id,
-                    name: productForm.name.trim(),
-                    price: Number(productForm.price || 0),
-                    stock: Number(productForm.stock || 0),
-                    image: productForm.image.trim(),
-                    active: Boolean(productForm.active),
-                    updatedAt: Date.now(),
-                    createdAt: products.find(p => p.id === id)?.createdAt || Date.now()
-                };
-                saveDoc('products', id, product);
-                resetProductForm();
+                setProductUploading(true);
+                try {
+                    const imageUrl = await uploadProductImage(id);
+                    const product = {
+                        id,
+                        name: productForm.name.trim(),
+                        price: Number(productForm.price || 0),
+                        stock: Number(productForm.stock || 0),
+                        image: imageUrl,
+                        imageUrl,
+                        active: Boolean(productForm.active),
+                        updatedAt: Date.now(),
+                        createdAt: products.find(p => p.id === id)?.createdAt || Date.now()
+                    };
+                    await saveDoc('products', id, product);
+                    resetProductForm();
+                } catch(err) {
+                    console.error('Storage producto:', err);
+                    alert('No se pudo subir la fotografía. Revisa Firebase Storage y vuelve a intentar.');
+                    setProductUploading(false);
+                }
             };
 
             const editProduct = (product) => {
+                const imageUrl = product.imageUrl || product.image || '';
                 setProductForm({
                     id: product.id,
                     name: product.name || '',
                     price: product.price ?? '',
                     stock: product.stock ?? '',
-                    image: product.image || '',
+                    image: imageUrl,
+                    imageUrl,
                     active: product.active !== false
                 });
+                setProductImageFile(null);
+                setProductImagePreview('');
                 setEditingProductId(product.id);
             };
 
@@ -268,8 +308,8 @@
                                                     {activeProducts.map(product => (
                                                         <article key={product.id} className="bg-white rounded-[1.35rem] border border-slate-100 overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-200">
                                                             <div className="aspect-[4/3] bg-slate-100 overflow-hidden">
-                                                                {product.image ? (
-                                                                    <img src={product.image} alt={product.name} className="w-full h-full object-cover" />
+                                                                {(product.imageUrl || product.image) ? (
+                                                                    <img src={product.imageUrl || product.image} alt={product.name} className="w-full h-full object-cover" />
                                                                 ) : (
                                                                     <div className="w-full h-full flex items-center justify-center text-[10px] font-black text-slate-300 uppercase tracking-widest">Sin foto</div>
                                                                 )}
@@ -367,7 +407,18 @@
                                             </div>
                                             <div className="p-6 border-b border-slate-50">
                                                 <form onSubmit={handleProductSubmit} className="grid md:grid-cols-5 gap-3">
-                                                    <input className="input-field md:col-span-2" placeholder="URL DE FOTOGRAFÍA" value={productForm.image} onChange={e => setProductForm({...productForm, image: e.target.value})} />
+                                                    <label className="md:col-span-2 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl p-4 cursor-pointer hover:border-red-200 transition-all">
+                                                        <input type="file" accept="image/*" className="hidden" onChange={handleProductImageSelect} />
+                                                        <div className="flex items-center gap-4">
+                                                            <div className="w-16 h-16 rounded-xl bg-white overflow-hidden border border-slate-100 flex items-center justify-center text-[8px] font-black text-slate-300 uppercase text-center">
+                                                                {(productImagePreview || productForm.imageUrl || productForm.image) ? <img src={productImagePreview || productForm.imageUrl || productForm.image} alt="Vista previa" className="w-full h-full object-cover" /> : 'Subir foto'}
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-[10px] font-black uppercase text-slate-600">Fotografía desde galería</p>
+                                                                <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">JPG, PNG o WebP</p>
+                                                            </div>
+                                                        </div>
+                                                    </label>
                                                     <input required className="input-field" placeholder="NOMBRE" value={productForm.name} onChange={e => setProductForm({...productForm, name: e.target.value})} />
                                                     <input required type="number" min="0" step="0.01" className="input-field" placeholder="PRECIO" value={productForm.price} onChange={e => setProductForm({...productForm, price: e.target.value})} />
                                                     <input required type="number" min="0" step="1" className="input-field" placeholder="INVENTARIO" value={productForm.stock} onChange={e => setProductForm({...productForm, stock: e.target.value})} />
@@ -375,7 +426,7 @@
                                                         <input type="checkbox" checked={productForm.active} onChange={e => setProductForm({...productForm, active: e.target.checked})} />
                                                         Producto activo en portada
                                                     </label>
-                                                    <button type="submit" className="md:col-span-3 btn-primary h-12">{editingProductId ? 'Guardar Cambios' : 'Agregar Producto'}</button>
+                                                    <button disabled={productUploading} type="submit" className="md:col-span-3 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{productUploading ? 'Subiendo foto...' : (editingProductId ? 'Guardar Cambios' : 'Agregar Producto')}</button>
                                                 </form>
                                             </div>
                                             <div className="overflow-x-auto">
@@ -395,7 +446,7 @@
                                                             <tr key={product.id} className="text-[10px] font-bold text-slate-600">
                                                                 <td className="px-6 py-4">
                                                                     <div className="w-12 h-12 rounded-xl bg-slate-100 overflow-hidden">
-                                                                        {product.image ? <img src={product.image} alt={product.name} className="w-full h-full object-cover" /> : null}
+                                                                        {(product.imageUrl || product.image) ? <img src={product.imageUrl || product.image} alt={product.name} className="w-full h-full object-cover" /> : null}
                                                                     </div>
                                                                 </td>
                                                                 <td className="px-6 py-4"><p className="font-black text-slate-800">{product.name}</p><p className="font-mono text-[8px] text-slate-400">{product.id}</p></td>
@@ -502,6 +553,7 @@
     </script>
 </body>
 </html>
+                          
             
                 
                             
