@@ -25,8 +25,8 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-        import { getFirestore, doc, setDoc, collection, onSnapshot, deleteDoc, query } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
         
         const firebaseConfig = {
@@ -40,7 +40,7 @@
         };
 
         window.firebaseConfig = firebaseConfig;
-        window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, getFirestore, doc, setDoc, collection, onSnapshot, deleteDoc, query, getStorage, ref, uploadBytes, getDownloadURL };
+        window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, getStorage, ref, uploadBytes, getDownloadURL };
     </script>
 
     <script type="text/babel" data-presets="react">
@@ -57,10 +57,9 @@
 
         const STEPS = ['Recolectado', 'Procesando', 'En Camino', 'Entregado'];
         const appId = window.firebaseConfig.projectId;
-        const ADMIN_USER = { id: 'admin central', pass: 'arturo9271', name: 'Admin Central', role: 'admin' };
+        const ADMIN_EMAIL = 'admin@drivemx.com';
         const readLocal = (key) => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; } };
         const writeLocal = (key, data) => { try { localStorage.setItem(key, JSON.stringify(data)); } catch(e) {} };
-        const withAdmin = (list) => list.find(x => x.id === ADMIN_USER.id) ? list : [...list, ADMIN_USER];
         const getProductGallery = (product) => {
             const legacyImage = product?.imageUrl || product?.image || '';
             const gallery = Array.isArray(product?.images) ? product.images.filter(Boolean) : [];
@@ -73,13 +72,13 @@
             const [fbUser, setFbUser] = useState(null);
             const [sessionUser, setSessionUser] = useState(null);
             const [pkgs, setPkgs] = useState(() => readLocal('driveMxPackages'));
-            const [ops, setOps] = useState(() => withAdmin(readLocal('driveMxOperators')));
+            const [ops, setOps] = useState(() => readLocal('driveMxOperators'));
             const [products, setProducts] = useState(() => readLocal('driveMxProducts'));
             const [searchQuery, setSearchQuery] = useState('');
             const [trackingResult, setTrackingResult] = useState(null);
-            const [loginForm, setLoginForm] = useState({ u: '', p: '' });
+            const [loginForm, setLoginForm] = useState({ email: '', p: '' });
             const [pkgForm, setPkgForm] = useState({ id: '', o: '', d: '', op: '' });
-            const [staffForm, setStaffForm] = useState({ u: '', p: '', n: '' });
+            const [staffForm, setStaffForm] = useState({ email: '', p: '', n: '' });
             const [productForm, setProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true });
             const [productImageFiles, setProductImageFiles] = useState([]);
             const [productUploading, setProductUploading] = useState(false);
@@ -110,11 +109,10 @@
                 }, (err) => { console.error('Firestore paquetes:', err); });
 
                 const unsubOps = fbase.onSnapshot(opCol, (s) => {
-                    const l = []; s.forEach(d => l.push(d.data()));
-                    const finalOps = withAdmin(l);
-                    setOps(finalOps);
-                    writeLocal('driveMxOperators', finalOps.filter(x => x.id !== ADMIN_USER.id));
-                }, (err) => { console.error('Firestore operadores:', err); setOps(prev => withAdmin(prev)); });
+                    const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
+                    setOps(l);
+                    writeLocal('driveMxOperators', l);
+                }, (err) => { console.error('Firestore operadores:', err); });
 
                 const unsubProducts = fbase.onSnapshot(productCol, (s) => {
                     const l = []; s.forEach(d => l.push(d.data()));
@@ -130,7 +128,7 @@
                     setPkgs(prev => { const next = [...prev.filter(x => x.id !== id), data]; writeLocal('driveMxPackages', next); return next; });
                 }
                 if (col === 'operators') {
-                    setOps(prev => { const next = withAdmin([...prev.filter(x => x.id !== id), data]); writeLocal('driveMxOperators', next.filter(x => x.id !== ADMIN_USER.id)); return next; });
+                    setOps(prev => { const next = [...prev.filter(x => x.id !== id), { id, ...data }]; writeLocal('driveMxOperators', next); return next; });
                 }
                 if (col === 'products') {
                     setProducts(prev => { const next = [...prev.filter(x => x.id !== id), data]; writeLocal('driveMxProducts', next); return next; });
@@ -152,12 +150,11 @@
             };
 
             const deleteOp = async (id) => {
-                if(id === 'admin central') return; // Evita borrar al admin principal
-                setOps(prev => { const next = withAdmin(prev.filter(x => x.id !== id)); writeLocal('driveMxOperators', next.filter(x => x.id !== ADMIN_USER.id)); return next; });
+                setOps(prev => { const next = prev.filter(x => x.id !== id); writeLocal('driveMxOperators', next); return next; });
                 try {
                     const db = fbase.getFirestore();
                     await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'operators', id));
-                } catch(err) { console.error('Firestore borrar operador:', err); }
+                } catch(err) { console.error('Firestore borrar conductor:', err); }
             };
 
             const resetProductForm = () => {
@@ -313,14 +310,91 @@
             const selectedGallery = getProductGallery(selectedProduct);
             const selectedMainImage = selectedGallery[currentImageIndex] || '';
 
-            const handleLogin = (e) => {
+            const getSecondaryAuth = () => {
+                if (!window.secondaryAuthApp) {
+                    window.secondaryAuthApp = fbase.initializeApp(window.firebaseConfig, 'SecondaryAuthApp');
+                }
+                return fbase.getAuth(window.secondaryAuthApp);
+            };
+
+            const getStaffProfile = async (user) => {
+                const db = fbase.getFirestore();
+                const profileRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'operators', user.uid);
+                const profileSnap = await fbase.getDoc(profileRef);
+                if (profileSnap.exists()) return { id: user.uid, uid: user.uid, email: user.email, ...profileSnap.data() };
+
+                if ((user.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+                    const adminProfile = {
+                        uid: user.uid,
+                        email: user.email,
+                        name: 'Admin Central',
+                        role: 'admin',
+                        active: true,
+                        createdAt: Date.now(),
+                        updatedAt: Date.now()
+                    };
+                    await saveDoc('operators', user.uid, adminProfile);
+                    return { id: user.uid, ...adminProfile };
+                }
+
+                return null;
+            };
+
+            const handleLogin = async (e) => {
                 e.preventDefault();
-                const match = ops.find(o => o.id.toLowerCase() === loginForm.u.toLowerCase() && String(o.pass) === String(loginForm.p));
-                if (match) { 
-                    setSessionUser(match); 
-                    setView(match.role === 'admin' ? 'admin' : 'operator'); 
-                } else { 
-                    alert("Credenciales incorrectas."); 
+                try {
+                    const auth = fbase.getAuth();
+                    const credential = await fbase.signInWithEmailAndPassword(auth, loginForm.email.trim(), loginForm.p);
+                    const profile = await getStaffProfile(credential.user);
+                    if (!profile || profile.active === false) {
+                        await fbase.signOut(auth);
+                        await fbase.signInAnonymously(auth).catch(() => {});
+                        alert('Tu cuenta no tiene acceso activo al panel.');
+                        return;
+                    }
+                    setSessionUser(profile);
+                    setView(profile.role === 'admin' ? 'admin' : 'operator');
+                } catch(err) {
+                    console.error('Login Firebase Auth:', err);
+                    alert('Correo o contraseña incorrectos.');
+                }
+            };
+
+            const handleLogout = async () => {
+                const auth = fbase.getAuth();
+                setSessionUser(null);
+                setView('tracking');
+                try {
+                    await fbase.signOut(auth);
+                    await fbase.signInAnonymously(auth);
+                } catch(err) {
+                    console.error('Cerrar sesión:', err);
+                }
+            };
+
+            const registerDriver = async (e) => {
+                e.preventDefault();
+                if (!staffForm.email.trim() || !staffForm.p || !staffForm.n.trim()) return;
+                try {
+                    const secondaryAuth = getSecondaryAuth();
+                    const credential = await fbase.createUserWithEmailAndPassword(secondaryAuth, staffForm.email.trim(), staffForm.p);
+                    const newOp = {
+                        uid: credential.user.uid,
+                        email: credential.user.email,
+                        name: staffForm.n.trim(),
+                        role: 'operador',
+                        active: true,
+                        createdAt: Date.now(),
+                        updatedAt: Date.now()
+                    };
+                    await saveDoc('operators', credential.user.uid, newOp);
+                    await fbase.signOut(secondaryAuth).catch(() => {});
+                    setStaffForm({ email: '', p: '', n: '' });
+                    setShowStaffModal(false);
+                    alert('Conductor creado correctamente con Firebase Auth.');
+                } catch(err) {
+                    console.error('Crear conductor Firebase Auth:', err);
+                    alert('No se pudo crear el conductor. Revisa que el correo sea válido y que la contraseña tenga mínimo 6 caracteres.');
                 }
             };
 
@@ -339,7 +413,7 @@
                                     <p className="text-[10px] font-bold leading-none">{sessionUser.name}</p>
                                     <p className="text-[8px] font-black text-red-500 uppercase">{sessionUser.role}</p>
                                 </div>
-                                <button onClick={() => {setSessionUser(null); setView('tracking');}} className="p-2 text-slate-400"><Icons.LogOut /></button>
+                                <button onClick={handleLogout} className="p-2 text-slate-400"><Icons.LogOut /></button>
                             </div>
                         ) : (
                             <button onClick={() => setView('login')} className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Acceso Staff</button>
@@ -561,7 +635,7 @@
                                             <input required className="input-field uppercase" placeholder="DESTINO" value={pkgForm.d} onChange={e => setPkgForm({...pkgForm, d: e.target.value})} />
                                             <select required className="input-field" value={pkgForm.op} onChange={e => setPkgForm({...pkgForm, op: e.target.value})}>
                                                 <option value="">ASIGNAR CONDUCTOR</option>
-                                                {ops.filter(o => o.role === 'operador').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                                                {ops.filter(o => o.role === 'operador' && o.active !== false).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                                             </select>
                                             <button type="submit" className="w-full btn-primary h-12">Crear Guía</button>
                                         </form>
@@ -695,7 +769,7 @@
                                                 <thead className="bg-white border-b border-slate-50">
                                                     <tr className="text-[8px] font-black uppercase text-slate-400">
                                                         <th className="px-6 py-3">Nombre</th>
-                                                        <th className="px-6 py-3">Usuario</th>
+                                                        <th className="px-6 py-3">Correo electrónico</th>
                                                         <th className="px-6 py-3 text-right">Acción</th>
                                                     </tr>
                                                 </thead>
@@ -703,7 +777,7 @@
                                                     {ops.filter(o => o.role === 'operador').map(o => (
                                                         <tr key={o.id} className="text-[10px] font-bold text-slate-600">
                                                             <td className="px-6 py-4">{o.name}</td>
-                                                            <td className="px-6 py-4 font-mono text-slate-400">{o.id}</td>
+                                                            <td className="px-6 py-4 font-mono text-slate-400">{o.email}</td>
                                                             <td className="px-6 py-4 text-right"><button onClick={() => deleteOp(o.id)} className="text-slate-300 hover:text-red-500"><Icons.Trash /></button></td>
                                                         </tr>
                                                     ))}
@@ -738,8 +812,8 @@
                                 <div className="card-glass p-10 space-y-8">
                                     <h2 className="text-center text-xl font-black uppercase tracking-widest">Panel Staff</h2>
                                     <form onSubmit={handleLogin} className="space-y-4">
-                                        <input required className="input-field" placeholder="USUARIO" onChange={e => setLoginForm({...loginForm, u: e.target.value})} />
-                                        <input required type="password" className="input-field" placeholder="CONTRASEÑA" onChange={e => setLoginForm({...loginForm, p: e.target.value})} />
+                                        <input required className="input-field" placeholder="CORREO ELECTRÓNICO" type="email" value={loginForm.email} onChange={e => setLoginForm({...loginForm, email: e.target.value})} />
+                                        <input required type="password" className="input-field" placeholder="CONTRASEÑA" value={loginForm.p} onChange={e => setLoginForm({...loginForm, p: e.target.value})} />
                                         <button type="submit" className="w-full btn-primary h-12">Entrar</button>
                                     </form>
                                 </div>
@@ -751,10 +825,10 @@
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
                             <div className="card-glass max-w-sm w-full p-10 animate-slide">
                                 <h2 className="text-sm font-black text-center uppercase mb-8">Nuevo Conductor</h2>
-                                <form onSubmit={(e) => { e.preventDefault(); const newOp = { ...staffForm, id: staffForm.u, role: 'operador', pass: staffForm.p, name: staffForm.n }; saveDoc('operators', newOp.id, newOp); setShowStaffModal(false); }} className="space-y-4">
-                                    <input required className="input-field" placeholder="NOMBRE COMPLETO" onChange={e => setStaffForm({...staffForm, n: e.target.value})} />
-                                    <input required className="input-field uppercase" placeholder="ID (EJ: OP-01)" onChange={e => setStaffForm({...staffForm, u: e.target.value})} />
-                                    <input required className="input-field" placeholder="CONTRASEÑA" onChange={e => setStaffForm({...staffForm, p: e.target.value})} />
+                                <form onSubmit={registerDriver} className="space-y-4">
+                                    <input required className="input-field" placeholder="NOMBRE COMPLETO" value={staffForm.n} onChange={e => setStaffForm({...staffForm, n: e.target.value})} />
+                                    <input required type="email" className="input-field" placeholder="CORREO ELECTRÓNICO" value={staffForm.email} onChange={e => setStaffForm({...staffForm, email: e.target.value})} />
+                                    <input required type="password" minLength="6" className="input-field" placeholder="CONTRASEÑA" value={staffForm.p} onChange={e => setStaffForm({...staffForm, p: e.target.value})} />
                                     <button type="submit" className="w-full btn-primary h-12">Guardar Conductor</button>
                                     <button type="button" onClick={() => setShowStaffModal(false)} className="w-full text-[9px] font-black text-slate-400 uppercase">Cancelar</button>
                                 </form>
