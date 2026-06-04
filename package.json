@@ -1,6 +1,1 @@
-{
-  "private": true,
-  "dependencies": {
-    "twilio": "^5.4.0"
-  }
-}
+{"private":true,"scripts":{"start":"vercel dev"},"dependencies":{}}
