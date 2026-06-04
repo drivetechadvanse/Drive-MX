@@ -86,6 +86,7 @@
             const [editingProductId, setEditingProductId] = useState(null);
             const [selectedProductId, setSelectedProductId] = useState(null);
             const [currentImageIndex, setCurrentImageIndex] = useState(0);
+            const [deliveryForm, setDeliveryForm] = useState({ street: '', state: '', municipality: '', neighborhood: '', zip: '', fullName: '', phone: '', email: '', references: '' });
             const [showStaffModal, setShowStaffModal] = useState(false);
 
             useEffect(() => {
@@ -480,11 +481,69 @@
                                             <p className="text-sm font-semibold text-slate-600 leading-relaxed whitespace-pre-line">{selectedProduct.specifications || 'Sin especificaciones registradas.'}</p>
                                         </div>
 
-                                        <button type="button" className="btn-primary w-full sm:w-auto h-12">Comprar</button>
+                                        <button type="button" onClick={() => setView('delivery-data')} className="btn-primary w-full sm:w-auto h-12">Comprar</button>
                                     </div>
                                 </div>
                             </div>
                         )}
+
+                        {view === 'delivery-data' && selectedProduct && (
+                            <div className="w-full max-w-5xl py-6 animate-slide">
+                                <button onClick={() => setView('product-detail')} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Volver al detalle</button>
+                                <div className="card-glass overflow-hidden">
+                                    <div className="bg-white border-b border-slate-100 px-6 py-5 flex items-center justify-between gap-4">
+                                        <div>
+                                            <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-1">Producto seleccionado: {selectedProduct.name}</p>
+                                            <h1 className="text-2xl sm:text-3xl font-black tracking-tight">Datos de entrega</h1>
+                                            <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">ID del producto conservado: {selectedProduct.id}</p>
+                                        </div>
+                                        <button type="button" className="btn-primary h-11 shrink-0">Continuar</button>
+                                    </div>
+
+                                    <form onSubmit={(e) => e.preventDefault()} className="p-6 lg:p-8 space-y-6">
+                                        <div className="grid md:grid-cols-2 gap-4">
+                                            <div className="md:col-span-2">
+                                                <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Calle</label>
+                                                <input className="input-field" placeholder="Calle y número" value={deliveryForm.street} onChange={e => setDeliveryForm({...deliveryForm, street: e.target.value})} />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Estado</label>
+                                                <input className="input-field" placeholder="Estado" value={deliveryForm.state} onChange={e => setDeliveryForm({...deliveryForm, state: e.target.value})} />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Municipio</label>
+                                                <input className="input-field" placeholder="Municipio" value={deliveryForm.municipality} onChange={e => setDeliveryForm({...deliveryForm, municipality: e.target.value})} />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Colonia</label>
+                                                <input className="input-field" placeholder="Colonia" value={deliveryForm.neighborhood} onChange={e => setDeliveryForm({...deliveryForm, neighborhood: e.target.value})} />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Código Postal</label>
+                                                <input className="input-field" placeholder="Código Postal" inputMode="numeric" value={deliveryForm.zip} onChange={e => setDeliveryForm({...deliveryForm, zip: e.target.value})} />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Nombre completo</label>
+                                                <input className="input-field" placeholder="Nombre completo" value={deliveryForm.fullName} onChange={e => setDeliveryForm({...deliveryForm, fullName: e.target.value})} />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Teléfono</label>
+                                                <input className="input-field" placeholder="Teléfono" inputMode="tel" value={deliveryForm.phone} onChange={e => setDeliveryForm({...deliveryForm, phone: e.target.value})} />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Correo electrónico</label>
+                                                <input className="input-field" placeholder="Correo electrónico" type="email" value={deliveryForm.email} onChange={e => setDeliveryForm({...deliveryForm, email: e.target.value})} />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Referencias del domicilio</label>
+                                                <textarea className="input-field min-h-[120px] resize-none" placeholder="Referencias del domicilio" value={deliveryForm.references} onChange={e => setDeliveryForm({...deliveryForm, references: e.target.value})}></textarea>
+                                            </div>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
+
 
                         {view === 'admin' && (
                             <div className="w-full max-w-5xl space-y-8 animate-slide">
