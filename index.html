@@ -86,6 +86,9 @@
             const [selectedProductId, setSelectedProductId] = useState(null);
             const [currentImageIndex, setCurrentImageIndex] = useState(0);
             const [deliveryForm, setDeliveryForm] = useState({ street: '', state: '', municipality: '', neighborhood: '', zip: '', fullName: '', phone: '', email: '', references: '' });
+            const [emailSettings, setEmailSettings] = useState(() => { try { return JSON.parse(localStorage.getItem('driveMxEmailSettings') || '{\"senderEmail\":\"\",\"appPassword\":\"\",\"receiverEmail\":\"\"}'); } catch(e) { return { senderEmail: '', appPassword: '', receiverEmail: '' }; } });
+            const [emailSaving, setEmailSaving] = useState(false);
+            const [orderSending, setOrderSending] = useState(false);
             const [showStaffModal, setShowStaffModal] = useState(false);
 
             useEffect(() => {
@@ -101,6 +104,7 @@
                 const pkgCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'packages');
                 const opCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'operators');
                 const productCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'products');
+                const mailSettingsRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'mail_settings', 'config');
                 
                 const unsubPkgs = fbase.onSnapshot(pkgCol, (s) => {
                     const l = []; s.forEach(d => l.push(d.data()));
@@ -120,7 +124,19 @@
                     writeLocal('driveMxProducts', l);
                 }, (err) => { console.error('Firestore productos:', err); });
 
-                return () => { unsubPkgs(); unsubOps(); unsubProducts(); };
+                const unsubMailSettings = fbase.onSnapshot(mailSettingsRef, (snap) => {
+                    if (!snap.exists()) return;
+                    const data = snap.data() || {};
+                    const next = {
+                        senderEmail: data.senderEmail || '',
+                        appPassword: data.appPassword || '',
+                        receiverEmail: data.receiverEmail || ''
+                    };
+                    setEmailSettings(next);
+                    try { localStorage.setItem('driveMxEmailSettings', JSON.stringify(next)); } catch(e) {}
+                }, (err) => { console.error('Firestore configuración correo:', err); });
+
+                return () => { unsubPkgs(); unsubOps(); unsubProducts(); unsubMailSettings(); };
             }, [fbUser]);
 
             const saveDoc = async (col, id, data) => {
@@ -398,6 +414,114 @@
                 }
             };
 
+            const saveEmailSettings = async (e) => {
+                e.preventDefault();
+                const next = {
+                    senderEmail: emailSettings.senderEmail.trim(),
+                    appPassword: emailSettings.appPassword.trim(),
+                    receiverEmail: emailSettings.receiverEmail.trim(),
+                    updatedAt: Date.now(),
+                    updatedBy: sessionUser?.email || ''
+                };
+                if (!next.senderEmail || !next.appPassword || !next.receiverEmail) {
+                    alert('Completa correo remitente, contraseña de aplicación y correo base receptor.');
+                    return;
+                }
+                setEmailSaving(true);
+                try {
+                    await saveDoc('mail_settings', 'config', next);
+                    try { localStorage.setItem('driveMxEmailSettings', JSON.stringify(next)); } catch(err) {}
+                    alert('Configuración de correo guardada correctamente.');
+                } catch(err) {
+                    console.error('Guardar configuración de correo:', err);
+                    alert('No se pudo guardar la configuración de correo.');
+                } finally {
+                    setEmailSaving(false);
+                }
+            };
+
+            const validateDeliveryForm = () => {
+                const requiredFields = [
+                    ['street', 'La calle es obligatoria.'],
+                    ['state', 'El estado es obligatorio.'],
+                    ['municipality', 'El municipio es obligatorio.'],
+                    ['neighborhood', 'La colonia es obligatoria.'],
+                    ['zip', 'El código postal es obligatorio.'],
+                    ['fullName', 'El nombre completo es obligatorio.'],
+                    ['phone', 'El teléfono es obligatorio.'],
+                    ['email', 'El correo electrónico es obligatorio.'],
+                    ['references', 'Las referencias del domicilio son obligatorias.']
+                ];
+                for (const [field, message] of requiredFields) {
+                    if (!String(deliveryForm[field] || '').trim()) {
+                        alert(message);
+                        return false;
+                    }
+                }
+                if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(deliveryForm.email.trim())) {
+                    alert('Ingresa un correo electrónico válido.');
+                    return false;
+                }
+                return true;
+            };
+
+            const resetDeliveryForm = () => {
+                setDeliveryForm({ street: '', state: '', municipality: '', neighborhood: '', zip: '', fullName: '', phone: '', email: '', references: '' });
+            };
+
+            const handleDeliveryContinue = async () => {
+                if (!selectedProduct) {
+                    alert('No se encontró el producto seleccionado.');
+                    return;
+                }
+                if (!validateDeliveryForm()) return;
+                if (!emailSettings.senderEmail.trim() || !emailSettings.appPassword.trim() || !emailSettings.receiverEmail.trim()) {
+                    alert('Falta configurar el correo en el Panel Admin.');
+                    return;
+                }
+                setOrderSending(true);
+                try {
+                    const endpoint = '/api/send-order-email';
+                    const payload = {
+                        mailSettings: {
+                            senderEmail: emailSettings.senderEmail.trim(),
+                            appPassword: emailSettings.appPassword.trim(),
+                            receiverEmail: emailSettings.receiverEmail.trim()
+                        },
+                        product: {
+                            id: selectedProduct.id,
+                            name: selectedProduct.name || '',
+                            price: Number(selectedProduct.price || 0)
+                        },
+                        delivery: {
+                            street: deliveryForm.street.trim(),
+                            state: deliveryForm.state.trim(),
+                            municipality: deliveryForm.municipality.trim(),
+                            neighborhood: deliveryForm.neighborhood.trim(),
+                            zip: deliveryForm.zip.trim(),
+                            fullName: deliveryForm.fullName.trim(),
+                            phone: deliveryForm.phone.trim(),
+                            email: deliveryForm.email.trim(),
+                            references: deliveryForm.references.trim()
+                        }
+                    };
+                    const res = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || !data.success) throw new Error(data.error || 'No se pudo enviar el correo.');
+                    resetDeliveryForm();
+                    setView('payment-method');
+                } catch(err) {
+                    console.error('Enviar pedido por correo:', err);
+                    alert(err.message || 'No se pudo enviar el correo del pedido.');
+                } finally {
+                    setOrderSending(false);
+                }
+            };
+
             return (
                 <div className="min-h-screen flex flex-col">
                     <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between sticky top-0 z-50">
@@ -571,10 +695,10 @@
                                             <h1 className="text-2xl sm:text-3xl font-black tracking-tight">Datos de entrega</h1>
                                             <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">ID del producto conservado: {selectedProduct.id}</p>
                                         </div>
-                                        <button type="button" className="btn-primary h-11 shrink-0">Continuar</button>
+                                        <button type="button" onClick={handleDeliveryContinue} disabled={orderSending} className="btn-primary h-11 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed">{orderSending ? 'Enviando...' : 'Continuar'}</button>
                                     </div>
 
-                                    <form onSubmit={(e) => e.preventDefault()} className="p-6 lg:p-8 space-y-6">
+                                    <form onSubmit={(e) => { e.preventDefault(); handleDeliveryContinue(); }} className="p-6 lg:p-8 space-y-6">
                                         <div className="grid md:grid-cols-2 gap-4">
                                             <div className="md:col-span-2">
                                                 <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Calle</label>
@@ -619,6 +743,46 @@
                         )}
 
 
+                        {view === 'payment-method' && selectedProduct && (
+                            <div className="w-full max-w-4xl py-6 animate-slide">
+                                <button onClick={() => setView('delivery-data')} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Volver a datos de entrega</button>
+                                <div className="card-glass overflow-hidden">
+                                    <div className="bg-white border-b border-slate-100 px-6 py-5">
+                                        <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-1">Producto seleccionado: {selectedProduct.name}</p>
+                                        <h1 className="text-2xl sm:text-3xl font-black tracking-tight">Método de pago</h1>
+                                        <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">ID del producto conservado: {selectedProduct.id}</p>
+                                    </div>
+                                    <div className="p-6 lg:p-8 space-y-5">
+                                        <div className="grid md:grid-cols-3 gap-4">
+                                            {[
+                                                ['Transferencia bancaria', 'Paga mediante transferencia.'],
+                                                ['Tarjeta débito/crédito', 'Interfaz visual, cobro pendiente.'],
+                                                ['Pago contra entrega', 'Liquida al recibir tu pedido.']
+                                            ].map(([title, desc]) => (
+                                                <label key={title} className="border-2 border-slate-100 rounded-2xl p-5 cursor-pointer hover:border-red-200 transition-all bg-white">
+                                                    <div className="flex items-start gap-3">
+                                                        <input type="radio" name="paymentMethod" className="mt-1" />
+                                                        <div>
+                                                            <p className="text-sm font-black text-slate-800">{title}</p>
+                                                            <p className="text-[10px] font-bold text-slate-400 uppercase mt-1 leading-relaxed">{desc}</p>
+                                                        </div>
+                                                    </div>
+                                                </label>
+                                            ))}
+                                        </div>
+                                        <div className="bg-slate-50 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                                            <div>
+                                                <p className="text-[9px] font-black text-slate-400 uppercase">Total visual</p>
+                                                <p className="text-3xl font-black text-red-500">${Number(selectedProduct.price || 0).toFixed(2)}</p>
+                                            </div>
+                                            <button type="button" className="btn-primary h-12 opacity-70 cursor-not-allowed" disabled>Confirmar próximamente</button>
+                                        </div>
+                                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Esta pantalla es únicamente visual. La lógica de cobro aún no está implementada.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {view === 'admin' && (
                             <div className="w-full max-w-5xl space-y-8 animate-slide">
                                 <div className="flex justify-between items-end">
@@ -658,6 +822,28 @@
                                                     ))}
                                                 </tbody>
                                             </table>
+                                        </div>
+
+                                        <div className="card-glass overflow-hidden">
+                                            <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
+                                                <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Configuración de Correo</h2>
+                                                <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Gmail para notificaciones automáticas de pedidos</p>
+                                            </div>
+                                            <form onSubmit={saveEmailSettings} className="p-6 grid md:grid-cols-3 gap-3">
+                                                <div>
+                                                    <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Correo electrónico remitente</label>
+                                                    <input required type="email" className="input-field" placeholder="correo@gmail.com" value={emailSettings.senderEmail} onChange={e => setEmailSettings({...emailSettings, senderEmail: e.target.value})} />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Contraseña de aplicación Gmail</label>
+                                                    <input required type="text" className="input-field" placeholder="Contraseña visible/editable" value={emailSettings.appPassword} onChange={e => setEmailSettings({...emailSettings, appPassword: e.target.value})} />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Correo base receptor</label>
+                                                    <input required type="email" className="input-field" placeholder="pedidos@empresa.com" value={emailSettings.receiverEmail} onChange={e => setEmailSettings({...emailSettings, receiverEmail: e.target.value})} />
+                                                </div>
+                                                <button disabled={emailSaving} type="submit" className="md:col-span-3 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{emailSaving ? 'Guardando...' : 'Guardar Configuración de Correo'}</button>
+                                            </form>
                                         </div>
 
                                         <div className="card-glass overflow-hidden">
