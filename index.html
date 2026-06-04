@@ -126,26 +126,41 @@
             };
 
             const notifyStatusChange = async ({ guiaId, telefonoCliente, estadoAnterior, estadoNuevo }) => {
-                if (!telefonoCliente || estadoAnterior === estadoNuevo || !WHATSAPP_STATUS_MESSAGES[estadoNuevo]) return;
+                if (!telefonoCliente) {
+                    alert('El estado cambió, pero la guía no tiene teléfono del cliente. No se puede enviar WhatsApp.');
+                    return false;
+                }
+                if (estadoAnterior === estadoNuevo) return false;
+                if (!WHATSAPP_STATUS_MESSAGES[estadoNuevo]) {
+                    console.warn('Estado sin mensaje WhatsApp:', estadoNuevo);
+                    return false;
+                }
 
                 const payload = { guiaId, telefonoCliente, estadoAnterior, estadoNuevo };
+                console.log('Enviando WhatsApp por cambio de estatus:', payload);
 
                 try {
-                    let res = await fetch('/api/whatsapp-status', {
+                    const res = await fetch('/api/whatsapp-status', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
                     });
 
                     const result = await res.json().catch(() => ({}));
+                    console.log('Respuesta /api/whatsapp-status:', res.status, result);
 
                     if (!res.ok || !result.ok) {
                         console.error('WhatsApp error:', result);
-                        alert('El estado se guardó, pero el WhatsApp no se pudo enviar. Revisa los logs de Vercel/WhatsApp.');
+                        alert('El estado se guardó, pero el WhatsApp NO se pudo enviar: ' + (result.detail || result.error || 'Error desconocido'));
+                        return false;
                     }
+
+                    alert('Estado guardado y WhatsApp enviado correctamente.');
+                    return true;
                 } catch (err) {
                     console.error('WhatsApp fetch error:', err);
                     alert('El estado se guardó, pero no se pudo conectar con la API de WhatsApp.');
+                    return false;
                 }
             };
 
@@ -166,15 +181,19 @@
                 if (p.status === status) return;
                 const previousStatus = p.status || '';
                 const updatedPkg = { ...p, status, currentStep };
+
                 const saved = await saveDoc('packages', p.id, updatedPkg);
-                if (saved) {
-                    await notifyStatusChange({
-                        guiaId: p.id,
-                        telefonoCliente: p.telefonoCliente,
-                        estadoAnterior: previousStatus,
-                        estadoNuevo: status
-                    });
+                if (!saved) {
+                    alert('No se pudo guardar el estado en la base de datos. No se enviará WhatsApp.');
+                    return;
                 }
+
+                await notifyStatusChange({
+                    guiaId: p.id,
+                    telefonoCliente: p.telefonoCliente,
+                    estadoAnterior: previousStatus,
+                    estadoNuevo: status
+                });
             };
 
             const deletePkg = async (id) => {
@@ -400,6 +419,7 @@
     </script>
 </body>
 </html>
+                            
 
 
 
