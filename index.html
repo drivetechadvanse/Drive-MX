@@ -71,6 +71,8 @@
             const [loginForm, setLoginForm] = useState({ u: '', p: '' });
             const [pkgForm, setPkgForm] = useState({ id: '', o: '', d: '', op: '' });
             const [imageFile, setImageFile] = useState(null);
+            const [imagePreview, setImagePreview] = useState('');
+            const [isUploading, setIsUploading] = useState(false);
             const [staffForm, setStaffForm] = useState({ u: '', p: '', n: '' });
             const [showStaffModal, setShowStaffModal] = useState(false);
 
@@ -103,14 +105,27 @@
                 return () => { unsubPkgs(); unsubOps(); };
             }, [fbUser]);
 
+            const isValidPngFile = async (file) => {
+                if (!file) return false;
+                const fileName = String(file.name || '').toLowerCase();
+                const hasPngExtension = fileName.endsWith('.png');
+                const hasPngMimeType = file.type === 'image/png';
+
+                // Algunos navegadores/dispositivos pueden dejar file.type vacío.
+                // Además del MIME, se revisa la firma real del PNG para confirmar el archivo.
+                const header = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+                const hasPngSignature =
+                    header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47 &&
+                    header[4] === 0x0D && header[5] === 0x0A && header[6] === 0x1A && header[7] === 0x0A;
+
+                return hasPngExtension && hasPngSignature && (!file.type || hasPngMimeType);
+            };
+
             const uploadPngImage = async (packageId, file) => {
                 if (!file) return null;
 
-                const fileName = String(file.name || '').toLowerCase();
-                const isPngExtension = fileName.endsWith('.png');
-                const isPngMimeType = file.type === 'image/png';
-
-                if (!isPngExtension || !isPngMimeType) {
+                const validPng = await isValidPngFile(file);
+                if (!validPng) {
                     throw new Error('Solo se permiten imágenes PNG válidas (.png / image/png).');
                 }
 
@@ -227,6 +242,12 @@
                                             <div><p className="text-[8px] font-black text-slate-400 uppercase">Origen</p><p className="text-[11px] font-bold uppercase">{trackingResult.o}</p></div>
                                             <div className="border-l border-slate-200 pl-4"><p className="text-[8px] font-black text-slate-400 uppercase">Destino</p><p className="text-[11px] font-bold uppercase">{trackingResult.d}</p></div>
                                         </div>
+                                        {trackingResult.imageUrl && (
+                                            <div className="bg-white rounded-2xl border border-slate-100 p-3">
+                                                <p className="text-[8px] font-black text-slate-400 uppercase mb-2">Imagen del envío</p>
+                                                <img src={trackingResult.imageUrl} alt={`Imagen del envío ${trackingResult.id}`} className="w-full max-h-72 object-contain rounded-xl bg-slate-50" />
+                                            </div>
+                                        )}
                                         <div className="flex justify-between relative px-2">
                                             {STEPS.map((s, i) => (
                                                 <div key={i} className="flex flex-col items-center gap-2 z-10">
@@ -253,18 +274,25 @@
                                         <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Nuevo Envío</h2>
                                         <form onSubmit={async (e) => {
                                             e.preventDefault();
+                                            if (isUploading) return;
+                                            setIsUploading(true);
                                             try {
                                                 const packageId = pkgForm.id.toUpperCase().trim();
                                                 const imageUrl = await uploadPngImage(packageId, imageFile);
                                                 const n = { ...pkgForm, id: packageId, status: 'Recolectado', currentStep: 0 };
                                                 if (imageUrl) n.imageUrl = imageUrl;
-                                                saveDoc('packages', n.id, n);
+                                                await saveDoc('packages', n.id, n);
                                                 setPkgForm({ id: '', o: '', d: '', op: '' });
                                                 setImageFile(null);
+                                                if (imagePreview) URL.revokeObjectURL(imagePreview);
+                                                setImagePreview('');
                                                 e.target.reset();
+                                                alert('Guía creada correctamente.');
                                             } catch (err) {
-                                                alert(err.message || 'No se pudo cargar la imagen PNG.');
+                                                alert(err.message || 'No se pudo cargar la imagen PNG. Revisa permisos de Firebase Storage.');
                                                 console.error('Carga PNG:', err);
+                                            } finally {
+                                                setIsUploading(false);
                                             }
                                         }} className="space-y-4">
                                             <input required className="input-field uppercase" placeholder="NÚMERO DE GUÍA" value={pkgForm.id} onChange={e => setPkgForm({...pkgForm, id: e.target.value})} />
@@ -274,23 +302,37 @@
                                                 <option value="">ASIGNAR OPERADOR</option>
                                                 {ops.filter(o => o.role === 'operador').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                                             </select>
-                                            <input
-                                                type="file"
-                                                accept=".png,image/png"
-                                                className="input-field"
-                                                onChange={e => {
-                                                    const file = e.target.files && e.target.files[0];
-                                                    if (!file) { setImageFile(null); return; }
-                                                    if (!String(file.name || '').toLowerCase().endsWith('.png') || file.type !== 'image/png') {
-                                                        alert('Solo se permiten imágenes PNG válidas (.png / image/png).');
-                                                        e.target.value = '';
-                                                        setImageFile(null);
-                                                        return;
-                                                    }
-                                                    setImageFile(file);
-                                                }}
-                                            />
-                                            <button type="submit" className="w-full btn-primary h-12">Crear Guía</button>
+                                            <div className="space-y-2">
+                                                <label className="text-[9px] font-black uppercase text-slate-400">Imagen PNG del envío</label>
+                                                <input
+                                                    type="file"
+                                                    accept=".png,image/png"
+                                                    className="input-field"
+                                                    onChange={async e => {
+                                                        const file = e.target.files && e.target.files[0];
+                                                        if (!file) {
+                                                            setImageFile(null);
+                                                            if (imagePreview) URL.revokeObjectURL(imagePreview);
+                                                            setImagePreview('');
+                                                            return;
+                                                        }
+                                                        const validPng = await isValidPngFile(file);
+                                                        if (!validPng) {
+                                                            alert('Solo se permiten imágenes PNG válidas (.png / image/png).');
+                                                            e.target.value = '';
+                                                            setImageFile(null);
+                                                            if (imagePreview) URL.revokeObjectURL(imagePreview);
+                                                            setImagePreview('');
+                                                            return;
+                                                        }
+                                                        setImageFile(file);
+                                                        if (imagePreview) URL.revokeObjectURL(imagePreview);
+                                                        setImagePreview(URL.createObjectURL(file));
+                                                    }}
+                                                />
+                                                {imagePreview && <img src={imagePreview} alt="Vista previa PNG" className="w-full max-h-40 object-contain rounded-xl border border-slate-200 bg-white p-2" />}
+                                            </div>
+                                            <button type="submit" disabled={isUploading} className="w-full btn-primary h-12 disabled:opacity-60">{isUploading ? 'Subiendo...' : 'Crear Guía'}</button>
                                         </form>
                                     </div>
                                     
@@ -306,6 +348,7 @@
                                                             <td className="px-6 py-4 text-red-600 font-black">#{p.id}</td>
                                                             <td className="px-6 py-4">{p.o} → {p.d}</td>
                                                             <td className="px-6 py-4"><span className="px-2 py-1 bg-slate-100 rounded-full text-[8px] uppercase">{p.status}</span></td>
+                                                            <td className="px-6 py-4">{p.imageUrl ? <img src={p.imageUrl} alt={`PNG ${p.id}`} className="w-12 h-12 object-cover rounded-lg border border-slate-100" /> : <span className="text-[8px] text-slate-300 uppercase">Sin PNG</span>}</td>
                                                             <td className="px-6 py-4 text-right"><button onClick={() => deletePkg(p.id)} className="text-slate-300 hover:text-red-500"><Icons.Trash /></button></td>
                                                         </tr>
                                                     ))}
@@ -348,6 +391,7 @@
                                     {pkgs.filter(p => p.op === sessionUser.id).map(p => (
                                         <div key={p.id} className="card-glass p-6 space-y-6">
                                             <div className="flex justify-between items-center"><h3 className="text-xl font-black text-red-600">#{p.id}</h3><span className="text-[9px] font-black uppercase text-slate-400">{p.o} → {p.d}</span></div>
+                                            {p.imageUrl && <img src={p.imageUrl} alt={`Imagen del envío ${p.id}`} className="w-full max-h-56 object-contain rounded-xl border border-slate-100 bg-slate-50" />}
                                             <div className="grid grid-cols-2 gap-2">
                                                 {STEPS.map((s, i) => (
                                                     <button key={s} onClick={() => saveDoc('packages', p.id, { ...p, status: s, currentStep: i })} className={`p-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${p.status === s ? 'bg-red-500 border-red-500 text-white shadow-lg' : 'border-slate-100 text-slate-400'}`}>{s}</button>
@@ -395,6 +439,7 @@
     </script>
 </body>
 </html>
+            
                 
                             
 
