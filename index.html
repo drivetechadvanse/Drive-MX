@@ -53,7 +53,7 @@
         };
 
         const STEPS = ['Recolectado', 'Procesando', 'En Camino', 'Entregado'];
-        const SMS_STATUS_MESSAGES = {
+        const WHATSAPP_STATUS_MESSAGES = {
             'Recolectado': '📦 Su paquete ha sido recolectado y está ingresando al proceso logístico.',
             'Procesando': '📦 Su paquete se encuentra en proceso de clasificación y preparación para envío.',
             'En Camino': '🚚 Su paquete se encuentra en camino hacia su destino.',
@@ -126,35 +126,26 @@
             };
 
             const notifyStatusChange = async ({ guiaId, telefonoCliente, estadoAnterior, estadoNuevo }) => {
-                if (!telefonoCliente || estadoAnterior === estadoNuevo || !SMS_STATUS_MESSAGES[estadoNuevo]) return;
+                if (!telefonoCliente || estadoAnterior === estadoNuevo || !WHATSAPP_STATUS_MESSAGES[estadoNuevo]) return;
 
                 const payload = { guiaId, telefonoCliente, estadoAnterior, estadoNuevo };
 
                 try {
-                    let res = await fetch('/api/twilio-status', {
+                    let res = await fetch('/api/whatsapp-status', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
                     });
 
-                    // Compatibilidad: si tu proyecto todavía usa el nombre anterior, intenta también esta ruta.
-                    if (res.status === 404) {
-                        res = await fetch('/api/twilio-status-sms', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(payload)
-                        });
-                    }
-
                     const result = await res.json().catch(() => ({}));
 
                     if (!res.ok || !result.ok) {
-                        console.error('Twilio SMS error:', result);
-                        alert('El estado se guardó, pero el SMS no se pudo enviar. Revisa los logs de Vercel/Twilio.');
+                        console.error('WhatsApp error:', result);
+                        alert('El estado se guardó, pero el WhatsApp no se pudo enviar. Revisa los logs de Vercel/WhatsApp.');
                     }
                 } catch (err) {
-                    console.error('Twilio SMS fetch error:', err);
-                    alert('El estado se guardó, pero no se pudo conectar con la API de SMS.');
+                    console.error('WhatsApp fetch error:', err);
+                    alert('El estado se guardó, pero no se pudo conectar con la API de WhatsApp.');
                 }
             };
 
