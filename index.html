@@ -397,17 +397,23 @@
                     }).render(`#${containerId}`);
                 };
 
+                const paypalSdkSrc = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(paymentSettings.paypalClientId)}&currency=MXN&intent=capture&commit=true&locale=es_MX`;
                 const existing = document.querySelector('script[data-drive-mx-paypal="true"]');
-                if (existing && window.paypal) {
+                if (existing && existing.src !== paypalSdkSrc) {
+                    existing.remove();
+                    window.paypal = undefined;
+                }
+                const activeScript = document.querySelector('script[data-drive-mx-paypal="true"]');
+                if (activeScript && window.paypal) {
                     renderPayPalButtons();
                     return;
                 }
-                if (existing) {
-                    existing.addEventListener('load', renderPayPalButtons, { once: true });
+                if (activeScript) {
+                    activeScript.addEventListener('load', renderPayPalButtons, { once: true });
                     return;
                 }
                 const script = document.createElement('script');
-                script.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(paymentSettings.paypalClientId)}&currency=MXN`;
+                script.src = paypalSdkSrc;
                 script.dataset.driveMxPaypal = 'true';
                 script.onload = renderPayPalButtons;
                 script.onerror = () => alert('No se pudo cargar PayPal. Revisa el Client ID configurado.');
@@ -962,7 +968,7 @@
                                         {selectedPaymentMethod === 'paypal' && (
                                             <div className="bg-blue-50 rounded-2xl p-5 space-y-2">
                                                 <p className="text-[9px] font-black text-blue-500 uppercase">PayPal</p>
-                                                <p className="text-[10px] font-bold text-slate-500 uppercase leading-relaxed">El correo de nueva solicitud se enviará únicamente cuando el pago sea confirmado exitosamente.</p>
+                                                <p className="text-[10px] font-bold text-slate-500 uppercase leading-relaxed">PayPal se abrirá en español México. El correo de nueva solicitud se enviará únicamente cuando el pago sea confirmado exitosamente.</p>
                                                 {!paymentSettings.paypalClientId && <p className="text-[10px] font-black text-red-500 uppercase">Falta configurar las claves de PayPal en el Panel Admin.</p>}
                                                 {(!emailSettings.senderEmail || !emailSettings.appPassword || !emailSettings.receiverEmail) && <p className="text-[10px] font-black text-red-500 uppercase">Falta configurar el correo receptor/remitente en el Panel Admin.</p>}
                                             </div>
@@ -1299,6 +1305,7 @@
     </script>
 </body>
 </html>
+
 
                            
                           
