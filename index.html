@@ -27,6 +27,7 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getFirestore, doc, setDoc, collection, onSnapshot, deleteDoc, query } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
         
         const firebaseConfig = {
             apiKey: "AIzaSyDOK0wHv1gV5_wB4OSbYjDcL9lmLEg_Rdo",
@@ -39,7 +40,7 @@
         };
 
         window.firebaseConfig = firebaseConfig;
-        window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, getFirestore, doc, setDoc, collection, onSnapshot, deleteDoc, query };
+        window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, getFirestore, doc, setDoc, collection, onSnapshot, deleteDoc, query, getStorage, ref, uploadBytes, getDownloadURL };
     </script>
 
     <script type="text/babel" data-presets="react">
@@ -69,6 +70,7 @@
             const [trackingResult, setTrackingResult] = useState(null);
             const [loginForm, setLoginForm] = useState({ u: '', p: '' });
             const [pkgForm, setPkgForm] = useState({ id: '', o: '', d: '', op: '' });
+            const [imageFile, setImageFile] = useState(null);
             const [staffForm, setStaffForm] = useState({ u: '', p: '', n: '' });
             const [showStaffModal, setShowStaffModal] = useState(false);
 
@@ -100,6 +102,25 @@
 
                 return () => { unsubPkgs(); unsubOps(); };
             }, [fbUser]);
+
+            const uploadPngImage = async (packageId, file) => {
+                if (!file) return null;
+
+                const fileName = String(file.name || '').toLowerCase();
+                const isPngExtension = fileName.endsWith('.png');
+                const isPngMimeType = file.type === 'image/png';
+
+                if (!isPngExtension || !isPngMimeType) {
+                    throw new Error('Solo se permiten imágenes PNG válidas (.png / image/png).');
+                }
+
+                const storage = fbase.getStorage();
+                const safePackageId = String(packageId).toUpperCase().trim();
+                const safeFileName = `${Date.now()}-${String(file.name).replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+                const imageRef = fbase.ref(storage, `packages/${safePackageId}/${safeFileName}`);
+                const snapshot = await fbase.uploadBytes(imageRef, file, { contentType: 'image/png' });
+                return await fbase.getDownloadURL(snapshot.ref);
+            };
 
             const saveDoc = async (col, id, data) => {
                 if (col === 'packages') {
@@ -197,6 +218,11 @@
                                             <div><p className="text-[9px] font-black text-slate-400 uppercase mb-1">Guía</p><h2 className="text-3xl font-black text-red-600">#{trackingResult.id}</h2></div>
                                             <div className="text-right"><p className="text-[9px] font-black text-slate-400 uppercase mb-1">Estatus</p><p className="px-3 py-1 bg-red-50 text-red-600 rounded-full text-[10px] font-black uppercase">{trackingResult.status}</p></div>
                                         </div>
+                                        {trackingResult.imageUrl && (
+                                            <div className="overflow-hidden rounded-2xl border border-slate-100 bg-slate-50">
+                                                <img src={trackingResult.imageUrl} alt={`Imagen paquete ${trackingResult.id}`} className="w-full h-auto object-cover" />
+                                            </div>
+                                        )}
                                         <div className="grid grid-cols-2 gap-4 bg-slate-50 p-5 rounded-2xl">
                                             <div><p className="text-[8px] font-black text-slate-400 uppercase">Origen</p><p className="text-[11px] font-bold uppercase">{trackingResult.o}</p></div>
                                             <div className="border-l border-slate-200 pl-4"><p className="text-[8px] font-black text-slate-400 uppercase">Destino</p><p className="text-[11px] font-bold uppercase">{trackingResult.d}</p></div>
@@ -225,7 +251,22 @@
                                 <div className="grid md:grid-cols-3 gap-8">
                                     <div className="md:col-span-1 card-glass p-6 space-y-6">
                                         <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Nuevo Envío</h2>
-                                        <form onSubmit={(e) => { e.preventDefault(); const n = { ...pkgForm, id: pkgForm.id.toUpperCase(), status: 'Recolectado', currentStep: 0 }; saveDoc('packages', n.id, n); setPkgForm({ id: '', o: '', d: '', op: '' }); }} className="space-y-4">
+                                        <form onSubmit={async (e) => {
+                                            e.preventDefault();
+                                            try {
+                                                const packageId = pkgForm.id.toUpperCase().trim();
+                                                const imageUrl = await uploadPngImage(packageId, imageFile);
+                                                const n = { ...pkgForm, id: packageId, status: 'Recolectado', currentStep: 0 };
+                                                if (imageUrl) n.imageUrl = imageUrl;
+                                                saveDoc('packages', n.id, n);
+                                                setPkgForm({ id: '', o: '', d: '', op: '' });
+                                                setImageFile(null);
+                                                e.target.reset();
+                                            } catch (err) {
+                                                alert(err.message || 'No se pudo cargar la imagen PNG.');
+                                                console.error('Carga PNG:', err);
+                                            }
+                                        }} className="space-y-4">
                                             <input required className="input-field uppercase" placeholder="NÚMERO DE GUÍA" value={pkgForm.id} onChange={e => setPkgForm({...pkgForm, id: e.target.value})} />
                                             <input required className="input-field uppercase" placeholder="ORIGEN" value={pkgForm.o} onChange={e => setPkgForm({...pkgForm, o: e.target.value})} />
                                             <input required className="input-field uppercase" placeholder="DESTINO" value={pkgForm.d} onChange={e => setPkgForm({...pkgForm, d: e.target.value})} />
@@ -233,6 +274,22 @@
                                                 <option value="">ASIGNAR OPERADOR</option>
                                                 {ops.filter(o => o.role === 'operador').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                                             </select>
+                                            <input
+                                                type="file"
+                                                accept=".png,image/png"
+                                                className="input-field"
+                                                onChange={e => {
+                                                    const file = e.target.files && e.target.files[0];
+                                                    if (!file) { setImageFile(null); return; }
+                                                    if (!String(file.name || '').toLowerCase().endsWith('.png') || file.type !== 'image/png') {
+                                                        alert('Solo se permiten imágenes PNG válidas (.png / image/png).');
+                                                        e.target.value = '';
+                                                        setImageFile(null);
+                                                        return;
+                                                    }
+                                                    setImageFile(file);
+                                                }}
+                                            />
                                             <button type="submit" className="w-full btn-primary h-12">Crear Guía</button>
                                         </form>
                                     </div>
