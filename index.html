@@ -360,7 +360,7 @@
                             <div className="w-full max-w-5xl space-y-8 animate-slide">
                                 <div className="flex justify-between items-end">
                                     <div><h1 className="text-3xl font-black">Panel <span className="text-red-500">Admin</span></h1><p className="text-[10px] font-bold text-slate-400 uppercase">Gestión Central</p></div>
-                                    <button onClick={() => setShowStaffModal(true)} className="btn-primary">Registrar Operador</button>
+                                    <button onClick={() => setShowStaffModal(true)} className="btn-primary">Registrar Conductor</button>
                                 </div>
                                 
                                 <div className="grid md:grid-cols-3 gap-8">
@@ -371,7 +371,7 @@
                                             <input required className="input-field uppercase" placeholder="ORIGEN" value={pkgForm.o} onChange={e => setPkgForm({...pkgForm, o: e.target.value})} />
                                             <input required className="input-field uppercase" placeholder="DESTINO" value={pkgForm.d} onChange={e => setPkgForm({...pkgForm, d: e.target.value})} />
                                             <select required className="input-field" value={pkgForm.op} onChange={e => setPkgForm({...pkgForm, op: e.target.value})}>
-                                                <option value="">ASIGNAR OPERADOR</option>
+                                                <option value="">ASIGNAR CONDUCTOR</option>
                                                 {ops.filter(o => o.role === 'operador').map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                                             </select>
                                             <button type="submit" className="w-full btn-primary h-12">Crear Guía</button>
@@ -472,8 +472,12 @@
                                         </div>
 
                                         <div className="card-glass overflow-hidden">
-                                            <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
-                                                <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Operadores Registrados</h2>
+                                            <div className="bg-slate-50 border-b border-slate-100 px-6 py-4 flex items-center justify-between gap-3">
+                                                <div>
+                                                    <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Conductores Registrados</h2>
+                                                    <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Registro y control de accesos para rutas</p>
+                                                </div>
+                                                <button onClick={() => setShowStaffModal(true)} className="px-3 py-2 bg-red-50 text-red-600 rounded-xl text-[8px] font-black uppercase">Registrar Conductor</button>
                                             </div>
                                             <table className="w-full text-left">
                                                 <thead className="bg-white border-b border-slate-50">
@@ -534,12 +538,12 @@
                     {showStaffModal && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
                             <div className="card-glass max-w-sm w-full p-10 animate-slide">
-                                <h2 className="text-sm font-black text-center uppercase mb-8">Nuevo Operador</h2>
+                                <h2 className="text-sm font-black text-center uppercase mb-8">Nuevo Conductor</h2>
                                 <form onSubmit={(e) => { e.preventDefault(); const newOp = { ...staffForm, id: staffForm.u, role: 'operador', pass: staffForm.p, name: staffForm.n }; saveDoc('operators', newOp.id, newOp); setShowStaffModal(false); }} className="space-y-4">
                                     <input required className="input-field" placeholder="NOMBRE COMPLETO" onChange={e => setStaffForm({...staffForm, n: e.target.value})} />
                                     <input required className="input-field uppercase" placeholder="ID (EJ: OP-01)" onChange={e => setStaffForm({...staffForm, u: e.target.value})} />
                                     <input required className="input-field" placeholder="CONTRASEÑA" onChange={e => setStaffForm({...staffForm, p: e.target.value})} />
-                                    <button type="submit" className="w-full btn-primary h-12">Guardar Registro</button>
+                                    <button type="submit" className="w-full btn-primary h-12">Guardar Conductor</button>
                                     <button type="button" onClick={() => setShowStaffModal(false)} className="w-full text-[9px] font-black text-slate-400 uppercase">Cancelar</button>
                                 </form>
                             </div>
