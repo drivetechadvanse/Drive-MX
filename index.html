@@ -50,7 +50,9 @@
         const Icons = {
             Truck: ({size=16}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-5l-4-4h-3v10h3Z"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>,
             Trash: ({size=14}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>,
-            LogOut: ({size=14}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
+            LogOut: ({size=14}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>,
+            ChevronLeft: ({size=18}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>,
+            ChevronRight: ({size=18}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
         };
 
         const STEPS = ['Recolectado', 'Procesando', 'En Camino', 'Entregado'];
@@ -59,6 +61,12 @@
         const readLocal = (key) => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; } };
         const writeLocal = (key, data) => { try { localStorage.setItem(key, JSON.stringify(data)); } catch(e) {} };
         const withAdmin = (list) => list.find(x => x.id === ADMIN_USER.id) ? list : [...list, ADMIN_USER];
+        const getProductGallery = (product) => {
+            const legacyImage = product?.imageUrl || product?.image || '';
+            const gallery = Array.isArray(product?.images) ? product.images.filter(Boolean) : [];
+            if (gallery.length > 0) return gallery.slice(0, 5);
+            return legacyImage ? [legacyImage] : [];
+        };
 
         const App = () => {
             const [view, setView] = useState('tracking');
@@ -72,13 +80,12 @@
             const [loginForm, setLoginForm] = useState({ u: '', p: '' });
             const [pkgForm, setPkgForm] = useState({ id: '', o: '', d: '', op: '' });
             const [staffForm, setStaffForm] = useState({ u: '', p: '', n: '' });
-            const [productForm, setProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specs: '', images: [], image: '', imageUrl: '', active: true });
+            const [productForm, setProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true });
             const [productImageFiles, setProductImageFiles] = useState([]);
-            const [productImagePreview, setProductImagePreview] = useState([]);
-            const [selectedProductId, setSelectedProductId] = useState(null);
-            const [productGalleryIndex, setProductGalleryIndex] = useState(0);
             const [productUploading, setProductUploading] = useState(false);
             const [editingProductId, setEditingProductId] = useState(null);
+            const [selectedProductId, setSelectedProductId] = useState(null);
+            const [currentImageIndex, setCurrentImageIndex] = useState(0);
             const [showStaffModal, setShowStaffModal] = useState(false);
 
             useEffect(() => {
@@ -153,51 +160,84 @@
             };
 
             const resetProductForm = () => {
-                setProductForm({ id: '', name: '', price: '', stock: '', description: '', specs: '', images: [], image: '', imageUrl: '', active: true });
+                setProductForm({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true });
+                productImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
                 setProductImageFiles([]);
-                setProductImagePreview([]);
                 setProductUploading(false);
                 setEditingProductId(null);
             };
 
-            const getProductImages = (product) => {
-                const images = Array.isArray(product.images) ? product.images.filter(Boolean) : [];
-                const legacy = getProductImages(product)[0] || '';
-                return images.length ? images.slice(0, 5) : (legacy ? [legacy] : []);
+            const uploadSingleProductImage = async (productId, file) => {
+                const storage = fbase.getStorage();
+                const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+                const imageRef = fbase.ref(storage, `products/${productId}/${Date.now()}-${safeName}`);
+                await fbase.uploadBytes(imageRef, file);
+                return await fbase.getDownloadURL(imageRef);
             };
 
-            const handleProductImageSelect = (e) => {
-                const files = Array.from(e.target.files || []).filter(file => file.type.startsWith('image/')).slice(0, 5);
-                if (!files.length) {
-                    alert('Selecciona hasta 5 imágenes válidas desde tu galería.');
+            const handleProductImagesSelect = (e) => {
+                const files = Array.from(e.target.files || []).filter(file => file.type.startsWith('image/'));
+                if (files.length === 0) return;
+                const currentCount = (productForm.images || []).length + productImageFiles.length;
+                const availableSlots = Math.max(0, 5 - currentCount);
+                if (availableSlots === 0) {
+                    alert('Solo puedes guardar hasta 5 fotografías por producto.');
+                    e.target.value = '';
                     return;
                 }
-                setProductImageFiles(files);
-                setProductImagePreview(files.map(file => URL.createObjectURL(file)));
+                const selected = files.slice(0, availableSlots).map(file => ({ file, preview: URL.createObjectURL(file) }));
+                if (files.length > availableSlots) alert('Solo se agregaron las fotografías permitidas hasta completar 5.');
+                setProductImageFiles(prev => [...prev, ...selected]);
+                e.target.value = '';
             };
 
-            const uploadProductImages = async (productId) => {
-                const currentImages = Array.isArray(productForm.images) ? productForm.images.filter(Boolean).slice(0, 5) : [];
-                if (!productImageFiles.length) return currentImages;
-                const storage = fbase.getStorage();
-                const uploaded = [];
-                for (const file of productImageFiles.slice(0, 5)) {
-                    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-                    const imageRef = fbase.ref(storage, `products/${productId}/${Date.now()}-${safeName}`);
-                    await fbase.uploadBytes(imageRef, file);
-                    uploaded.push(await fbase.getDownloadURL(imageRef));
-                }
-                return uploaded.slice(0, 5);
-            };
-
-            const removeProductImageFromForm = (index) => {
+            const removeExistingProductImage = (index) => {
                 setProductForm(prev => ({ ...prev, images: (prev.images || []).filter((_, i) => i !== index) }));
             };
 
-            const openProductDetail = (product) => {
-                setSelectedProductId(product.id);
-                setProductGalleryIndex(0);
-                setView('productDetail');
+            const removeNewProductImage = (index) => {
+                setProductImageFiles(prev => {
+                    const item = prev[index];
+                    if (item?.preview) { try { URL.revokeObjectURL(item.preview); } catch(e) {} }
+                    return prev.filter((_, i) => i !== index);
+                });
+            };
+
+            const replaceExistingProductImage = async (index, e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (!file) return;
+                if (!file.type.startsWith('image/')) {
+                    alert('Selecciona un archivo de imagen válido.');
+                    return;
+                }
+                const id = editingProductId || productForm.id;
+                if (!id) {
+                    alert('Guarda primero el producto para poder reemplazar fotografías existentes.');
+                    return;
+                }
+                setProductUploading(true);
+                try {
+                    const url = await uploadSingleProductImage(id, file);
+                    setProductForm(prev => {
+                        const images = [...(prev.images || [])];
+                        images[index] = url;
+                        return { ...prev, images, image: images[0] || '', imageUrl: images[0] || '' };
+                    });
+                } catch(err) {
+                    console.error('Storage reemplazar foto:', err);
+                    alert('No se pudo reemplazar la fotografía.');
+                } finally {
+                    setProductUploading(false);
+                }
+            };
+
+            const uploadPendingProductImages = async (productId) => {
+                const urls = [];
+                for (const item of productImageFiles) {
+                    urls.push(await uploadSingleProductImage(productId, item.file));
+                }
+                return urls;
             };
 
             const handleProductSubmit = async (e) => {
@@ -205,55 +245,55 @@
                 const id = editingProductId || productForm.id || `prod_${Date.now()}`;
                 setProductUploading(true);
                 try {
-                    const images = await uploadProductImages(id);
-                    const imageUrl = images[0] || '';
+                    const existing = products.find(p => p.id === id);
+                    const oldImages = getProductGallery(existing);
+                    const currentImages = Array.isArray(productForm.images) ? productForm.images.filter(Boolean) : oldImages;
+                    const uploadedImages = await uploadPendingProductImages(id);
+                    const images = [...currentImages, ...uploadedImages].filter(Boolean).slice(0, 5);
+                    const mainImage = images[0] || '';
                     const product = {
+                        ...(existing || {}),
                         id,
                         name: productForm.name.trim(),
                         price: Number(productForm.price || 0),
                         stock: Number(productForm.stock || 0),
-                        description: productForm.description || '',
-                        specs: productForm.specs || '',
+                        description: productForm.description.trim(),
+                        specifications: productForm.specifications.trim(),
                         images,
-                        image: imageUrl,
-                        imageUrl,
+                        image: mainImage,
+                        imageUrl: mainImage,
                         active: Boolean(productForm.active),
                         updatedAt: Date.now(),
-                        createdAt: products.find(p => p.id === id)?.createdAt || Date.now()
+                        createdAt: existing?.createdAt || Date.now()
                     };
                     await saveDoc('products', id, product);
                     resetProductForm();
                 } catch(err) {
                     console.error('Storage producto:', err);
-                    alert('No se pudo subir la fotografía. Revisa Firebase Storage y vuelve a intentar.');
+                    alert('No se pudo guardar el producto. Revisa Firebase Storage y vuelve a intentar.');
                     setProductUploading(false);
                 }
             };
 
             const editProduct = (product) => {
-                const images = getProductImages(product);
-                const imageUrl = images[0] || '';
+                const images = getProductGallery(product);
                 setProductForm({
                     id: product.id,
                     name: product.name || '',
                     price: product.price ?? '',
                     stock: product.stock ?? '',
                     description: product.description || '',
-                    specs: product.specs || '',
+                    specifications: product.specifications || '',
                     images,
-                    image: imageUrl,
-                    imageUrl,
+                    image: images[0] || '',
+                    imageUrl: images[0] || '',
                     active: product.active !== false
                 });
+                productImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
                 setProductImageFiles([]);
-                setProductImagePreview([]);
                 setEditingProductId(product.id);
             };
 
-            const cloneProduct = (product) => {
-                const id = `prod_${Date.now()}`;
-                saveDoc('products', id, { ...product, id, name: `${product.name || 'Producto'} copia`, createdAt: Date.now(), updatedAt: Date.now() });
-            };
 
             const toggleProduct = (product) => {
                 saveDoc('products', product.id, { ...product, active: product.active === false, updatedAt: Date.now() });
@@ -269,8 +309,8 @@
 
             const activeProducts = products.filter(p => p.active !== false);
             const selectedProduct = products.find(p => p.id === selectedProductId);
-            const selectedProductImages = selectedProduct ? getProductImages(selectedProduct) : [];
-            const selectedMainImage = selectedProductImages[productGalleryIndex] || selectedProductImages[0] || '';
+            const selectedGallery = getProductGallery(selectedProduct);
+            const selectedMainImage = selectedGallery[currentImageIndex] || '';
 
             const handleLogin = (e) => {
                 e.preventDefault();
@@ -286,7 +326,7 @@
             return (
                 <div className="min-h-screen flex flex-col">
                     <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between sticky top-0 z-50">
-                        <div className="flex items-center gap-3 cursor-pointer" onClick={() => { setSelectedProductId(null); setView('tracking'); }}>
+                        <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('tracking')}>
                             <div className="w-9 h-9 bg-red-500 rounded-xl flex items-center justify-center text-white shadow-lg shadow-red-100">
                                 <Icons.Truck size={18} />
                             </div>
@@ -339,10 +379,10 @@
                                                 </div>
                                                 <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
                                                     {activeProducts.map(product => (
-                                                        <article key={product.id} onClick={() => openProductDetail(product)} className="bg-white rounded-[1.35rem] border border-slate-100 overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-200 cursor-pointer">
+                                                        <article key={product.id} onClick={() => { setSelectedProductId(product.id); setCurrentImageIndex(0); setView('product-detail'); }} className="bg-white rounded-[1.35rem] border border-slate-100 overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-200 cursor-pointer">
                                                             <div className="aspect-[4/3] bg-slate-100 overflow-hidden">
-                                                                {getProductImages(product)[0] ? (
-                                                                    <img src={getProductImages(product)[0]} alt={product.name} className="w-full h-full object-cover" />
+                                                                {getProductGallery(product)[0] ? (
+                                                                    <img src={getProductGallery(product)[0]} alt={product.name} className="w-full h-full object-cover" />
                                                                 ) : (
                                                                     <div className="w-full h-full flex items-center justify-center text-[10px] font-black text-slate-300 uppercase tracking-widest">Sin foto</div>
                                                                 )}
@@ -389,50 +429,58 @@
                             </div>
                         )}
 
-                        {view === 'productDetail' && selectedProduct && (
-                            <div className="w-full max-w-6xl py-8 space-y-6 animate-slide">
-                                <button onClick={() => { setSelectedProductId(null); setView('tracking'); }} className="text-[10px] font-black uppercase text-slate-400 tracking-widest">← Volver a productos</button>
+                        {view === 'product-detail' && selectedProduct && (
+                            <div className="w-full max-w-6xl py-6 animate-slide">
+                                <button onClick={() => { setView('tracking'); setSelectedProductId(null); setCurrentImageIndex(0); }} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Volver a productos</button>
                                 <div className="grid lg:grid-cols-2 gap-8 items-start">
                                     <div className="card-glass p-4 space-y-4">
-                                        <div className="aspect-square bg-slate-100 rounded-[1.25rem] overflow-hidden flex items-center justify-center">
-                                            {selectedMainImage ? <img src={selectedMainImage} alt={selectedProduct.name} className="w-full h-full object-cover" /> : <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Sin fotografía</span>}
+                                        <div className="relative aspect-square bg-slate-100 rounded-[1.5rem] overflow-hidden flex items-center justify-center">
+                                            {selectedMainImage ? (
+                                                <img src={selectedMainImage} alt={selectedProduct.name} className="w-full h-full object-cover" />
+                                            ) : (
+                                                <div className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Sin fotografías</div>
+                                            )}
+                                            {selectedGallery.length > 1 && (
+                                                <>
+                                                    <button onClick={() => setCurrentImageIndex((currentImageIndex - 1 + selectedGallery.length) % selectedGallery.length)} className="absolute left-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-white/90 shadow flex items-center justify-center text-slate-700 hover:text-red-500"><Icons.ChevronLeft /></button>
+                                                    <button onClick={() => setCurrentImageIndex((currentImageIndex + 1) % selectedGallery.length)} className="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-white/90 shadow flex items-center justify-center text-slate-700 hover:text-red-500"><Icons.ChevronRight /></button>
+                                                </>
+                                            )}
                                         </div>
-                                        {selectedProductImages.length > 1 && (
-                                            <div className="grid grid-cols-5 gap-2">
-                                                {selectedProductImages.slice(0, 5).map((img, idx) => (
-                                                    <button key={img + idx} onClick={() => setProductGalleryIndex(idx)} className={`aspect-square rounded-xl overflow-hidden border-2 ${productGalleryIndex === idx ? 'border-red-500' : 'border-slate-100'}`}>
-                                                        <img src={img} alt={`Foto ${idx + 1}`} className="w-full h-full object-cover" />
+                                        {selectedGallery.length > 0 && (
+                                            <div className="grid grid-cols-5 gap-3">
+                                                {selectedGallery.map((img, i) => (
+                                                    <button key={img + i} onClick={() => setCurrentImageIndex(i)} className={`aspect-square rounded-xl overflow-hidden border-2 bg-slate-100 ${currentImageIndex === i ? 'border-red-500' : 'border-transparent'}`}>
+                                                        <img src={img} alt={`${selectedProduct.name} ${i+1}`} className="w-full h-full object-cover" />
                                                     </button>
                                                 ))}
                                             </div>
                                         )}
-                                        {selectedProductImages.length > 1 && (
-                                            <div className="flex justify-between gap-3">
-                                                <button onClick={() => setProductGalleryIndex(i => (i - 1 + selectedProductImages.length) % selectedProductImages.length)} className="px-4 py-3 bg-slate-50 rounded-xl text-[9px] font-black uppercase text-slate-500">Anterior</button>
-                                                <button onClick={() => setProductGalleryIndex(i => (i + 1) % selectedProductImages.length)} className="px-4 py-3 bg-slate-50 rounded-xl text-[9px] font-black uppercase text-slate-500">Siguiente</button>
-                                            </div>
-                                        )}
                                     </div>
-                                    <div className="card-glass p-8 space-y-6">
+
+                                    <div className="card-glass p-8 lg:p-10 space-y-7">
                                         <div>
-                                            <p className="text-[9px] font-black text-red-500 uppercase tracking-widest mb-2">Producto Drive MX</p>
-                                            <h1 className="text-4xl font-black tracking-tight text-slate-900">{selectedProduct.name}</h1>
+                                            <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-2">Detalle del producto</p>
+                                            <h1 className="text-3xl sm:text-4xl font-black tracking-tight leading-tight">{selectedProduct.name}</h1>
                                             <p className="text-[9px] font-bold text-slate-400 uppercase mt-2">ID: {selectedProduct.id}</p>
                                         </div>
-                                        <div className="flex flex-wrap items-center gap-3">
+
+                                        <div className="flex flex-wrap items-center gap-4">
                                             <p className="text-4xl font-black text-red-500">${Number(selectedProduct.price || 0).toFixed(2)}</p>
-                                            <span className="px-4 py-2 bg-slate-50 rounded-full text-[10px] font-black text-slate-600 uppercase">Disponible: {Number(selectedProduct.stock || 0)}</span>
+                                            <span className="px-4 py-2 bg-slate-50 rounded-full text-[10px] font-black text-slate-500 uppercase">Disponibles: {Number(selectedProduct.stock || 0)}</span>
                                         </div>
+
                                         <div className="space-y-3">
                                             <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Descripción</h2>
-                                            <p className="text-sm leading-7 text-slate-600 font-semibold whitespace-pre-line">{selectedProduct.description || 'Sin descripción por el momento.'}</p>
+                                            <p className="text-sm font-semibold text-slate-600 leading-relaxed whitespace-pre-line">{selectedProduct.description || 'Sin descripción registrada.'}</p>
                                         </div>
+
                                         <div className="space-y-3">
                                             <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Especificaciones</h2>
-                                            <p className="text-sm leading-7 text-slate-600 font-semibold whitespace-pre-line">{selectedProduct.specs || 'Sin especificaciones registradas.'}</p>
+                                            <p className="text-sm font-semibold text-slate-600 leading-relaxed whitespace-pre-line">{selectedProduct.specifications || 'Sin especificaciones registradas.'}</p>
                                         </div>
-                                        <button type="button" className="w-full btn-primary h-14 opacity-95 cursor-default">Comprar</button>
-                                        <p className="text-[9px] font-bold text-slate-300 uppercase text-center">Botón visual, sin lógica de compra activa</p>
+
+                                        <button type="button" className="btn-primary w-full sm:w-auto h-12">Comprar</button>
                                     </div>
                                 </div>
                             </div>
@@ -488,41 +536,51 @@
                                                 {editingProductId && <button onClick={resetProductForm} className="text-[9px] font-black text-slate-400 uppercase">Cancelar edición</button>}
                                             </div>
                                             <div className="p-6 border-b border-slate-50">
-                                                <form onSubmit={handleProductSubmit} className="grid md:grid-cols-6 gap-3">
-                                                    <label className="md:col-span-3 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl p-4 cursor-pointer hover:border-red-200 transition-all">
-                                                        <input type="file" accept="image/*" multiple className="hidden" onChange={handleProductImageSelect} />
-                                                        <div className="flex items-center gap-4">
-                                                            <div className="grid grid-cols-5 gap-1 flex-1">
-                                                                {(productImagePreview.length ? productImagePreview : (productForm.images || [])).slice(0, 5).map((img, idx) => (
-                                                                    <div key={img + idx} className="aspect-square rounded-xl bg-white overflow-hidden border border-slate-100 relative">
-                                                                        <img src={img} alt={`Foto ${idx + 1}`} className="w-full h-full object-cover" />
-                                                                    </div>
-                                                                ))}
-                                                                {!(productImagePreview.length || (productForm.images || []).length) && <div className="col-span-5 h-16 rounded-xl bg-white border border-slate-100 flex items-center justify-center text-[8px] font-black text-slate-300 uppercase text-center">Subir hasta 5 fotos</div>}
+                                                <form onSubmit={handleProductSubmit} className="grid md:grid-cols-5 gap-3">
+                                                    <label className="md:col-span-5 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl p-4 cursor-pointer hover:border-red-200 transition-all">
+                                                        <input type="file" accept="image/*" multiple className="hidden" onChange={handleProductImagesSelect} />
+                                                        <div className="flex items-center justify-between gap-4 flex-wrap">
+                                                            <div>
+                                                                <p className="text-[10px] font-black uppercase text-slate-600">Fotografías del producto</p>
+                                                                <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">Máximo 5 imágenes JPG, PNG o WebP asociadas al mismo ID</p>
                                                             </div>
-                                                            <div className="min-w-[130px]">
-                                                                <p className="text-[10px] font-black uppercase text-slate-600">Galería desde dispositivo</p>
-                                                                <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">Máximo 5 imágenes</p>
-                                                            </div>
+                                                            <span className="px-3 py-2 bg-white rounded-xl text-[9px] font-black text-slate-400 uppercase">{(productForm.images || []).length + productImageFiles.length}/5 fotos</span>
                                                         </div>
                                                     </label>
-                                                    <input required className="input-field md:col-span-3" placeholder="NOMBRE" value={productForm.name} onChange={e => setProductForm({...productForm, name: e.target.value})} />
-                                                    <input required type="number" min="0" step="0.01" className="input-field md:col-span-2" placeholder="PRECIO" value={productForm.price} onChange={e => setProductForm({...productForm, price: e.target.value})} />
-                                                    <input required type="number" min="0" step="1" className="input-field md:col-span-2" placeholder="INVENTARIO" value={productForm.stock} onChange={e => setProductForm({...productForm, stock: e.target.value})} />
-                                                    <label className="md:col-span-2 flex items-center gap-2 text-[10px] font-black uppercase text-slate-500 bg-slate-50 rounded-xl px-4 py-3">
-                                                        <input type="checkbox" checked={productForm.active} onChange={e => setProductForm({...productForm, active: e.target.checked})} />
-                                                        Activo en portada
-                                                    </label>
-                                                    <textarea className="input-field md:col-span-3 min-h-[100px]" placeholder="DESCRIPCIÓN DEL PRODUCTO" value={productForm.description} onChange={e => setProductForm({...productForm, description: e.target.value})}></textarea>
-                                                    <textarea className="input-field md:col-span-3 min-h-[100px]" placeholder="ESPECIFICACIONES" value={productForm.specs} onChange={e => setProductForm({...productForm, specs: e.target.value})}></textarea>
-                                                    {(productForm.images || []).length > 0 && (
-                                                        <div className="md:col-span-6 flex flex-wrap gap-2">
-                                                            {(productForm.images || []).map((img, idx) => (
-                                                                <button type="button" key={img + idx} onClick={() => removeProductImageFromForm(idx)} className="px-3 py-2 bg-slate-100 rounded-xl text-[8px] font-black uppercase text-slate-500">Eliminar foto {idx + 1}</button>
+
+                                                    {((productForm.images || []).length > 0 || productImageFiles.length > 0) && (
+                                                        <div className="md:col-span-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                                                            {(productForm.images || []).map((img, index) => (
+                                                                <div key={img + index} className="relative rounded-2xl overflow-hidden bg-slate-100 border border-slate-100 group">
+                                                                    <img src={img} alt={`Foto ${index + 1}`} className="w-full aspect-square object-cover" />
+                                                                    <div className="absolute inset-x-2 bottom-2 flex gap-1">
+                                                                        <label className="flex-1 text-center bg-white/90 rounded-lg px-2 py-1 text-[7px] font-black uppercase cursor-pointer">
+                                                                            Reemplazar
+                                                                            <input type="file" accept="image/*" className="hidden" onChange={(e) => replaceExistingProductImage(index, e)} />
+                                                                        </label>
+                                                                        <button type="button" onClick={() => removeExistingProductImage(index)} className="flex-1 bg-red-500 text-white rounded-lg px-2 py-1 text-[7px] font-black uppercase">Eliminar</button>
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                            {productImageFiles.map((item, index) => (
+                                                                <div key={item.preview} className="relative rounded-2xl overflow-hidden bg-slate-100 border border-dashed border-red-200">
+                                                                    <img src={item.preview} alt={`Nueva foto ${index + 1}`} className="w-full aspect-square object-cover" />
+                                                                    <button type="button" onClick={() => removeNewProductImage(index)} className="absolute inset-x-2 bottom-2 bg-red-500 text-white rounded-lg px-2 py-1 text-[7px] font-black uppercase">Quitar</button>
+                                                                </div>
                                                             ))}
                                                         </div>
                                                     )}
-                                                    <button disabled={productUploading} type="submit" className="md:col-span-6 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{productUploading ? 'Subiendo fotografías...' : (editingProductId ? 'Guardar Cambios' : 'Agregar Producto')}</button>
+
+                                                    <input required className="input-field md:col-span-2" placeholder="NOMBRE" value={productForm.name} onChange={e => setProductForm({...productForm, name: e.target.value})} />
+                                                    <input required type="number" min="0" step="0.01" className="input-field" placeholder="PRECIO" value={productForm.price} onChange={e => setProductForm({...productForm, price: e.target.value})} />
+                                                    <input required type="number" min="0" step="1" className="input-field" placeholder="INVENTARIO" value={productForm.stock} onChange={e => setProductForm({...productForm, stock: e.target.value})} />
+                                                    <label className="flex items-center gap-2 text-[10px] font-black uppercase text-slate-500 bg-slate-50 rounded-xl px-4 py-3">
+                                                        <input type="checkbox" checked={productForm.active} onChange={e => setProductForm({...productForm, active: e.target.checked})} />
+                                                        Activo
+                                                    </label>
+                                                    <textarea className="input-field md:col-span-5 min-h-[90px] resize-y" placeholder="DESCRIPCIÓN" value={productForm.description} onChange={e => setProductForm({...productForm, description: e.target.value})}></textarea>
+                                                    <textarea className="input-field md:col-span-5 min-h-[90px] resize-y" placeholder="ESPECIFICACIONES" value={productForm.specifications} onChange={e => setProductForm({...productForm, specifications: e.target.value})}></textarea>
+                                                    <button disabled={productUploading} type="submit" className="md:col-span-5 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{productUploading ? 'Guardando...' : (editingProductId ? 'Guardar Cambios' : 'Agregar Producto')}</button>
                                                 </form>
                                             </div>
                                             <div className="overflow-x-auto">
@@ -542,17 +600,16 @@
                                                             <tr key={product.id} className="text-[10px] font-bold text-slate-600">
                                                                 <td className="px-6 py-4">
                                                                     <div className="w-12 h-12 rounded-xl bg-slate-100 overflow-hidden">
-                                                                        {(getProductImages(product)[0]) ? <img src={getProductImages(product)[0]} alt={product.name} className="w-full h-full object-cover" /> : null}
+                                                                        {getProductGallery(product)[0] ? <img src={getProductGallery(product)[0]} alt={product.name} className="w-full h-full object-cover" /> : null}
                                                                     </div>
                                                                 </td>
-                                                                <td className="px-6 py-4"><p className="font-black text-slate-800">{product.name}</p><p className="font-mono text-[8px] text-slate-400">{product.id}</p><p className="text-[8px] text-slate-300 uppercase">{getProductImages(product).length} foto(s)</p></td>
+                                                                <td className="px-6 py-4"><p className="font-black text-slate-800">{product.name}</p><p className="font-mono text-[8px] text-slate-400">{product.id}</p></td>
                                                                 <td className="px-6 py-4 text-red-600 font-black">${Number(product.price || 0).toFixed(2)}</td>
                                                                 <td className="px-6 py-4">{Number(product.stock || 0)}</td>
                                                                 <td className="px-6 py-4"><span className={`px-2 py-1 rounded-full text-[8px] uppercase ${product.active !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400'}`}>{product.active !== false ? 'Activo' : 'Inactivo'}</span></td>
                                                                 <td className="px-6 py-4 text-right">
                                                                     <div className="flex justify-end gap-2 flex-wrap">
                                                                         <button onClick={() => editProduct(product)} className="px-2 py-1 bg-slate-100 rounded-lg text-[8px] font-black uppercase">Editar</button>
-                                                                        <button onClick={() => cloneProduct(product)} className="px-2 py-1 bg-slate-100 rounded-lg text-[8px] font-black uppercase">Clonar producto</button>
                                                                         <button onClick={() => toggleProduct(product)} className="px-2 py-1 bg-slate-100 rounded-lg text-[8px] font-black uppercase">{product.active !== false ? 'Desactivar' : 'Activar'}</button>
                                                                         <button onClick={() => deleteProduct(product.id)} className="text-slate-300 hover:text-red-500"><Icons.Trash /></button>
                                                                     </div>
