@@ -79,9 +79,6 @@
             const [searchQuery, setSearchQuery] = useState('');
             const [trackingResult, setTrackingResult] = useState(null);
             const [trackingNotFound, setTrackingNotFound] = useState(false);
-            const [coverGuideQuery, setCoverGuideQuery] = useState('');
-            const [coverGuideResult, setCoverGuideResult] = useState(null);
-            const [coverGuideNotFound, setCoverGuideNotFound] = useState(false);
             const [loginForm, setLoginForm] = useState({ email: '', p: '' });
             const [pkgForm, setPkgForm] = useState({ id: '', o: '', d: '', op: '', productId: '' });
             const [staffForm, setStaffForm] = useState({ email: '', p: '', n: '' });
@@ -381,9 +378,6 @@
                 setSearchQuery('');
                 setTrackingResult(null);
                 setTrackingNotFound(false);
-                setCoverGuideQuery('');
-                setCoverGuideResult(null);
-                setCoverGuideNotFound(false);
                 setSelectedProductId(null);
                 setCurrentImageIndex(0);
                 setSelectedPaymentMethod('paypal');
@@ -802,27 +796,6 @@
                 alert('Guía asociada al pedido y producto correctamente.');
             };
 
-            const runCoverGuideSearch = (value, notify = false) => {
-                const guideCode = normalizeTrackingCode(value);
-                setCoverGuideQuery(value);
-                if (!guideCode) {
-                    setCoverGuideResult(null);
-                    setCoverGuideNotFound(false);
-                    return;
-                }
-
-                // Buscador de guías de la portada:
-                // consulta SOLO guías/envíos registrados en paquetes.
-                // Es independiente del buscador por ID de productos del Panel de Control.
-                const foundGuide = pkgs.find(pkg => {
-                    const values = [pkg.id, pkg.trackingNumber, pkg.packageId, pkg.guideNumber, pkg.guia, pkg.guiaEnvio];
-                    return values.some(item => normalizeTrackingCode(item) === guideCode);
-                });
-                setCoverGuideResult(foundGuide || null);
-                setCoverGuideNotFound(!foundGuide);
-                if (!foundGuide && notify) alert('No se encontró la guía');
-            };
-
             const runTrackingSearch = (value, notify = false) => {
                 const productId = normalizeTrackingCode(value);
                 setSearchQuery(value);
@@ -949,46 +922,6 @@
                                         <div className="max-w-xl mx-auto">
                                             <img src="repartidora.png" alt="Drive MX" className="w-full h-auto" />
                                         </div>
-
-                                        <section className="card-glass p-6 max-w-3xl mx-auto space-y-4">
-                                            <div className="text-center">
-                                                <p className="text-[10px] text-red-500 font-black uppercase tracking-widest">Rastreo de envío</p>
-                                                <h2 className="text-2xl font-black tracking-tight">Buscador de Guías</h2>
-                                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Consulta tu guía de envío registrada</p>
-                                            </div>
-                                            <div className="bg-slate-50 p-2 rounded-2xl border-2 border-slate-100 flex gap-2">
-                                                <input className="flex-grow bg-transparent px-4 text-sm font-bold uppercase outline-none" placeholder="INGRESE NÚMERO DE GUÍA" value={coverGuideQuery} onChange={e => runCoverGuideSearch(e.target.value, false)} />
-                                                <button onClick={() => runCoverGuideSearch(coverGuideQuery, true)} className="btn-primary">Buscar guía</button>
-                                            </div>
-                                            {coverGuideNotFound && <p className="text-center text-[10px] font-black text-red-500 uppercase tracking-widest">No se encontró la guía</p>}
-                                            {!coverGuideResult && !coverGuideNotFound && <p className="text-center text-[10px] font-black text-slate-300 uppercase tracking-widest">Este buscador usa únicamente guías/envíos, no IDs de producto</p>}
-                                            {coverGuideResult && (() => {
-                                                const guide = coverGuideResult;
-                                                const product = findProductByTracking(guide);
-                                                const productImage = getProductGallery(product)[0] || '';
-                                                const stepIndex = Number(guide.currentStep ?? STEPS.indexOf(guide.status));
-                                                return (
-                                                    <div className="bg-slate-50 rounded-2xl p-4 animate-slide space-y-4">
-                                                        <div className="flex flex-col sm:flex-row gap-4">
-                                                            <div className="w-full sm:w-32 h-32 rounded-2xl bg-white overflow-hidden shrink-0 border border-slate-100">
-                                                                {productImage ? <img src={productImage} alt={product?.name || 'Producto'} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-[10px] font-black text-slate-300 uppercase">Sin foto</div>}
-                                                            </div>
-                                                            <div className="flex-grow grid sm:grid-cols-2 gap-3">
-                                                                <div><p className="text-[8px] font-black text-slate-400 uppercase">Guía</p><p className="text-sm font-mono font-black text-red-600">{guide.trackingNumber || guide.id}</p></div>
-                                                                <div><p className="text-[8px] font-black text-slate-400 uppercase">Estatus</p><p className="text-sm font-black text-slate-900">{guide.status || STEPS[Math.max(0, stepIndex)] || 'Registrado'}</p></div>
-                                                                <div><p className="text-[8px] font-black text-slate-400 uppercase">Producto</p><p className="text-sm font-black text-slate-900">{product?.name || guide.productId || 'Sin producto'}</p></div>
-                                                                <div><p className="text-[8px] font-black text-slate-400 uppercase">Destino</p><p className="text-sm font-black text-slate-900">{guide.d || guide.delivery?.municipality || 'Destino registrado'}</p></div>
-                                                            </div>
-                                                        </div>
-                                                        <div className="grid grid-cols-4 gap-2">
-                                                            {STEPS.map((step, index) => (
-                                                                <div key={step} className={`rounded-xl p-2 text-center text-[8px] font-black uppercase ${index <= Math.max(0, stepIndex) ? 'bg-red-500 text-white' : 'bg-white text-slate-300'}`}>{step}</div>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })()}
-                                        </section>
 
                                         {activeProducts.length > 0 && (
                                             <section className="w-full">
@@ -1220,7 +1153,7 @@
                                         <button type="button" onClick={() => setShowAdminMenu(!showAdminMenu)} className="w-12 h-12 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-600 hover:text-red-500 shadow-sm"><Icons.Menu /></button>
                                         {showAdminMenu && (
                                             <div className="absolute right-0 top-14 w-56 bg-white border border-slate-100 rounded-2xl shadow-xl p-2 z-50 animate-slide">
-                                                <button type="button" onClick={openAdminTracking} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Buscador por ID</button>
+                                                <button type="button" onClick={openAdminTracking} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Buscador de Guías</button>
                                                 <button type="button" onClick={openAdminSupport} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Soporte Técnico</button>
                                             </div>
                                         )}
@@ -1493,7 +1426,7 @@
                                 <div className="card-glass p-6 space-y-5">
                                     <div className="text-center">
                                         <p className="text-[10px] text-red-500 font-black uppercase tracking-widest">Panel de Control</p>
-                                        <h1 className="text-3xl font-black tracking-tight">Buscador por ID</h1>
+                                        <h1 className="text-3xl font-black tracking-tight">Buscador de Guías</h1>
                                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Busca solo productos registrados por ID en el Panel de Control</p>
                                     </div>
                                     <div className="bg-slate-50 p-2 rounded-2xl border-2 border-slate-100 flex gap-2 max-w-xl mx-auto">
@@ -1637,6 +1570,7 @@
     </script>
 </body>
 </html>
+
 
 
 
