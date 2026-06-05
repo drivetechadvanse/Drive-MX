@@ -39,3 +39,4 @@ El panel admin del HTML guarda y usa:
 - Chat en tiempo real usando Firestore en `support_chats`.
 - Cada usuario conserva un chat activo; al cerrarlo, se crea uno nuevo vacío.
 - Botón “Solucionado” disponible únicamente en el panel de control/admin.
+
