@@ -57,7 +57,7 @@
             Send: ({size=16}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
         };
 
-        const STEPS = ['Recolectado', 'Procesado', 'En Camino', 'Entregado'];
+        const STEPS = ['Recolectado', 'Procesando', 'En Camino', 'Entregado'];
         const appId = window.firebaseConfig.projectId;
         const ADMIN_EMAIL = 'admin@drivemx.com';
         const readLocal = (key) => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; } };
@@ -79,8 +79,11 @@
             const [searchQuery, setSearchQuery] = useState('');
             const [trackingResult, setTrackingResult] = useState(null);
             const [trackingNotFound, setTrackingNotFound] = useState(false);
+            const [guideQuery, setGuideQuery] = useState('');
+            const [guideResult, setGuideResult] = useState(null);
+            const [guideNotFound, setGuideNotFound] = useState(false);
             const [loginForm, setLoginForm] = useState({ email: '', p: '' });
-            const [pkgForm, setPkgForm] = useState({ id: '', o: '', d: '', op: '' });
+            const [pkgForm, setPkgForm] = useState({ id: '', o: '', d: '', op: '', productId: '' });
             const [staffForm, setStaffForm] = useState({ email: '', p: '', n: '' });
             const [productForm, setProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true });
             const [productImageFiles, setProductImageFiles] = useState([]);
@@ -797,28 +800,54 @@
             };
 
             const runTrackingSearch = (value, notify = false) => {
-                const guide = normalizeTrackingCode(value);
+                const productId = normalizeTrackingCode(value);
                 setSearchQuery(value);
-                if (!guide) {
+                if (!productId) {
                     setTrackingResult(null);
                     setTrackingNotFound(false);
                     return;
                 }
 
-                // Buscador independiente de productos:
-                // consulta únicamente guías/envíos registrados en packages.
-                const foundPackage = pkgs.find(pkg => normalizeTrackingCode(pkg.id || pkg.trackingNumber) === guide);
-                setTrackingResult(foundPackage || null);
-                setTrackingNotFound(!foundPackage);
-                if (!foundPackage && notify) alert('No se encontró la guía');
+                // Buscador independiente del Panel de Control:
+                // busca SOLO productos registrados en la colección/lista de productos.
+                // No consulta envíos, guías, paquetes ni transferencias.
+                const foundProduct = products.find(product => normalizeTrackingCode(product.id) === productId);
+                setTrackingResult(foundProduct || null);
+                setTrackingNotFound(!foundProduct);
+                if (!foundProduct && notify) alert('No se encontró el producto');
+            };
+
+            const runGuideSearch = (value, notify = false) => {
+                const code = normalizeTrackingCode(value);
+                setGuideQuery(value);
+                if (!code) {
+                    setGuideResult(null);
+                    setGuideNotFound(false);
+                    return;
+                }
+
+                // Buscador independiente de guía:
+                // busca SOLO envíos registrados en packages por número de guía.
+                // No consulta productos ni altera el buscador de ID de producto.
+                const foundGuide = pkgs.find(pkg => normalizeTrackingCode(pkg.id || pkg.trackingNumber) === code);
+                setGuideResult(foundGuide || null);
+                setGuideNotFound(!foundGuide);
+                if (!foundGuide && notify) alert('No se encontró la guía');
             };
 
             const getTrackingStepIndex = (pkg) => {
-                const fromStatus = STEPS.findIndex(step => normalizeTrackingCode(step) === normalizeTrackingCode(pkg?.status));
-                if (fromStatus >= 0) return fromStatus;
-                const n = Number(pkg?.currentStep || 0);
-                return Number.isFinite(n) ? Math.max(0, Math.min(STEPS.length - 1, n)) : 0;
+                if (!pkg) return 0;
+                const current = Number(pkg.currentStep);
+                if (Number.isFinite(current)) return Math.max(0, Math.min(STEPS.length - 1, current));
+                const status = String(pkg.status || '').toLowerCase();
+                if (status.includes('entregado')) return 3;
+                if (status.includes('camino')) return 2;
+                if (status.includes('proces')) return 1;
+                if (status.includes('recolect')) return 0;
+                return 0;
             };
+
+            const trackingStepLabel = (step) => step === 'Procesando' ? 'Procesado' : step;
 
             const TrackingStatusCard = ({ pkg }) => {
                 const activeIndex = getTrackingStepIndex(pkg);
@@ -829,7 +858,7 @@
                                 <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Número de guía</p>
                                 <h2 className="text-3xl font-black text-red-600">#{pkg.id || pkg.trackingNumber}</h2>
                             </div>
-                            <span className="px-3 py-2 bg-red-50 text-red-600 rounded-full text-[9px] font-black uppercase tracking-widest self-start">{pkg.status || STEPS[activeIndex]}</span>
+                            <span className="px-3 py-2 bg-red-50 text-red-600 rounded-full text-[9px] font-black uppercase tracking-widest self-start">{trackingStepLabel(pkg.status || STEPS[activeIndex])}</span>
                         </div>
                         <div className="bg-slate-50 rounded-2xl p-4 grid sm:grid-cols-2 gap-4">
                             <div><p className="text-[8px] font-black text-slate-400 uppercase">Origen</p><p className="text-sm font-black text-slate-900 uppercase">{pkg.o || 'Origen pendiente'}</p></div>
@@ -838,7 +867,7 @@
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                             {STEPS.map((step, i) => (
                                 <div key={step} className={`p-3 rounded-xl border-2 text-center ${i <= activeIndex ? 'bg-red-500 border-red-500 text-white' : 'bg-white border-slate-100 text-slate-300'}`}>
-                                    <p className="text-[9px] font-black uppercase">{step}</p>
+                                    <p className="text-[9px] font-black uppercase">{trackingStepLabel(step)}</p>
                                 </div>
                             ))}
                         </div>
@@ -963,11 +992,12 @@
                                                 <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">Origen, destino y estado actualizado por el conductor</p>
                                             </div>
                                             <div className="bg-slate-50 p-2 rounded-2xl border-2 border-slate-100 flex gap-2">
-                                                <input className="flex-grow bg-transparent px-4 text-sm font-bold uppercase outline-none" placeholder="INGRESA TU NÚMERO DE GUÍA" value={searchQuery} onChange={e => runTrackingSearch(e.target.value, false)} />
-                                                <button onClick={() => runTrackingSearch(searchQuery, true)} className="btn-primary">Consultar</button>
+                                                <input className="flex-grow bg-transparent px-4 text-sm font-bold uppercase outline-none" placeholder="INGRESA TU NÚMERO DE GUÍA" value={guideQuery} onChange={e => runGuideSearch(e.target.value, false)} />
+                                                <button onClick={() => runGuideSearch(guideQuery, true)} className="btn-primary">Consultar</button>
                                             </div>
-                                            {trackingNotFound && <p className="text-center text-[10px] font-black text-red-500 uppercase tracking-widest">No se encontró la guía</p>}
-                                            {trackingResult && <TrackingStatusCard pkg={trackingResult} />}
+                                            {guideNotFound && <p className="text-center text-[10px] font-black text-red-500 uppercase tracking-widest">No se encontró la guía</p>}
+                                            {!guideResult && !guideNotFound && <p className="text-center text-[10px] font-black text-slate-300 uppercase tracking-widest">Ingresa el número de guía registrado en Nuevo Envío</p>}
+                                            {guideResult && <TrackingStatusCard pkg={guideResult} />}
                                         </section>
 
                                         {activeProducts.length > 0 && (
@@ -1210,7 +1240,7 @@
                                 <div className="grid md:grid-cols-3 gap-8">
                                     <div className="md:col-span-1 card-glass p-6 space-y-6">
                                         <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Nuevo Envío</h2>
-                                        <form onSubmit={(e) => { e.preventDefault(); const n = { ...pkgForm, id: normalizeTrackingCode(pkgForm.id), trackingNumber: normalizeTrackingCode(pkgForm.id), status: 'Recolectado', currentStep: 0, createdAt: Date.now(), updatedAt: Date.now(), productId: '' }; saveDoc('packages', n.id, n); setPkgForm({ id: '', o: '', d: '', op: '' }); }} className="space-y-4">
+                                        <form onSubmit={(e) => { e.preventDefault(); const n = { ...pkgForm, id: pkgForm.id.toUpperCase(), status: 'Recolectado', currentStep: 0 }; saveDoc('packages', n.id, n); setPkgForm({ id: '', o: '', d: '', op: '', productId: '' }); }} className="space-y-4">
                                             <input required className="input-field uppercase" placeholder="NÚMERO DE GUÍA" value={pkgForm.id} onChange={e => setPkgForm({...pkgForm, id: e.target.value})} />
                                             <input required className="input-field uppercase" placeholder="ORIGEN" value={pkgForm.o} onChange={e => setPkgForm({...pkgForm, o: e.target.value})} />
                                             <input required className="input-field uppercase" placeholder="DESTINO" value={pkgForm.d} onChange={e => setPkgForm({...pkgForm, d: e.target.value})} />
@@ -1232,7 +1262,7 @@
                                                     {pkgs.map(p => (
                                                         <tr key={p.id} className="text-[10px] font-bold text-slate-600">
                                                             <td className="px-6 py-4 text-red-600 font-black">#{p.id}</td>
-                                                            <td className="px-6 py-4">{p.o} → {p.d}<br/><span className="text-[8px] text-slate-400 uppercase">{'Registro independiente de productos'}</span></td>
+                                                            <td className="px-6 py-4">{p.o} → {p.d}<br/><span className="text-[8px] text-slate-400 uppercase">{findProductByTracking(p)?.name || p.productId || 'Sin producto'}</span></td>
                                                             <td className="px-6 py-4"><span className="px-2 py-1 bg-slate-100 rounded-full text-[8px] uppercase">{p.status}</span></td>
                                                             <td className="px-6 py-4 text-right"><button onClick={() => deletePkg(p.id)} className="text-slate-300 hover:text-red-500"><Icons.Trash /></button></td>
                                                         </tr>
@@ -1474,15 +1504,38 @@
                                     <div className="text-center">
                                         <p className="text-[10px] text-red-500 font-black uppercase tracking-widest">Panel de Control</p>
                                         <h1 className="text-3xl font-black tracking-tight">Buscador de Guías</h1>
-                                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Busca guías registradas en Nuevo Envío, independiente de productos</p>
+                                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Busca solo productos registrados por ID en el Panel de Control</p>
                                     </div>
                                     <div className="bg-slate-50 p-2 rounded-2xl border-2 border-slate-100 flex gap-2 max-w-xl mx-auto">
-                                        <input className="flex-grow bg-transparent px-4 text-sm font-bold uppercase outline-none" placeholder="INGRESE NÚMERO DE GUÍA" value={searchQuery} onChange={e => runTrackingSearch(e.target.value, false)} />
+                                        <input className="flex-grow bg-transparent px-4 text-sm font-bold uppercase outline-none" placeholder="INGRESE ID DEL PRODUCTO" value={searchQuery} onChange={e => runTrackingSearch(e.target.value, false)} />
                                         <button onClick={() => runTrackingSearch(searchQuery, true)} className="btn-primary">Buscar</button>
                                     </div>
-                                    {trackingNotFound && <p className="text-center text-[10px] font-black text-red-500 uppercase tracking-widest">No se encontró la guía</p>}
-                                    {!trackingResult && !trackingNotFound && <p className="text-center text-[10px] font-black text-slate-300 uppercase tracking-widest">Ingresa el número de guía registrado en Nuevo Envío</p>}
-                                    {trackingResult && <TrackingStatusCard pkg={trackingResult} />}
+                                    {trackingNotFound && <p className="text-center text-[10px] font-black text-red-500 uppercase tracking-widest">No se encontró el producto</p>}
+                                    {!trackingResult && !trackingNotFound && <p className="text-center text-[10px] font-black text-slate-300 uppercase tracking-widest">Ingresa el ID del producto registrado en el Panel de Control</p>}
+                                    {trackingResult && (() => {
+                                        const product = trackingResult;
+                                        const productImage = getProductGallery(product)[0] || '';
+                                        return (
+                                            <div className="card-glass p-6 max-w-3xl mx-auto animate-slide">
+                                                <div className="flex flex-col sm:flex-row gap-5">
+                                                    <div className="w-full sm:w-44 h-44 rounded-2xl bg-slate-100 overflow-hidden shrink-0">
+                                                        {productImage ? <img src={productImage} alt={product?.name || 'Producto'} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-[10px] font-black text-slate-300 uppercase">Sin foto</div>}
+                                                    </div>
+                                                    <div className="flex-grow space-y-4">
+                                                        <div>
+                                                            <p className="text-[9px] font-black text-slate-400 uppercase mb-1">ID (Guías de envío Noo)</p>
+                                                            <h2 className="text-3xl font-black text-red-600">#{product.id}</h2>
+                                                        </div>
+                                                        <div className="bg-slate-50 rounded-2xl p-4 grid sm:grid-cols-2 gap-4">
+                                                            <div><p className="text-[8px] font-black text-slate-400 uppercase">Foto</p><p className="text-sm font-black text-slate-900">{productImage ? 'Foto disponible' : 'Sin foto'}</p></div>
+                                                            <div><p className="text-[8px] font-black text-slate-400 uppercase">Nombre</p><p className="text-sm font-black text-slate-900">{product.name || 'Producto sin nombre'}</p></div>
+                                                            <div><p className="text-[8px] font-black text-slate-400 uppercase">ID (Guías de envío Noo)</p><p className="text-sm font-mono font-black text-slate-700">{product.id || '-'}</p></div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             </div>
                         )}
@@ -1549,7 +1602,7 @@
                                             <div className="flex justify-between items-center"><h3 className="text-xl font-black text-red-600">#{p.id}</h3><span className="text-[9px] font-black uppercase text-slate-400">{p.o} → {p.d}</span></div>
                                             <div className="grid grid-cols-2 gap-2">
                                                 {STEPS.map((s, i) => (
-                                                    <button key={s} onClick={() => saveDoc('packages', p.id, { ...p, status: s, currentStep: i, updatedAt: Date.now(), updatedBy: sessionUser?.email || '' })} className={`p-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${p.status === s ? 'bg-red-500 border-red-500 text-white shadow-lg' : 'border-slate-100 text-slate-400'}`}>{s}</button>
+                                                    <button key={s} onClick={() => saveDoc('packages', p.id, { ...p, status: s, currentStep: i })} className={`p-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${p.status === s ? 'bg-red-500 border-red-500 text-white shadow-lg' : 'border-slate-100 text-slate-400'}`}>{s}</button>
                                                 ))}
                                             </div>
                                         </div>
@@ -1594,6 +1647,7 @@
     </script>
 </body>
 </html>
+
 
 
 
