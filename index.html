@@ -946,6 +946,23 @@
                 setActiveSupportChatId(newChat.chatId);
             };
 
+            const deleteSupportChat = async (chat) => {
+                if (!chat) return;
+                const id = chat.id || chat.chatId;
+                if (!id) return;
+                if (!confirm('¿Eliminar esta conversación de soporte técnico?')) return;
+                const nextChats = supportChats.filter(c => (c.id || c.chatId) !== id);
+                setSupportChats(nextChats);
+                writeLocal('driveMxSupportChats', nextChats);
+                if ((activeSupportChatId || '') === id) {
+                    setActiveSupportChatId(nextChats[0]?.id || nextChats[0]?.chatId || '');
+                }
+                try {
+                    const db = fbase.getFirestore();
+                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'support_chats', id));
+                } catch(err) { console.error('Firestore borrar soporte:', err); }
+            };
+
 
             return (
                 <div className="min-h-screen flex flex-col">
@@ -1549,10 +1566,13 @@
                                             <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Chats de soporte</h2>
                                             <div className="space-y-2 max-h-[540px] overflow-y-auto pr-1">
                                                 {supportChats.map(chat => (
-                                                    <button key={chat.id || chat.chatId} onClick={() => setActiveSupportChatId(chat.id || chat.chatId)} className={`w-full text-left p-3 rounded-2xl border text-[10px] font-bold ${((chat.id || chat.chatId) === activeSupportChatId) ? 'bg-white border-red-200' : 'bg-white/70 border-slate-100'}`}>
-                                                        <p className="font-black text-slate-800 truncate">{chat.userEmail || chat.userId}</p>
-                                                        <p className={`mt-1 uppercase text-[8px] font-black ${chat.status === 'closed' ? 'text-slate-300' : 'text-green-600'}`}>{chat.status === 'closed' ? 'Cerrado' : 'Activo'}</p>
-                                                    </button>
+                                                    <div key={chat.id || chat.chatId} className={`w-full p-3 rounded-2xl border text-[10px] font-bold ${((chat.id || chat.chatId) === activeSupportChatId) ? 'bg-white border-red-200' : 'bg-white/70 border-slate-100'}`}>
+                                                        <button type="button" onClick={() => setActiveSupportChatId(chat.id || chat.chatId)} className="w-full text-left">
+                                                            <p className="font-black text-slate-800 truncate">{chat.userEmail || chat.userId}</p>
+                                                            <p className={`mt-1 uppercase text-[8px] font-black ${chat.status === 'closed' ? 'text-slate-300' : 'text-green-600'}`}>{chat.status === 'closed' ? 'Cerrado' : 'Activo'}</p>
+                                                        </button>
+                                                        <button type="button" onClick={(e) => { e.stopPropagation(); deleteSupportChat(chat); }} className="mt-2 w-full px-2 py-2 rounded-xl bg-red-50 text-red-500 hover:bg-red-500 hover:text-white text-[8px] font-black uppercase flex items-center justify-center gap-1"><Icons.Trash size={11} /> Eliminar</button>
+                                                    </div>
                                                 ))}
                                                 {supportChats.length === 0 && <p className="text-[10px] font-bold text-slate-300 uppercase text-center py-8">Sin chats todavía</p>}
                                             </div>
@@ -1564,8 +1584,13 @@
                                                 <p className="text-[10px] text-red-500 font-black uppercase tracking-widest">Soporte Técnico</p>
                                                 <h1 className="text-2xl font-black tracking-tight">Chat interno</h1>
                                             </div>
-                                            {view === 'admin-support' && adminSelectedSupportChat?.status !== 'closed' && (
-                                                <button onClick={() => closeSupportChat(adminSelectedSupportChat)} className="px-3 py-2 bg-green-50 text-green-600 rounded-xl text-[8px] font-black uppercase">Solucionado</button>
+                                            {view === 'admin-support' && adminSelectedSupportChat && (
+                                                <div className="flex items-center gap-2">
+                                                    {adminSelectedSupportChat?.status !== 'closed' && (
+                                                        <button onClick={() => closeSupportChat(adminSelectedSupportChat)} className="px-3 py-2 bg-green-50 text-green-600 rounded-xl text-[8px] font-black uppercase">Solucionado</button>
+                                                    )}
+                                                    <button onClick={() => deleteSupportChat(adminSelectedSupportChat)} className="px-3 py-2 bg-red-50 text-red-500 rounded-xl text-[8px] font-black uppercase flex items-center gap-1"><Icons.Trash size={11} /> Eliminar</button>
+                                                </div>
                                             )}
                                         </div>
                                         <div className="flex-1 p-5 bg-slate-50 overflow-y-auto space-y-3 max-h-[460px]">
@@ -1647,9 +1672,6 @@
     </script>
 </body>
 </html>
-
-
-
 
 
 
