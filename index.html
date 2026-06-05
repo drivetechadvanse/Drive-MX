@@ -354,6 +354,23 @@
             const selectedGallery = getProductGallery(selectedProduct);
             const selectedMainImage = selectedGallery[currentImageIndex] || '';
 
+            const resetPublicFlow = () => {
+                setView('tracking');
+                setSearchQuery('');
+                setTrackingResult(null);
+                setSelectedProductId(null);
+                setCurrentImageIndex(0);
+                setSelectedPaymentMethod('paypal');
+                resetDeliveryForm();
+                setOrderSending(false);
+            };
+
+            const resetAfterIncompletePayment = () => {
+                resetPublicFlow();
+                const container = document.getElementById('paypal-buttons-container');
+                if (container) container.innerHTML = '';
+            };
+
             useEffect(() => {
                 if (view !== 'payment-method' || selectedPaymentMethod !== 'paypal' || !paymentSettings.paypalClientId || !selectedProduct) return;
                 if (!emailSettings.senderEmail.trim() || !emailSettings.appPassword.trim() || !emailSettings.receiverEmail.trim()) return;
@@ -378,11 +395,8 @@
                             try {
                                 await actions.order.capture();
                                 await sendOrderEmail(buildOrderPayload());
-                                resetDeliveryForm();
-                                setSelectedProductId(null);
-                                setSelectedPaymentMethod('paypal');
                                 alert('Pago PayPal confirmado. La solicitud fue enviada correctamente.');
-                                setView('tracking');
+                                resetPublicFlow();
                             } catch(err) {
                                 console.error('Confirmar PayPal:', err);
                                 alert(err.message || 'No se pudo procesar el pago PayPal.');
@@ -390,9 +404,14 @@
                                 setOrderSending(false);
                             }
                         },
+                        onCancel: () => {
+                            alert('Pago cancelado. La pantalla se restablecerá al inicio.');
+                            resetAfterIncompletePayment();
+                        },
                         onError: (err) => {
                             console.error('PayPal:', err);
-                            alert('No se pudo completar el pago con PayPal.');
+                            alert('No se pudo completar el pago con PayPal. La pantalla se restablecerá al inicio.');
+                            resetAfterIncompletePayment();
                         }
                     }).render(`#${containerId}`);
                 };
@@ -459,13 +478,16 @@
                     if (!profile || profile.active === false) {
                         await fbase.signOut(auth);
                         await fbase.signInAnonymously(auth).catch(() => {});
+                        setLoginForm({ email: '', p: '' });
                         alert('Tu cuenta no tiene acceso activo al panel.');
                         return;
                     }
                     setSessionUser(profile);
+                    setLoginForm({ email: '', p: '' });
                     setView(profile.role === 'admin' ? 'admin' : 'operator');
                 } catch(err) {
                     console.error('Login Firebase Auth:', err);
+                    setLoginForm(prev => ({ ...prev, p: '' }));
                     alert('Correo o contraseña incorrectos.');
                 }
             };
@@ -473,7 +495,10 @@
             const handleLogout = async () => {
                 const auth = fbase.getAuth();
                 setSessionUser(null);
-                setView('tracking');
+                setLoginForm({ email: '', p: '' });
+                setStaffForm({ email: '', p: '', n: '' });
+                setShowStaffModal(false);
+                resetPublicFlow();
                 try {
                     await fbase.signOut(auth);
                     await fbase.signInAnonymously(auth);
@@ -618,11 +643,8 @@
                         createdAt: Date.now(),
                         updatedAt: Date.now()
                     });
-                    resetDeliveryForm();
-                    setSelectedProductId(null);
-                    setSelectedPaymentMethod('paypal');
                     alert('Transferencia registrada como Pendiente. Tu solicitud se procesará cuando el administrador confirme el pago.');
-                    setView('tracking');
+                    resetPublicFlow();
                 } catch(err) {
                     console.error('Registrar transferencia:', err);
                     alert('No se pudo registrar la transferencia pendiente.');
@@ -635,11 +657,8 @@
                 setOrderSending(true);
                 try {
                     await sendOrderEmail(buildOrderPayload());
-                    resetDeliveryForm();
-                    setSelectedProductId(null);
-                    setSelectedPaymentMethod('paypal');
                     alert('Pago PayPal confirmado. La solicitud fue enviada correctamente.');
-                    setView('tracking');
+                    resetPublicFlow();
                 } catch(err) {
                     console.error('Confirmar PayPal:', err);
                     alert(err.message || 'No se pudo procesar el pago PayPal.');
@@ -712,7 +731,7 @@
             return (
                 <div className="min-h-screen flex flex-col">
                     <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between sticky top-0 z-50">
-                        <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('tracking')}>
+                        <div className="flex items-center gap-3 cursor-pointer" onClick={resetPublicFlow}>
                             <div className="w-9 h-9 bg-red-500 rounded-xl flex items-center justify-center text-white shadow-lg shadow-red-100">
                                 <Icons.Truck size={18} />
                             </div>
@@ -727,7 +746,7 @@
                                 <button onClick={handleLogout} className="p-2 text-slate-400"><Icons.LogOut /></button>
                             </div>
                         ) : (
-                            <button onClick={() => setView('login')} className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Acceso Staff</button>
+                            <button onClick={() => { resetPublicFlow(); setLoginForm({ email: '', p: '' }); setView('login'); }} className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Acceso Staff</button>
                         )}
                     </header>
 
@@ -810,6 +829,9 @@
                                             ))}
                                             <div className="absolute top-4 left-0 w-full h-[2px] bg-slate-100 -z-0"></div>
                                         </div>
+                                        <div className="pt-2 flex justify-center">
+                                            <button type="button" onClick={resetPublicFlow} className="btn-primary h-11">Volver al inicio</button>
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -817,7 +839,7 @@
 
                         {view === 'product-detail' && selectedProduct && (
                             <div className="w-full max-w-6xl py-6 animate-slide">
-                                <button onClick={() => { setView('tracking'); setSelectedProductId(null); setCurrentImageIndex(0); }} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Volver a productos</button>
+                                <button onClick={resetPublicFlow} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Volver a productos</button>
                                 <div className="grid lg:grid-cols-2 gap-8 items-start">
                                     <div className="card-glass p-4 space-y-4">
                                         <div className="relative aspect-square bg-slate-100 rounded-[1.5rem] overflow-hidden flex items-center justify-center">
@@ -874,7 +896,7 @@
 
                         {view === 'delivery-data' && selectedProduct && (
                             <div className="w-full max-w-5xl py-6 animate-slide">
-                                <button onClick={() => setView('product-detail')} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Volver al detalle</button>
+                                <button onClick={() => { resetDeliveryForm(); setView('product-detail'); }} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Volver al detalle</button>
                                 <div className="card-glass overflow-hidden">
                                     <div className="bg-white border-b border-slate-100 px-6 py-5 flex items-center justify-between gap-4">
                                         <div>
@@ -882,7 +904,10 @@
                                             <h1 className="text-2xl sm:text-3xl font-black tracking-tight">Datos de entrega</h1>
                                             <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">ID del producto conservado: {selectedProduct.id}</p>
                                         </div>
-                                        <button type="button" onClick={handleDeliveryContinue} disabled={orderSending} className="btn-primary h-11 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed">{orderSending ? 'Procesando...' : 'Continuar'}</button>
+                                        <div className="flex items-center gap-3 shrink-0">
+                                            <button type="button" onClick={resetPublicFlow} className="text-[9px] font-black uppercase text-slate-400 hover:text-red-500">Cancelar</button>
+                                            <button type="button" onClick={handleDeliveryContinue} disabled={orderSending} className="btn-primary h-11 disabled:opacity-50 disabled:cursor-not-allowed">{orderSending ? 'Procesando...' : 'Continuar'}</button>
+                                        </div>
                                     </div>
 
                                     <form onSubmit={(e) => { e.preventDefault(); handleDeliveryContinue(); }} className="p-6 lg:p-8 space-y-6">
@@ -932,7 +957,7 @@
 
                         {view === 'payment-method' && selectedProduct && (
                             <div className="w-full max-w-4xl py-6 animate-slide">
-                                <button onClick={() => setView('delivery-data')} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Volver a datos de entrega</button>
+                                <button onClick={resetAfterIncompletePayment} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Cancelar pago y volver al inicio</button>
                                 <div className="card-glass overflow-hidden">
                                     <div className="bg-white border-b border-slate-100 px-6 py-5">
                                         <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-1">Producto seleccionado: {selectedProduct.name}</p>
@@ -988,6 +1013,7 @@
                                                 </div>
                                             )}
                                         </div>
+                                        <button type="button" onClick={resetAfterIncompletePayment} className="w-full text-[9px] font-black text-slate-400 uppercase hover:text-red-500">Cancelar método de pago y restablecer pantalla</button>
                                     </div>
                                 </div>
                             </div>
@@ -1046,7 +1072,7 @@
                                                 </div>
                                                 <div>
                                                     <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Contraseña de aplicación Gmail</label>
-                                                    <input required type="text" className="input-field" placeholder="Contraseña visible/editable" value={emailSettings.appPassword} onChange={e => setEmailSettings({...emailSettings, appPassword: e.target.value})} />
+                                                    <input required type="password" autoComplete="new-password" className="input-field" placeholder="Contraseña de aplicación" value={emailSettings.appPassword} onChange={e => setEmailSettings({...emailSettings, appPassword: e.target.value})} />
                                                 </div>
                                                 <div>
                                                     <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Correo base receptor</label>
@@ -1073,7 +1099,7 @@
                                                 </div>
                                                 <div>
                                                     <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">PayPal Secret</label>
-                                                    <input type="text" className="input-field" placeholder="Pegar Secret" value={paymentSettings.paypalClientSecret} onChange={e => setPaymentSettings({...paymentSettings, paypalClientSecret: e.target.value})} />
+                                                    <input type="password" autoComplete="new-password" className="input-field" placeholder="Pegar Secret" value={paymentSettings.paypalClientSecret} onChange={e => setPaymentSettings({...paymentSettings, paypalClientSecret: e.target.value})} />
                                                 </div>
                                                 <button disabled={paymentSaving} type="submit" className="md:col-span-3 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{paymentSaving ? 'Guardando...' : 'Guardar Configuración de Pagos'}</button>
                                             </form>
@@ -1292,7 +1318,7 @@
                                     <input required type="email" className="input-field" placeholder="CORREO ELECTRÓNICO" value={staffForm.email} onChange={e => setStaffForm({...staffForm, email: e.target.value})} />
                                     <input required type="password" minLength="6" className="input-field" placeholder="CONTRASEÑA" value={staffForm.p} onChange={e => setStaffForm({...staffForm, p: e.target.value})} />
                                     <button type="submit" className="w-full btn-primary h-12">Guardar Conductor</button>
-                                    <button type="button" onClick={() => setShowStaffModal(false)} className="w-full text-[9px] font-black text-slate-400 uppercase">Cancelar</button>
+                                    <button type="button" onClick={() => { setStaffForm({ email: '', p: '', n: '' }); setShowStaffModal(false); }} className="w-full text-[9px] font-black text-slate-400 uppercase">Cancelar</button>
                                 </form>
                             </div>
                         </div>
@@ -1305,6 +1331,7 @@
     </script>
 </body>
 </html>
+
 
 
                            
