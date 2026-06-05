@@ -66,6 +66,8 @@
             if (gallery.length > 0) return gallery.slice(0, 5);
             return legacyImage ? [legacyImage] : [];
         };
+        const uniqueChatId = () => window.crypto?.randomUUID ? window.crypto.randomUUID() : `chat_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        const normalizeGuide = (value) => String(value || '').toUpperCase().trim();
 
         const App = () => {
             const [view, setView] = useState('tracking');
@@ -94,6 +96,12 @@
             const [orderSending, setOrderSending] = useState(false);
             const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('paypal');
             const [showStaffModal, setShowStaffModal] = useState(false);
+            const [supportChats, setSupportChats] = useState(() => readLocal('driveMxSupportChats'));
+            const [supportInput, setSupportInput] = useState('');
+            const [activeChatId, setActiveChatId] = useState(() => localStorage.getItem('driveMxSupportChatId') || '');
+            const [adminSelectedChatId, setAdminSelectedChatId] = useState('');
+            const [adminSupportInput, setAdminSupportInput] = useState('');
+            const [showAdminMenu, setShowAdminMenu] = useState(false);
 
             useEffect(() => {
                 const app = fbase.initializeApp(window.firebaseConfig);
@@ -111,6 +119,7 @@
                 const transferCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'bank_transfers');
                 const mailSettingsRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'mail_settings', 'config');
                 const paymentSettingsRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'payment_settings', 'config');
+                const supportCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'support_chats');
                 
                 const unsubPkgs = fbase.onSnapshot(pkgCol, (s) => {
                     const l = []; s.forEach(d => l.push(d.data()));
@@ -137,6 +146,13 @@
                     writeLocal('driveMxPendingTransfers', l);
                 }, (err) => { console.error('Firestore transferencias:', err); });
 
+                const unsubSupportChats = fbase.onSnapshot(supportCol, (s) => {
+                    const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
+                    l.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+                    setSupportChats(l);
+                    writeLocal('driveMxSupportChats', l);
+                }, (err) => { console.error('Firestore soporte:', err); });
+
                 const unsubMailSettings = fbase.onSnapshot(mailSettingsRef, (snap) => {
                     if (!snap.exists()) return;
                     const data = snap.data() || {};
@@ -161,7 +177,7 @@
                     try { localStorage.setItem('driveMxPaymentSettings', JSON.stringify(next)); } catch(e) {}
                 }, (err) => { console.error('Firestore configuración pagos:', err); });
 
-                return () => { unsubPkgs(); unsubOps(); unsubProducts(); unsubTransfers(); unsubMailSettings(); unsubPaymentSettings(); };
+                return () => { unsubPkgs(); unsubOps(); unsubProducts(); unsubTransfers(); unsubSupportChats(); unsubMailSettings(); unsubPaymentSettings(); };
             }, [fbUser]);
 
             const saveDoc = async (col, id, data) => {
@@ -176,6 +192,9 @@
                 }
                 if (col === 'bank_transfers') {
                     setPendingTransfers(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)]; writeLocal('driveMxPendingTransfers', next); return next; });
+                }
+                if (col === 'support_chats') {
+                    setSupportChats(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0)); writeLocal('driveMxSupportChats', next); return next; });
                 }
                 try {
                     const db = fbase.getFirestore();
@@ -728,6 +747,45 @@
                 setView('payment-method');
             };
 
+            const getGuideProduct = (guide) => {
+                if (!guide) return null;
+                if (guide.productId) return products.find(p => p.id === guide.productId) || { id: guide.productId, name: guide.productName || 'Producto registrado' };
+                if (guide.productName) return { id: '', name: guide.productName };
+                return null;
+            };
+            const openSupport = async () => {
+                let id = localStorage.getItem('driveMxSupportChatId') || activeChatId;
+                const existing = supportChats.find(c => c.id === id && c.status !== 'closed');
+                if (!id || !existing) {
+                    id = uniqueChatId();
+                    localStorage.setItem('driveMxSupportChatId', id);
+                    await saveDoc('support_chats', id, { chatId: id, status: 'active', messages: [], createdAt: Date.now(), updatedAt: Date.now() });
+                }
+                setActiveChatId(id); setView('support');
+            };
+            const sendSupportMessage = async (sender = 'user') => {
+                const text = sender === 'admin' ? adminSupportInput.trim() : supportInput.trim();
+                const id = sender === 'admin' ? adminSelectedChatId : activeChatId;
+                if (!text || !id) return;
+                const chat = supportChats.find(c => c.id === id) || { chatId: id, messages: [], status: 'active', createdAt: Date.now() };
+                if (chat.status === 'closed') return;
+                const msg = { chatId: id, sender, message: text, timestamp: Date.now() };
+                await saveDoc('support_chats', id, { ...chat, chatId: id, status: 'active', messages: [...(chat.messages || []), msg], updatedAt: Date.now() });
+                sender === 'admin' ? setAdminSupportInput('') : setSupportInput('');
+            };
+            const closeSupportChat = async (id = activeChatId) => {
+                const chat = supportChats.find(c => c.id === id);
+                if (chat) await saveDoc('support_chats', id, { ...chat, status: 'closed', closedAt: Date.now(), updatedAt: Date.now() });
+                const newId = uniqueChatId();
+                localStorage.setItem('driveMxSupportChatId', newId);
+                setActiveChatId(newId); setSupportInput('');
+                await saveDoc('support_chats', newId, { chatId: newId, status: 'active', messages: [], createdAt: Date.now(), updatedAt: Date.now() });
+            };
+            const currentSupportChat = supportChats.find(c => c.id === activeChatId);
+            const currentAdminChat = supportChats.find(c => c.id === adminSelectedChatId);
+            const currentSupportMessages = currentSupportChat?.messages || [];
+            const currentAdminMessages = currentAdminChat?.messages || [];
+
             return (
                 <div className="min-h-screen flex flex-col">
                     <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between sticky top-0 z-50">
@@ -746,7 +804,10 @@
                                 <button onClick={handleLogout} className="p-2 text-slate-400"><Icons.LogOut /></button>
                             </div>
                         ) : (
-                            <button onClick={() => { resetPublicFlow(); setLoginForm({ email: '', p: '' }); setView('login'); }} className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Acceso Staff</button>
+                            <div className="flex items-center gap-3">
+                                <button onClick={openSupport} className="px-3 py-2 bg-red-50 text-red-600 rounded-xl text-[9px] font-black uppercase tracking-widest">Soporte Técnico</button>
+                                <button onClick={() => { resetPublicFlow(); setLoginForm({ email: '', p: '' }); setView('login'); }} className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Acceso Staff</button>
+                            </div>
                         )}
                     </header>
 
@@ -759,9 +820,9 @@
                                 </div>
                     
                                 <div className="bg-white p-2 rounded-2xl border-2 border-slate-100 shadow-sm flex gap-2 max-w-xl mx-auto">
-                                    <input className="flex-grow bg-transparent px-4 text-sm font-bold uppercase outline-none" placeholder="EJ: MX-12345" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+                                    <input className="flex-grow bg-transparent px-4 text-sm font-bold uppercase outline-none" placeholder="EJ: MX-12345" value={searchQuery} onChange={e => { const value = e.target.value; setSearchQuery(value); if (!value.trim()) setTrackingResult(null); }} />
                                     <button onClick={() => {
-                                        const p = pkgs.find(x => x.id === searchQuery.toUpperCase().trim());
+                                        const p = pkgs.find(x => normalizeGuide(x.id) === normalizeGuide(searchQuery));
                                         setTrackingResult(p || null);
                                         if(!p) alert("No se encontró el paquete.");
                                     }} className="btn-primary">Buscar</button>
@@ -769,8 +830,9 @@
 
                                 {!trackingResult && (
                                     <div className="w-full mt-6 animate-slide space-y-10">
-                                        <div className="max-w-xl mx-auto">
+                                        <div className="max-w-xl mx-auto text-center space-y-4">
                                             <img src="repartidora.png" alt="Drive MX" className="w-full h-auto" />
+                                            <button type="button" onClick={openSupport} className="btn-primary h-12">Soporte Técnico</button>
                                         </div>
 
                                         {activeProducts.length > 0 && (
@@ -816,6 +878,13 @@
                                             <div><p className="text-[9px] font-black text-slate-400 uppercase mb-1">Guía</p><h2 className="text-3xl font-black text-red-600">#{trackingResult.id}</h2></div>
                                             <div className="text-right"><p className="text-[9px] font-black text-slate-400 uppercase mb-1">Estatus</p><p className="px-3 py-1 bg-red-50 text-red-600 rounded-full text-[10px] font-black uppercase">{trackingResult.status}</p></div>
                                         </div>
+                                        {getGuideProduct(trackingResult) && (
+                                            <div className="bg-red-50 border border-red-100 p-5 rounded-2xl">
+                                                <p className="text-[8px] font-black text-red-400 uppercase">Producto vinculado</p>
+                                                <p className="text-lg font-black text-slate-900">{getGuideProduct(trackingResult).name}</p>
+                                                {getGuideProduct(trackingResult).id && <p className="text-[9px] font-bold text-slate-400 uppercase">ID: {getGuideProduct(trackingResult).id}</p>}
+                                            </div>
+                                        )}
                                         <div className="grid grid-cols-2 gap-4 bg-slate-50 p-5 rounded-2xl">
                                             <div><p className="text-[8px] font-black text-slate-400 uppercase">Origen</p><p className="text-[11px] font-bold uppercase">{trackingResult.o}</p></div>
                                             <div className="border-l border-slate-200 pl-4"><p className="text-[8px] font-black text-slate-400 uppercase">Destino</p><p className="text-[11px] font-bold uppercase">{trackingResult.d}</p></div>
@@ -1021,16 +1090,24 @@
 
                         {view === 'admin' && (
                             <div className="w-full max-w-5xl space-y-8 animate-slide">
-                                <div className="flex justify-between items-end">
+                                <div className="flex justify-between items-end gap-4">
                                     <div><h1 className="text-3xl font-black">Panel <span className="text-red-500">Admin</span></h1><p className="text-[10px] font-bold text-slate-400 uppercase">Gestión Central</p></div>
-                                    <button onClick={() => setShowStaffModal(true)} className="btn-primary">Registrar Conductor</button>
+                                    <div className="relative flex gap-2">
+                                        <button onClick={() => setShowStaffModal(true)} className="btn-primary">Registrar Conductor</button>
+                                        <button type="button" onClick={() => setShowAdminMenu(!showAdminMenu)} className="w-12 h-12 rounded-xl bg-slate-900 text-white font-black text-xl">☰</button>
+                                        {showAdminMenu && <div className="absolute right-0 top-14 w-56 bg-white border border-slate-100 rounded-2xl shadow-xl p-2 z-20"><button type="button" onClick={() => { setShowAdminMenu(false); setView('admin-support'); }} className="w-full text-left px-4 py-3 rounded-xl hover:bg-red-50 text-[10px] font-black uppercase text-slate-600">Soporte Técnico</button></div>}
+                                    </div>
                                 </div>
                                 
                                 <div className="grid md:grid-cols-3 gap-8">
                                     <div className="md:col-span-1 card-glass p-6 space-y-6">
                                         <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Nuevo Envío</h2>
-                                        <form onSubmit={(e) => { e.preventDefault(); const n = { ...pkgForm, id: pkgForm.id.toUpperCase(), status: 'Recolectado', currentStep: 0 }; saveDoc('packages', n.id, n); setPkgForm({ id: '', o: '', d: '', op: '' }); }} className="space-y-4">
+                                        <form onSubmit={(e) => { e.preventDefault(); const linkedProduct = products.find(p => p.id === pkgForm.productId); const n = { ...pkgForm, id: normalizeGuide(pkgForm.id), productName: linkedProduct?.name || '', status: 'Recolectado', currentStep: 0 }; saveDoc('packages', n.id, n); setPkgForm({ id: '', o: '', d: '', op: '', productId: '' }); }} className="space-y-4">
                                             <input required className="input-field uppercase" placeholder="NÚMERO DE GUÍA" value={pkgForm.id} onChange={e => setPkgForm({...pkgForm, id: e.target.value})} />
+                                            <select className="input-field" value={pkgForm.productId || ''} onChange={e => setPkgForm({...pkgForm, productId: e.target.value})}>
+                                                <option value="">VINCULAR PRODUCTO REGISTRADO</option>
+                                                {products.map(p => <option key={p.id} value={p.id}>{p.name} — {p.id}</option>)}
+                                            </select>
                                             <input required className="input-field uppercase" placeholder="ORIGEN" value={pkgForm.o} onChange={e => setPkgForm({...pkgForm, o: e.target.value})} />
                                             <input required className="input-field uppercase" placeholder="DESTINO" value={pkgForm.d} onChange={e => setPkgForm({...pkgForm, d: e.target.value})} />
                                             <select required className="input-field" value={pkgForm.op} onChange={e => setPkgForm({...pkgForm, op: e.target.value})}>
@@ -1051,7 +1128,7 @@
                                                     {pkgs.map(p => (
                                                         <tr key={p.id} className="text-[10px] font-bold text-slate-600">
                                                             <td className="px-6 py-4 text-red-600 font-black">#{p.id}</td>
-                                                            <td className="px-6 py-4">{p.o} → {p.d}</td>
+                                                            <td className="px-6 py-4"><p>{p.o} → {p.d}</p>{getGuideProduct(p) && <p className="text-[8px] text-slate-400 uppercase">Producto: {getGuideProduct(p).name}</p>}</td>
                                                             <td className="px-6 py-4"><span className="px-2 py-1 bg-slate-100 rounded-full text-[8px] uppercase">{p.status}</span></td>
                                                             <td className="px-6 py-4 text-right"><button onClick={() => deletePkg(p.id)} className="text-slate-300 hover:text-red-500"><Icons.Trash /></button></td>
                                                         </tr>
@@ -1295,6 +1372,45 @@
                             </div>
                         )}
 
+                        {view === 'support' && (
+                            <div className="w-full max-w-2xl py-6 animate-slide">
+                                <button onClick={resetPublicFlow} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Volver al inicio</button>
+                                <div className="card-glass overflow-hidden">
+                                    <div className="bg-red-500 text-white px-6 py-5 flex justify-between items-center gap-4">
+                                        <div><h1 className="text-xl font-black uppercase">Soporte Técnico</h1><p className="text-[9px] font-bold uppercase opacity-80">Chat anónimo: {activeChatId}</p></div>
+                                        <button type="button" onClick={() => closeSupportChat(activeChatId)} className="px-3 py-2 bg-white/20 rounded-xl text-[9px] font-black uppercase">Solucionado</button>
+                                    </div>
+                                    <div className="h-[430px] overflow-y-auto p-5 bg-slate-50 space-y-3">
+                                        {currentSupportMessages.length === 0 && <p className="text-center text-[10px] font-bold text-slate-300 uppercase mt-20">Escribe tu mensaje para iniciar soporte</p>}
+                                        {currentSupportMessages.map((m, idx) => (<div key={idx} className={`flex ${m.sender === 'user' ? 'justify-end' : 'justify-start'}`}><div className={`max-w-[78%] rounded-2xl px-4 py-3 text-sm font-semibold ${m.sender === 'user' ? 'bg-red-500 text-white rounded-br-sm' : 'bg-white text-slate-700 border border-slate-100 rounded-bl-sm'}`}><p>{m.message}</p><p className={`text-[8px] mt-1 ${m.sender === 'user' ? 'text-white/70' : 'text-slate-300'}`}>{new Date(m.timestamp).toLocaleTimeString('es-MX')}</p></div></div>))}
+                                        {currentSupportChat?.status === 'closed' && <p className="text-center text-[10px] font-black text-slate-400 uppercase">Chat cerrado</p>}
+                                    </div>
+                                    <div className="p-4 bg-white border-t border-slate-100 flex gap-2">
+                                        <input disabled={currentSupportChat?.status === 'closed'} className="input-field" placeholder="Escribe tu mensaje..." value={supportInput} onChange={e => setSupportInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendSupportMessage('user'); }} />
+                                        <button disabled={currentSupportChat?.status === 'closed'} onClick={() => sendSupportMessage('user')} className="btn-primary disabled:opacity-50">Enviar</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'admin-support' && sessionUser?.role === 'admin' && (
+                            <div className="w-full max-w-6xl py-6 animate-slide space-y-6">
+                                <button onClick={() => setView('admin')} className="text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Volver al panel admin</button>
+                                <div><h1 className="text-3xl font-black">Soporte <span className="text-red-500">Técnico</span></h1><p className="text-[10px] font-bold text-slate-400 uppercase">Chats activos y cerrados en tiempo real</p></div>
+                                <div className="grid lg:grid-cols-3 gap-6">
+                                    <div className="card-glass overflow-hidden"><div className="bg-slate-50 border-b border-slate-100 px-5 py-4"><h2 className="text-[10px] font-black uppercase text-slate-400">Conversaciones</h2></div><div className="divide-y divide-slate-50 max-h-[560px] overflow-y-auto">
+                                        {supportChats.map(chat => (<button key={chat.id} onClick={() => setAdminSelectedChatId(chat.id)} className={`w-full text-left px-5 py-4 hover:bg-slate-50 ${adminSelectedChatId === chat.id ? 'bg-red-50' : ''}`}><div className="flex justify-between gap-2"><p className="text-[10px] font-black text-slate-700 truncate">{chat.id}</p><span className={`text-[8px] font-black uppercase ${chat.status === 'closed' ? 'text-slate-400' : 'text-green-600'}`}>{chat.status === 'closed' ? 'Cerrado' : 'Activo'}</span></div><p className="text-[9px] font-bold text-slate-400 truncate mt-1">{(chat.messages || []).slice(-1)[0]?.message || 'Sin mensajes'}</p></button>))}
+                                        {supportChats.length === 0 && <p className="p-8 text-center text-[10px] font-bold text-slate-300 uppercase">No hay chats registrados</p>}
+                                    </div></div>
+                                    <div className="lg:col-span-2 card-glass overflow-hidden"><div className="bg-red-500 text-white px-6 py-5"><h2 className="text-sm font-black uppercase">{currentAdminChat ? `Chat ${currentAdminChat.id}` : 'Selecciona un chat'}</h2></div><div className="h-[430px] overflow-y-auto p-5 bg-slate-50 space-y-3">
+                                        {!currentAdminChat && <p className="text-center text-[10px] font-bold text-slate-300 uppercase mt-20">Selecciona una conversación</p>}
+                                        {currentAdminMessages.map((m, idx) => (<div key={idx} className={`flex ${m.sender === 'admin' ? 'justify-end' : 'justify-start'}`}><div className={`max-w-[78%] rounded-2xl px-4 py-3 text-sm font-semibold ${m.sender === 'admin' ? 'bg-red-500 text-white rounded-br-sm' : 'bg-white text-slate-700 border border-slate-100 rounded-bl-sm'}`}><p>{m.message}</p><p className={`text-[8px] mt-1 ${m.sender === 'admin' ? 'text-white/70' : 'text-slate-300'}`}>{m.sender} · {new Date(m.timestamp).toLocaleString('es-MX')}</p></div></div>))}
+                                        {currentAdminChat?.status === 'closed' && <p className="text-center text-[10px] font-black text-slate-400 uppercase">Chat cerrado</p>}
+                                    </div><div className="p-4 bg-white border-t border-slate-100 flex gap-2"><input disabled={!currentAdminChat || currentAdminChat.status === 'closed'} className="input-field" placeholder="Responder como administrador..." value={adminSupportInput} onChange={e => setAdminSupportInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendSupportMessage('admin'); }} /><button disabled={!currentAdminChat || currentAdminChat.status === 'closed'} onClick={() => sendSupportMessage('admin')} className="btn-primary disabled:opacity-50">Enviar</button></div></div>
+                                </div>
+                            </div>
+                        )}
+
                         {view === 'login' && (
                             <div className="w-full max-w-sm py-20 animate-slide">
                                 <div className="card-glass p-10 space-y-8">
@@ -1331,6 +1447,7 @@
     </script>
 </body>
 </html>
+
 
 
 
