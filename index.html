@@ -60,6 +60,8 @@
         const STEPS = ['Recolectado', 'Procesando', 'En Camino', 'Entregado'];
         const appId = window.firebaseConfig.projectId;
         const ADMIN_EMAIL = 'admin@drivemx.com';
+        const STAFF_USERS_COLLECTION = 'operators';
+        const STAFF_USERS_LOCAL_KEY = 'driveMxOperators';
         const readLocal = (key) => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; } };
         const writeLocal = (key, data) => { try { localStorage.setItem(key, JSON.stringify(data)); } catch(e) {} };
         const getProductGallery = (product) => {
@@ -74,7 +76,7 @@
             const [fbUser, setFbUser] = useState(null);
             const [sessionUser, setSessionUser] = useState(null);
             const [pkgs, setPkgs] = useState(() => readLocal('driveMxPackages'));
-            const [ops, setOps] = useState(() => readLocal('driveMxOperators'));
+            const [users, setUsers] = useState(() => readLocal(STAFF_USERS_LOCAL_KEY));
             const [products, setProducts] = useState(() => readLocal('driveMxProducts'));
             const [searchQuery, setSearchQuery] = useState('');
             const [trackingResult, setTrackingResult] = useState(null);
@@ -84,7 +86,7 @@
             const [guideNotFound, setGuideNotFound] = useState(false);
             const [loginForm, setLoginForm] = useState({ email: '', p: '' });
             const [pkgForm, setPkgForm] = useState({ id: '', o: '', d: '', op: '', productId: '' });
-            const [staffForm, setStaffForm] = useState({ email: '', p: '', n: '' });
+            const [userForm, setUserForm] = useState({ email: '', p: '', n: '', phone: '' });
             const [productForm, setProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true });
             const [productImageFiles, setProductImageFiles] = useState([]);
             const [productUploading, setProductUploading] = useState(false);
@@ -100,7 +102,7 @@
             const [paymentSaving, setPaymentSaving] = useState(false);
             const [orderSending, setOrderSending] = useState(false);
             const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('paypal');
-            const [showStaffModal, setShowStaffModal] = useState(false);
+            const [showUserModal, setShowUserModal] = useState(false);
             const [supportChats, setSupportChats] = useState(() => readLocal('driveMxSupportChats'));
             const [supportInput, setSupportInput] = useState('');
             const [activeSupportChatId, setActiveSupportChatId] = useState('');
@@ -117,7 +119,7 @@
                 if (!fbUser) return;
                 const db = fbase.getFirestore();
                 const pkgCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'packages');
-                const opCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'operators');
+                const userCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION);
                 const productCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'products');
                 const transferCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'bank_transfers');
                 const supportCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'support_chats');
@@ -130,11 +132,11 @@
                     writeLocal('driveMxPackages', l);
                 }, (err) => { console.error('Firestore paquetes:', err); });
 
-                const unsubOps = fbase.onSnapshot(opCol, (s) => {
+                const unsubUsers = fbase.onSnapshot(userCol, (s) => {
                     const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
-                    setOps(l);
-                    writeLocal('driveMxOperators', l);
-                }, (err) => { console.error('Firestore operadores:', err); });
+                    setUsers(l);
+                    writeLocal(STAFF_USERS_LOCAL_KEY, l);
+                }, (err) => { console.error('Firestore usuarios:', err); });
 
                 const unsubProducts = fbase.onSnapshot(productCol, (s) => {
                     const l = []; s.forEach(d => l.push(d.data()));
@@ -180,15 +182,15 @@
                     try { localStorage.setItem('driveMxPaymentSettings', JSON.stringify(next)); } catch(e) {}
                 }, (err) => { console.error('Firestore configuración pagos:', err); });
 
-                return () => { unsubPkgs(); unsubOps(); unsubProducts(); unsubTransfers(); unsubSupportChats(); unsubMailSettings(); unsubPaymentSettings(); };
+                return () => { unsubPkgs(); unsubUsers(); unsubProducts(); unsubTransfers(); unsubSupportChats(); unsubMailSettings(); unsubPaymentSettings(); };
             }, [fbUser]);
 
             const saveDoc = async (col, id, data) => {
                 if (col === 'packages') {
                     setPkgs(prev => { const next = [...prev.filter(x => x.id !== id), data]; writeLocal('driveMxPackages', next); return next; });
                 }
-                if (col === 'operators') {
-                    setOps(prev => { const next = [...prev.filter(x => x.id !== id), { id, ...data }]; writeLocal('driveMxOperators', next); return next; });
+                if (col === STAFF_USERS_COLLECTION) {
+                    setUsers(prev => { const next = [...prev.filter(x => x.id !== id), { id, ...data }]; writeLocal(STAFF_USERS_LOCAL_KEY, next); return next; });
                 }
                 if (col === 'products') {
                     setProducts(prev => { const next = [...prev.filter(x => x.id !== id), data]; writeLocal('driveMxProducts', next); return next; });
@@ -215,12 +217,12 @@
                 } catch(err) { console.error('Firestore borrar paquete:', err); }
             };
 
-            const deleteOp = async (id) => {
-                setOps(prev => { const next = prev.filter(x => x.id !== id); writeLocal('driveMxOperators', next); return next; });
+            const deleteUser = async (id) => {
+                setUsers(prev => { const next = prev.filter(x => x.id !== id); writeLocal(STAFF_USERS_LOCAL_KEY, next); return next; });
                 try {
                     const db = fbase.getFirestore();
-                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'operators', id));
-                } catch(err) { console.error('Firestore borrar conductor:', err); }
+                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, id));
+                } catch(err) { console.error('Firestore borrar usuario:', err); }
             };
 
             const resetProductForm = () => {
@@ -471,7 +473,7 @@
 
             const getStaffProfile = async (user) => {
                 const db = fbase.getFirestore();
-                const profileRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'operators', user.uid);
+                const profileRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, user.uid);
                 const profileSnap = await fbase.getDoc(profileRef);
                 if (profileSnap.exists()) return { id: user.uid, uid: user.uid, email: user.email, ...profileSnap.data() };
 
@@ -485,7 +487,7 @@
                         createdAt: Date.now(),
                         updatedAt: Date.now()
                     };
-                    await saveDoc('operators', user.uid, adminProfile);
+                    await saveDoc(STAFF_USERS_COLLECTION, user.uid, adminProfile);
                     return { id: user.uid, ...adminProfile };
                 }
 
@@ -519,8 +521,8 @@
                 const auth = fbase.getAuth();
                 setSessionUser(null);
                 setLoginForm({ email: '', p: '' });
-                setStaffForm({ email: '', p: '', n: '' });
-                setShowStaffModal(false);
+                setUserForm({ email: '', p: '', n: '', phone: '' });
+                setShowUserModal(false);
                 resetPublicFlow();
                 try {
                     await fbase.signOut(auth);
@@ -530,29 +532,32 @@
                 }
             };
 
-            const registerDriver = async (e) => {
+            const registerUser = async (e) => {
                 e.preventDefault();
-                if (!staffForm.email.trim() || !staffForm.p || !staffForm.n.trim()) return;
+                if (!userForm.email.trim() || !userForm.p || !userForm.n.trim() || !userForm.phone.trim()) return;
                 try {
                     const secondaryAuth = getSecondaryAuth();
-                    const credential = await fbase.createUserWithEmailAndPassword(secondaryAuth, staffForm.email.trim(), staffForm.p);
-                    const newOp = {
+                    const credential = await fbase.createUserWithEmailAndPassword(secondaryAuth, userForm.email.trim(), userForm.p);
+                    const now = Date.now();
+                    const newUser = {
                         uid: credential.user.uid,
                         email: credential.user.email,
-                        name: staffForm.n.trim(),
-                        role: 'operador',
+                        name: userForm.n.trim(),
+                        phone: userForm.phone.trim(),
+                        role: 'usuario',
                         active: true,
-                        createdAt: Date.now(),
-                        updatedAt: Date.now()
+                        accountStatus: 'Activo',
+                        createdAt: now,
+                        updatedAt: now
                     };
-                    await saveDoc('operators', credential.user.uid, newOp);
+                    await saveDoc(STAFF_USERS_COLLECTION, credential.user.uid, newUser);
                     await fbase.signOut(secondaryAuth).catch(() => {});
-                    setStaffForm({ email: '', p: '', n: '' });
-                    setShowStaffModal(false);
-                    alert('Conductor creado correctamente con Firebase Auth.');
+                    setUserForm({ email: '', p: '', n: '', phone: '' });
+                    setShowUserModal(false);
+                    alert('Usuario creado correctamente con Firebase Auth.');
                 } catch(err) {
-                    console.error('Crear conductor Firebase Auth:', err);
-                    alert('No se pudo crear el conductor. Revisa que el correo sea válido y que la contraseña tenga mínimo 6 caracteres.');
+                    console.error('Crear usuario Firebase Auth:', err);
+                    alert('No se pudo crear el usuario. Revisa que el correo sea válido y que la contraseña tenga mínimo 6 caracteres.');
                 }
             };
 
@@ -871,7 +876,7 @@
                                 </div>
                             ))}
                         </div>
-                        <p className="text-[9px] font-bold text-slate-300 uppercase text-center">La información se actualiza cuando el conductor cambia el estado del envío.</p>
+                        <p className="text-[9px] font-bold text-slate-300 uppercase text-center">La información se actualiza cuando el usuario cambia el estado del envío.</p>
                     </div>
                 );
             };
@@ -1006,7 +1011,7 @@
                                             <div className="text-center">
                                                 <p className="text-[10px] text-red-500 font-black uppercase tracking-widest">Consultar número de guía</p>
                                                 <h2 className="text-2xl font-black tracking-tight">Rastrea tu envío</h2>
-                                                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">Origen, destino y estado actualizado por el conductor</p>
+                                                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">Origen, destino y estado actualizado por el usuario</p>
                                             </div>
                                             <div className="bg-slate-50 p-2 rounded-2xl border-2 border-slate-100 flex gap-2">
                                                 <input className="flex-grow bg-transparent px-4 text-sm font-bold uppercase outline-none" placeholder="INGRESA TU NÚMERO DE GUÍA" value={guideQuery} onChange={e => runGuideSearch(e.target.value, false)} />
@@ -1243,7 +1248,6 @@
                                 <div className="flex justify-between items-start gap-4">
                                     <div><h1 className="text-3xl font-black">Panel <span className="text-red-500">Admin</span></h1><p className="text-[10px] font-bold text-slate-400 uppercase">Gestión Central</p></div>
                                     <div className="flex items-start gap-3 relative">
-                                        <button onClick={() => setShowStaffModal(true)} className="btn-primary">Registrar Conductor</button>
                                         <button type="button" onClick={() => setShowAdminMenu(!showAdminMenu)} className="w-12 h-12 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-600 hover:text-red-500 shadow-sm"><Icons.Menu /></button>
                                         {showAdminMenu && (
                                             <div className="absolute right-0 top-14 w-56 bg-white border border-slate-100 rounded-2xl shadow-xl p-2 z-50 animate-slide">
@@ -1262,8 +1266,8 @@
                                             <input required className="input-field uppercase" placeholder="ORIGEN" value={pkgForm.o} onChange={e => setPkgForm({...pkgForm, o: e.target.value})} />
                                             <input required className="input-field uppercase" placeholder="DESTINO" value={pkgForm.d} onChange={e => setPkgForm({...pkgForm, d: e.target.value})} />
                                             <select required className="input-field" value={pkgForm.op} onChange={e => setPkgForm({...pkgForm, op: e.target.value})}>
-                                                <option value="">ASIGNAR CONDUCTOR</option>
-                                                {ops.filter(o => o.role === 'operador' && o.active !== false).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                                                <option value="">ASIGNAR USUARIO</option>
+                                                {users.filter(o => o.role !== 'admin' && o.active !== false).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                                             </select>
                                             <button type="submit" className="w-full btn-primary h-12">Crear Guía</button>
                                         </form>
@@ -1484,25 +1488,28 @@
                                         <div className="card-glass overflow-hidden">
                                             <div className="bg-slate-50 border-b border-slate-100 px-6 py-4 flex items-center justify-between gap-3">
                                                 <div>
-                                                    <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Conductores Registrados</h2>
-                                                    <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Registro y control de accesos para rutas</p>
+                                                    <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Usuarios Registrados</h2>
+                                                    <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Registro y control de accesos de usuarios</p>
                                                 </div>
-                                                <button onClick={() => setShowStaffModal(true)} className="px-3 py-2 bg-red-50 text-red-600 rounded-xl text-[8px] font-black uppercase">Registrar Conductor</button>
                                             </div>
                                             <table className="w-full text-left">
                                                 <thead className="bg-white border-b border-slate-50">
                                                     <tr className="text-[8px] font-black uppercase text-slate-400">
                                                         <th className="px-6 py-3">Nombre</th>
                                                         <th className="px-6 py-3">Correo electrónico</th>
+                                                        <th className="px-6 py-3">Teléfono</th>
+                                                        <th className="px-6 py-3">Estado</th>
                                                         <th className="px-6 py-3 text-right">Acción</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-slate-50">
-                                                    {ops.filter(o => o.role === 'operador').map(o => (
+                                                    {users.filter(o => o.role !== 'admin').map(o => (
                                                         <tr key={o.id} className="text-[10px] font-bold text-slate-600">
                                                             <td className="px-6 py-4">{o.name}</td>
                                                             <td className="px-6 py-4 font-mono text-slate-400">{o.email}</td>
-                                                            <td className="px-6 py-4 text-right"><button onClick={() => deleteOp(o.id)} className="text-slate-300 hover:text-red-500"><Icons.Trash /></button></td>
+                                                            <td className="px-6 py-4 font-mono text-slate-400">{o.phone || '-'}</td>
+                                                            <td className="px-6 py-4"><span className={`px-2 py-1 rounded-full text-[8px] uppercase ${o.active !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400'}`}>{o.accountStatus || (o.active !== false ? 'Activo' : 'Inactivo')}</span></td>
+                                                            <td className="px-6 py-4 text-right"><button onClick={() => deleteUser(o.id)} className="text-slate-300 hover:text-red-500"><Icons.Trash /></button></td>
                                                         </tr>
                                                     ))}
                                                 </tbody>
@@ -1644,22 +1651,24 @@
                                         <input required className="input-field" placeholder="CORREO ELECTRÓNICO" type="email" value={loginForm.email} onChange={e => setLoginForm({...loginForm, email: e.target.value})} />
                                         <input required type="password" className="input-field" placeholder="CONTRASEÑA" value={loginForm.p} onChange={e => setLoginForm({...loginForm, p: e.target.value})} />
                                         <button type="submit" className="w-full btn-primary h-12">Entrar</button>
+                                        <button type="button" onClick={() => setShowUserModal(true)} className="w-full btn-primary h-12">Registrar Usuario</button>
                                     </form>
                                 </div>
                             </div>
                         )}
                     </main>
 
-                    {showStaffModal && (
+                    {showUserModal && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
                             <div className="card-glass max-w-sm w-full p-10 animate-slide">
-                                <h2 className="text-sm font-black text-center uppercase mb-8">Nuevo Conductor</h2>
-                                <form onSubmit={registerDriver} className="space-y-4">
-                                    <input required className="input-field" placeholder="NOMBRE COMPLETO" value={staffForm.n} onChange={e => setStaffForm({...staffForm, n: e.target.value})} />
-                                    <input required type="email" className="input-field" placeholder="CORREO ELECTRÓNICO" value={staffForm.email} onChange={e => setStaffForm({...staffForm, email: e.target.value})} />
-                                    <input required type="password" minLength="6" className="input-field" placeholder="CONTRASEÑA" value={staffForm.p} onChange={e => setStaffForm({...staffForm, p: e.target.value})} />
-                                    <button type="submit" className="w-full btn-primary h-12">Guardar Conductor</button>
-                                    <button type="button" onClick={() => { setStaffForm({ email: '', p: '', n: '' }); setShowStaffModal(false); }} className="w-full text-[9px] font-black text-slate-400 uppercase">Cancelar</button>
+                                <h2 className="text-sm font-black text-center uppercase mb-8">Nuevo Usuario</h2>
+                                <form onSubmit={registerUser} className="space-y-4">
+                                    <input required className="input-field" placeholder="NOMBRE COMPLETO" value={userForm.n} onChange={e => setUserForm({...userForm, n: e.target.value})} />
+                                    <input required type="email" className="input-field" placeholder="CORREO ELECTRÓNICO" value={userForm.email} onChange={e => setUserForm({...userForm, email: e.target.value})} />
+                                    <input required type="tel" className="input-field" placeholder="NÚMERO DE TELÉFONO" value={userForm.phone} onChange={e => setUserForm({...userForm, phone: e.target.value})} />
+                                    <input required type="password" minLength="6" className="input-field" placeholder="CONTRASEÑA" value={userForm.p} onChange={e => setUserForm({...userForm, p: e.target.value})} />
+                                    <button type="submit" className="w-full btn-primary h-12">Guardar Usuario</button>
+                                    <button type="button" onClick={() => { setUserForm({ email: '', p: '', n: '', phone: '' }); setShowUserModal(false); }} className="w-full text-[9px] font-black text-slate-400 uppercase">Cancelar</button>
                                 </form>
                             </div>
                         </div>
@@ -1672,6 +1681,7 @@
     </script>
 </body>
 </html>
+
 
 
 
