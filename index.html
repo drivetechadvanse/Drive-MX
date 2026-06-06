@@ -107,6 +107,11 @@
             const [supportInput, setSupportInput] = useState('');
             const [activeSupportChatId, setActiveSupportChatId] = useState('');
             const [showAdminMenu, setShowAdminMenu] = useState(false);
+            const [showUserMenu, setShowUserMenu] = useState(false);
+            const [assignmentsUnlocked, setAssignmentsUnlocked] = useState(false);
+            const [assignmentAccessModal, setAssignmentAccessModal] = useState({ open: false, password: '', error: '', loading: false });
+            const [masterPasswordForm, setMasterPasswordForm] = useState({ password: '' });
+            const [masterPasswordSaving, setMasterPasswordSaving] = useState(false);
 
             useEffect(() => {
                 const app = fbase.initializeApp(window.firebaseConfig);
@@ -386,6 +391,10 @@
                 setSelectedProductId(null);
                 setCurrentImageIndex(0);
                 setSelectedPaymentMethod('paypal');
+                setShowUserMenu(false);
+                setShowAdminMenu(false);
+                setAssignmentsUnlocked(false);
+                setAssignmentAccessModal({ open: false, password: '', error: '', loading: false });
                 resetDeliveryForm();
                 setOrderSending(false);
             };
@@ -509,7 +518,10 @@
                     }
                     setSessionUser(profile);
                     setLoginForm({ email: '', p: '' });
-                    setView(profile.role === 'admin' ? 'admin' : 'operator');
+                    setAssignmentsUnlocked(false);
+                    setShowUserMenu(false);
+                    setShowAdminMenu(false);
+                    setView(profile.role === 'admin' ? 'admin' : 'home');
                 } catch(err) {
                     console.error('Login Firebase Auth:', err);
                     setLoginForm(prev => ({ ...prev, p: '' }));
@@ -523,6 +535,10 @@
                 setLoginForm({ email: '', p: '' });
                 setUserForm({ email: '', p: '', n: '', phone: '' });
                 setShowUserModal(false);
+                setShowUserMenu(false);
+                setShowAdminMenu(false);
+                setAssignmentsUnlocked(false);
+                setAssignmentAccessModal({ open: false, password: '', error: '', loading: false });
                 resetPublicFlow();
                 try {
                     await fbase.signOut(auth);
@@ -924,6 +940,88 @@
                 setView('admin-tracking');
             };
 
+            const hashMasterPassword = async (password) => {
+                const normalized = String(password || '').trim();
+                if (!normalized) return '';
+                if (!window.crypto?.subtle || !window.TextEncoder) {
+                    throw new Error('Este navegador no permite validar la contraseña de forma segura. Usa HTTPS o un navegador actualizado.');
+                }
+                const data = new TextEncoder().encode(normalized);
+                const hash = await window.crypto.subtle.digest('SHA-256', data);
+                return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+            };
+
+            const getAssignmentsAccessConfig = async () => {
+                const db = fbase.getFirestore();
+                const ref = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'assignment_access', 'config');
+                const snap = await fbase.getDoc(ref);
+                return snap.exists() ? snap.data() : null;
+            };
+
+            const saveAssignmentsMasterPassword = async (e) => {
+                e.preventDefault();
+                if (sessionUser?.role !== 'admin') return;
+                const password = masterPasswordForm.password.trim();
+                if (password.length < 4) {
+                    alert('La contraseña maestra debe tener al menos 4 caracteres.');
+                    return;
+                }
+                setMasterPasswordSaving(true);
+                try {
+                    const passwordHash = await hashMasterPassword(password);
+                    const db = fbase.getFirestore();
+                    await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'assignment_access', 'config'), {
+                        passwordHash,
+                        updatedAt: Date.now(),
+                        updatedBy: sessionUser?.email || ADMIN_EMAIL
+                    });
+                    setMasterPasswordForm({ password: '' });
+                    alert('Contraseña maestra de asignaciones guardada correctamente.');
+                } catch(err) {
+                    console.error('Contraseña maestra:', err);
+                    alert(err.message || 'No se pudo guardar la contraseña maestra.');
+                } finally {
+                    setMasterPasswordSaving(false);
+                }
+            };
+
+            const openAssignmentsAccess = () => {
+                setShowUserMenu(false);
+                setShowAdminMenu(false);
+                setAssignmentsUnlocked(false);
+                setAssignmentAccessModal({ open: true, password: '', error: '', loading: false });
+            };
+
+            const validateAssignmentsAccess = async (e) => {
+                e.preventDefault();
+                const password = assignmentAccessModal.password.trim();
+                if (!password) {
+                    setAssignmentAccessModal(prev => ({ ...prev, error: 'Ingresa la contraseña maestra para continuar.' }));
+                    return;
+                }
+                setAssignmentAccessModal(prev => ({ ...prev, loading: true, error: '' }));
+                try {
+                    const config = await getAssignmentsAccessConfig();
+                    if (!config?.passwordHash) {
+                        setAssignmentAccessModal(prev => ({ ...prev, loading: false, error: 'Acceso denegado. El administrador central aún no configuró la contraseña maestra.' }));
+                        return;
+                    }
+                    const inputHash = await hashMasterPassword(password);
+                    if (inputHash !== config.passwordHash) {
+                        setAssignmentsUnlocked(false);
+                        setAssignmentAccessModal(prev => ({ ...prev, password: '', loading: false, error: 'Acceso denegado. Contraseña incorrecta.' }));
+                        return;
+                    }
+                    setAssignmentsUnlocked(true);
+                    setAssignmentAccessModal({ open: false, password: '', error: '', loading: false });
+                    setView('operator');
+                } catch(err) {
+                    console.error('Validar asignaciones:', err);
+                    setAssignmentsUnlocked(false);
+                    setAssignmentAccessModal(prev => ({ ...prev, loading: false, error: err.message || 'Acceso denegado. No se pudo validar la contraseña.' }));
+                }
+            };
+
             const sendSupportMessage = async (role = 'user') => {
                 const text = supportInput.trim();
                 if (!text) return;
@@ -980,6 +1078,19 @@
                         </div>
                         {sessionUser ? (
                             <div className="flex items-center gap-4">
+                                <div className="relative">
+                                    <button type="button" onClick={() => setShowUserMenu(!showUserMenu)} className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-600 hover:text-red-500 hover:bg-red-50" aria-label="Abrir menú de usuario">
+                                        <Icons.Menu />
+                                    </button>
+                                    {showUserMenu && (
+                                        <div className="absolute right-0 top-12 w-56 bg-white border border-slate-100 rounded-2xl shadow-xl p-2 z-50 animate-slide">
+                                            <button type="button" onClick={openAssignmentsAccess} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Mis Asignaciones</button>
+                                            {sessionUser.role === 'admin' && (
+                                                <button type="button" onClick={() => { setShowUserMenu(false); setView('admin'); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Panel Admin</button>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
                                 <div className="text-right hidden sm:block">
                                     <p className="text-[10px] font-bold leading-none">{sessionUser.name}</p>
                                     <p className="text-[8px] font-black text-red-500 uppercase">{sessionUser.role}</p>
@@ -1339,6 +1450,20 @@
 
                                         <div className="card-glass overflow-hidden">
                                             <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
+                                                <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Contraseña Maestra de Asignaciones</h2>
+                                                <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Protege la opción Mis Asignaciones del menú hamburguesa</p>
+                                            </div>
+                                            <form onSubmit={saveAssignmentsMasterPassword} className="p-6 grid md:grid-cols-[1fr_auto] gap-3 items-end">
+                                                <div>
+                                                    <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Nueva contraseña maestra</label>
+                                                    <input required type="password" minLength="4" autoComplete="new-password" className="input-field" placeholder="Contraseña maestra" value={masterPasswordForm.password} onChange={e => setMasterPasswordForm({ password: e.target.value })} />
+                                                </div>
+                                                <button disabled={masterPasswordSaving} type="submit" className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{masterPasswordSaving ? 'Guardando...' : 'Guardar Contraseña'}</button>
+                                            </form>
+                                        </div>
+
+                                        <div className="card-glass overflow-hidden">
+                                            <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
                                                 <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Transferencias Pendientes</h2>
                                                 <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Las solicitudes pendientes no envían correo ni se procesan hasta marcar Pagado</p>
                                             </div>
@@ -1625,7 +1750,20 @@
                             </div>
                         )}
 
-                        {view === 'operator' && (
+                        {view === 'operator' && !assignmentsUnlocked && (
+                            <div className="w-full max-w-md py-20 animate-slide">
+                                <div className="card-glass p-10 text-center space-y-5">
+                                    <div>
+                                        <p className="text-[10px] text-red-500 font-black uppercase tracking-widest">Acceso protegido</p>
+                                        <h1 className="text-2xl font-black uppercase tracking-tight">Mis Asignaciones</h1>
+                                        <p className="text-[10px] font-bold text-slate-400 uppercase mt-2">La información permanece protegida hasta validar la contraseña maestra.</p>
+                                    </div>
+                                    <button type="button" onClick={openAssignmentsAccess} className="w-full btn-primary h-12">Validar Contraseña</button>
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'operator' && assignmentsUnlocked && (
                             <div className="w-full max-w-xl space-y-8 animate-slide">
                                 <div><h1 className="text-3xl font-black uppercase tracking-tight">Mis <span className="text-red-500">Asignaciones</span></h1><p className="text-[10px] font-bold text-slate-400 uppercase">Ruta Activa</p></div>
                                 <div className="space-y-4">
@@ -1673,6 +1811,23 @@
                             </div>
                         </div>
                     )}
+
+                    {assignmentAccessModal.open && (
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
+                            <div className="card-glass max-w-sm w-full p-10 animate-slide">
+                                <h2 className="text-sm font-black text-center uppercase mb-2">Mis Asignaciones</h2>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase text-center mb-8">Ingresa la contraseña maestra definida por el administrador central.</p>
+                                <form onSubmit={validateAssignmentsAccess} className="space-y-4">
+                                    <input required type="password" autoComplete="current-password" className="input-field" placeholder="CONTRASEÑA MAESTRA" value={assignmentAccessModal.password} onChange={e => setAssignmentAccessModal(prev => ({ ...prev, password: e.target.value, error: '' }))} />
+                                    {assignmentAccessModal.error && (
+                                        <div className="rounded-xl bg-red-50 border border-red-100 px-4 py-3 text-[10px] font-black uppercase text-red-600 text-center">{assignmentAccessModal.error}</div>
+                                    )}
+                                    <button disabled={assignmentAccessModal.loading} type="submit" className="w-full btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{assignmentAccessModal.loading ? 'Validando...' : 'Entrar a Mis Asignaciones'}</button>
+                                    <button type="button" onClick={() => setAssignmentAccessModal({ open: false, password: '', error: '', loading: false })} className="w-full text-[9px] font-black text-slate-400 uppercase">Cancelar</button>
+                                </form>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         };
@@ -1681,6 +1836,8 @@
     </script>
 </body>
 </html>
+
+
 
 
 
