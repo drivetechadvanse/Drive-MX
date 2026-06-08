@@ -562,6 +562,7 @@
                         ownerName: sessionUser?.name || '',
                         ownerEmail: sessionUser?.email || '',
                         ownerPhone: sessionUser?.phone || '',
+                        saleNotificationEmail: notificationEmail,
                         sellerNotificationEmail: notificationEmail,
                         publicationType: 'usuario',
                         updatedAt: Date.now(),
@@ -879,6 +880,18 @@
                 setSaleNotificationSaving(true);
                 try {
                     await saveDoc(STAFF_USERS_COLLECTION, userId, next);
+                    const ownedProducts = products.filter(product => normalizeOwnerValue(getProductOwnerId(product)) === normalizeOwnerValue(userId));
+                    for (const product of ownedProducts) {
+                        const updatedProduct = {
+                            ...product,
+                            saleNotificationEmail: email,
+                            sellerNotificationEmail: email,
+                            updatedAt: Date.now(),
+                            updatedBy: sessionUser?.email || ''
+                        };
+                        await saveDoc('products', product.id, updatedProduct);
+                        await saveUserProductMirror(updatedProduct);
+                    }
                     setSessionUser(prev => ({ ...(prev || {}), saleNotificationEmail: email, updatedAt: next.updatedAt }));
                     alert('Correo para notificaciones de venta guardado correctamente.');
                 } catch(err) {
@@ -951,13 +964,20 @@
                 const payloadProduct = payload.product || {};
                 const sourceProduct = products.find(product => String(product.id) === String(payloadProduct.id)) || payloadProduct;
                 const seller = getSellerInfoForProduct(sourceProduct);
-                const notificationEmail = String(seller.saleNotificationEmail || '').trim();
+                const notificationEmail = String(
+                    seller.saleNotificationEmail ||
+                    payloadProduct.sellerNotificationEmail ||
+                    payloadProduct.saleNotificationEmail ||
+                    payloadProduct.notificationEmail ||
+                    ''
+                ).trim();
                 const enrichedProduct = {
                     ...payloadProduct,
                     ownerId: seller.id || payloadProduct.ownerId || '',
                     ownerName: seller.name || payloadProduct.ownerName || '',
                     ownerEmail: seller.email || payloadProduct.ownerEmail || '',
                     ownerPhone: seller.phone || payloadProduct.ownerPhone || '',
+                    saleNotificationEmail: notificationEmail || payloadProduct.saleNotificationEmail || '',
                     sellerNotificationEmail: notificationEmail || payloadProduct.sellerNotificationEmail || ''
                 };
                 if (!notificationEmail) return { ...payload, product: enrichedProduct };
@@ -1013,6 +1033,7 @@
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok || !data.success) throw new Error(data.error || 'No se pudo enviar el correo.');
+                if (data.saleNotificationError) console.warn('Notificación de venta:', data.saleNotificationError);
                 return data;
             };
 
@@ -1399,7 +1420,7 @@
             };
 
 
-                const UserProductsPanel = () => (
+                const renderUserProductsPanel = () => (
                 <>
                     <div className="card-glass overflow-hidden">
                         <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
@@ -2229,7 +2250,7 @@
                                     </div>
                                 </div>
 
-                                <UserProductsPanel />
+                                {renderUserProductsPanel()}
 
                                 {assignmentsUnlocked ? (
                                     <>
@@ -2314,6 +2335,7 @@
     </script>
 </body>
 </html>
+
 
 
 
