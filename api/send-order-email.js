@@ -1,5 +1,8 @@
 const nodemailer = require("nodemailer");
 
+const SALE_NOTIFICATION_MESSAGE =
+  "Tu producto ha sido vendido. Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.";
+
 function clean(value) {
   return String(value ?? "").trim();
 }
@@ -13,6 +16,10 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(value));
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -24,7 +31,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const { mailSettings = {}, product = {}, delivery = {} } = req.body || {};
+    const { mailSettings = {}, product = {}, delivery = {}, saleNotification = {} } = req.body || {};
 
     const senderEmail = clean(mailSettings.senderEmail);
     const appPassword = clean(mailSettings.appPassword);
@@ -99,7 +106,44 @@ module.exports = async function handler(req, res) {
       replyTo: clean(delivery.email),
     });
 
-    return res.status(200).json({ success: true });
+    let saleNotificationSent = false;
+    let saleNotificationError = "";
+    const saleNotificationEmail = clean(
+      saleNotification.to ||
+      product.sellerNotificationEmail ||
+      product.saleNotificationEmail ||
+      product.notificationEmail ||
+      product.ownerNotificationEmail
+    );
+
+    if (saleNotificationEmail) {
+      if (!isValidEmail(saleNotificationEmail)) {
+        saleNotificationError = "El correo de notificación de venta no es válido.";
+      } else {
+        const saleMessage = clean(saleNotification.message) || SALE_NOTIFICATION_MESSAGE;
+        const saleHtml = `
+          <div style="font-family: Arial, sans-serif; color:#111827;">
+            <p>${escapeHtml(saleMessage)}</p>
+          </div>
+        `;
+
+        try {
+          await transporter.sendMail({
+            from: `"Drive MX" <${senderEmail}>`,
+            to: saleNotificationEmail,
+            subject: "Tu producto ha sido vendido - Drive MX",
+            text: saleMessage,
+            html: saleHtml,
+          });
+          saleNotificationSent = true;
+        } catch (saleError) {
+          console.error("Error enviando notificación de venta:", saleError);
+          saleNotificationError = saleError.message || "No se pudo enviar la notificación de venta.";
+        }
+      }
+    }
+
+    return res.status(200).json({ success: true, saleNotificationSent, saleNotificationError });
   } catch (error) {
     console.error("Error enviando correo:", error);
     return res.status(500).json({
@@ -108,5 +152,4 @@ module.exports = async function handler(req, res) {
     });
   }
 };
-
 
