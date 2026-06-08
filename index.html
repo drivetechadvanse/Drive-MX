@@ -61,7 +61,13 @@
         const appId = window.firebaseConfig.projectId;
         const ADMIN_EMAIL = 'admin@drivemx.com';
         const STAFF_USERS_COLLECTION = 'operators';
+        const PUBLIC_PRODUCTS_COLLECTION = 'products';
+        const ADMIN_PRODUCTS_COLLECTION = 'admin_products';
+        const USER_PRODUCTS_COLLECTION = 'user_products';
+        const PRODUCT_ORIGIN_CONTROL = 'panel_control';
+        const PRODUCT_ORIGIN_USER = 'usuario';
         const STAFF_USERS_LOCAL_KEY = 'driveMxOperators';
+        const ADMIN_PRODUCTS_LOCAL_KEY = 'driveMxAdminProducts';
         const SALE_NOTIFICATION_MESSAGE = 'Tu producto ha sido vendido. Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.';
         const readLocal = (key) => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; } };
         const writeLocal = (key, data) => { try { localStorage.setItem(key, JSON.stringify(data)); } catch(e) {} };
@@ -79,6 +85,8 @@
             const [pkgs, setPkgs] = useState(() => readLocal('driveMxPackages'));
             const [users, setUsers] = useState(() => readLocal(STAFF_USERS_LOCAL_KEY));
             const [products, setProducts] = useState(() => readLocal('driveMxProducts'));
+            const [adminProducts, setAdminProducts] = useState(() => readLocal(ADMIN_PRODUCTS_LOCAL_KEY));
+            const [userPanelProducts, setUserPanelProducts] = useState([]);
             const [searchQuery, setSearchQuery] = useState('');
             const [trackingResult, setTrackingResult] = useState(null);
             const [trackingNotFound, setTrackingNotFound] = useState(false);
@@ -149,7 +157,8 @@
                 const db = fbase.getFirestore();
                 const pkgCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'packages');
                 const userCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION);
-                const productCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'products');
+                const productCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', PUBLIC_PRODUCTS_COLLECTION);
+                const adminProductCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', ADMIN_PRODUCTS_COLLECTION);
                 const transferCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'bank_transfers');
                 const completedSalesCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'completed_sales');
                 const supportCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'support_chats');
@@ -172,7 +181,14 @@
                     const l = []; s.forEach(d => l.push(d.data()));
                     setProducts(l);
                     writeLocal('driveMxProducts', l);
-                }, (err) => { console.error('Firestore productos:', err); });
+                }, (err) => { console.error('Firestore productos públicos:', err); });
+
+                const unsubAdminProducts = fbase.onSnapshot(adminProductCol, (s) => {
+                    const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
+                    l.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
+                    setAdminProducts(l);
+                    writeLocal(ADMIN_PRODUCTS_LOCAL_KEY, l);
+                }, (err) => { console.error('Firestore productos Panel de Control:', err); });
 
                 const unsubTransfers = fbase.onSnapshot(transferCol, (s) => {
                     const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
@@ -219,8 +235,31 @@
                     try { localStorage.setItem('driveMxPaymentSettings', JSON.stringify(next)); } catch(e) {}
                 }, (err) => { console.error('Firestore configuración pagos:', err); });
 
-                return () => { unsubPkgs(); unsubUsers(); unsubProducts(); unsubTransfers(); unsubCompletedSales(); unsubSupportChats(); unsubMailSettings(); unsubPaymentSettings(); };
+                return () => { unsubPkgs(); unsubUsers(); unsubProducts(); unsubAdminProducts(); unsubTransfers(); unsubCompletedSales(); unsubSupportChats(); unsubMailSettings(); unsubPaymentSettings(); };
             }, [fbUser]);
+
+            useEffect(() => {
+                if (!fbUser || !sessionUser || sessionUser.role === 'admin') {
+                    setUserPanelProducts([]);
+                    return;
+                }
+                const userDocId = String(sessionUser.uid || sessionUser.id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+                if (!userDocId) {
+                    setUserPanelProducts([]);
+                    return;
+                }
+                const localKey = `driveMxUserProducts_${userDocId}`;
+                setUserPanelProducts(readLocal(localKey));
+                const db = fbase.getFirestore();
+                const userProductCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', USER_PRODUCTS_COLLECTION, userDocId, 'items');
+                const unsubUserProducts = fbase.onSnapshot(userProductCol, (s) => {
+                    const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
+                    l.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
+                    setUserPanelProducts(l);
+                    writeLocal(localKey, l);
+                }, (err) => { console.error('Firestore productos Panel de Usuario:', err); });
+                return () => unsubUserProducts();
+            }, [fbUser, sessionUser?.uid, sessionUser?.id, sessionUser?.role]);
 
             const saveDoc = async (col, id, data) => {
                 if (col === 'packages') {
@@ -229,8 +268,11 @@
                 if (col === STAFF_USERS_COLLECTION) {
                     setUsers(prev => { const next = [...prev.filter(x => x.id !== id), { id, ...data }]; writeLocal(STAFF_USERS_LOCAL_KEY, next); return next; });
                 }
-                if (col === 'products') {
+                if (col === PUBLIC_PRODUCTS_COLLECTION) {
                     setProducts(prev => { const next = [...prev.filter(x => x.id !== id), data]; writeLocal('driveMxProducts', next); return next; });
+                }
+                if (col === ADMIN_PRODUCTS_COLLECTION) {
+                    setAdminProducts(prev => { const next = [...prev.filter(x => x.id !== id), { id, ...data }].sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0)); writeLocal(ADMIN_PRODUCTS_LOCAL_KEY, next); return next; });
                 }
                 if (col === 'bank_transfers') {
                     setPendingTransfers(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)]; writeLocal('driveMxPendingTransfers', next); return next; });
@@ -268,7 +310,25 @@
             const getSessionUserId = () => sessionUser?.uid || sessionUser?.id || '';
             const normalizeOwnerValue = (value) => String(value || '').trim();
             const getProductOwnerId = (product = {}) => product.ownerId || product.sellerId || product.userId || product.createdByUid || '';
-            const isProductOwnedBySessionUser = (product = {}) => normalizeOwnerValue(getProductOwnerId(product)) === normalizeOwnerValue(getSessionUserId());
+            const getProductPublicationType = (product = {}) => String(product.publicationType || product.productOrigin || product.sourcePanel || product.createdFromPanel || '').toLowerCase().trim();
+            const isUserPanelPublication = (product = {}) => {
+                const type = getProductPublicationType(product);
+                return type === PRODUCT_ORIGIN_USER || type === 'user' || type === 'panel_usuario' || type === 'panel-usuario' || type === 'panel de usuario' || Boolean(getProductOwnerId(product));
+            };
+            const isControlPanelProduct = (product = {}) => {
+                const type = getProductPublicationType(product);
+                if (isUserPanelPublication(product)) return false;
+                return type === PRODUCT_ORIGIN_CONTROL || type === 'control' || type === 'admin' || type === 'panel de control' || !type;
+            };
+            const isProductOwnedBySessionUser = (product = {}) => isUserPanelPublication(product) && normalizeOwnerValue(getProductOwnerId(product)) === normalizeOwnerValue(getSessionUserId());
+            const getSessionOwnedProductsList = () => {
+                const byId = new Map();
+                userPanelProducts.forEach(product => {
+                    if (!product?.id) return;
+                    if (!getProductOwnerId(product) || isProductOwnedBySessionUser(product)) byId.set(String(product.id), product);
+                });
+                return Array.from(byId.values());
+            };
 
             const getSellerInfoForProduct = (product = {}) => {
                 const ownerId = normalizeOwnerValue(getProductOwnerId(product));
@@ -290,18 +350,22 @@
             const saveUserProductMirror = async (product) => {
                 const userDocId = getSafeSessionUserId();
                 if (!userDocId || !product?.id) return;
+                const localKey = `driveMxUserProducts_${userDocId}`;
+                setUserPanelProducts(prev => { const next = [...prev.filter(x => x.id !== product.id), product].sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0)); writeLocal(localKey, next); return next; });
                 try {
                     const db = fbase.getFirestore();
-                    await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'user_products', userDocId, 'items', product.id), product);
+                    await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_PRODUCTS_COLLECTION, userDocId, 'items', product.id), product);
                 } catch(err) { console.error('Firestore espejo producto usuario:', err); }
             };
 
             const deleteUserProductMirror = async (productId) => {
                 const userDocId = getSafeSessionUserId();
                 if (!userDocId || !productId) return;
+                const localKey = `driveMxUserProducts_${userDocId}`;
+                setUserPanelProducts(prev => { const next = prev.filter(x => x.id !== productId); writeLocal(localKey, next); return next; });
                 try {
                     const db = fbase.getFirestore();
-                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'user_products', userDocId, 'items', productId));
+                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_PRODUCTS_COLLECTION, userDocId, 'items', productId));
                 } catch(err) { console.error('Firestore borrar espejo producto usuario:', err); }
             };
 
@@ -366,8 +430,9 @@
                     return;
                 }
                 const id = editingProductId || productForm.id;
-                if (!id) {
-                    alert('Guarda primero el producto para poder reemplazar fotografías existentes.');
+                const existing = controlProducts.find(p => p.id === id);
+                if (!id || (editingProductId && !existing)) {
+                    alert('Guarda primero el producto del Panel de Control para poder reemplazar fotografías existentes.');
                     return;
                 }
                 setProductUploading(true);
@@ -399,7 +464,7 @@
                 const id = editingProductId || productForm.id || `prod_${Date.now()}`;
                 setProductUploading(true);
                 try {
-                    const existing = products.find(p => p.id === id);
+                    const existing = controlProducts.find(p => p.id === id);
                     const oldImages = getProductGallery(existing);
                     const currentImages = Array.isArray(productForm.images) ? productForm.images.filter(Boolean) : oldImages;
                     const uploadedImages = await uploadPendingProductImages(id);
@@ -417,10 +482,21 @@
                         image: mainImage,
                         imageUrl: mainImage,
                         active: Boolean(productForm.active),
+                        publicationType: PRODUCT_ORIGIN_CONTROL,
+                        sourcePanel: PRODUCT_ORIGIN_CONTROL,
+                        ownerId: '',
+                        ownerName: '',
+                        ownerEmail: '',
+                        ownerPhone: '',
+                        saleNotificationEmail: '',
+                        sellerNotificationEmail: '',
                         updatedAt: Date.now(),
-                        createdAt: existing?.createdAt || Date.now()
+                        updatedBy: sessionUser?.email || ADMIN_EMAIL,
+                        createdAt: existing?.createdAt || Date.now(),
+                        createdBy: existing?.createdBy || sessionUser?.email || ADMIN_EMAIL
                     };
-                    await saveDoc('products', id, product);
+                    await saveDoc(ADMIN_PRODUCTS_COLLECTION, id, product);
+                    await saveDoc(PUBLIC_PRODUCTS_COLLECTION, id, product);
                     resetProductForm();
                 } catch(err) {
                     console.error('Storage producto:', err);
@@ -430,6 +506,10 @@
             };
 
             const editProduct = (product) => {
+                if (!isControlPanelProduct(product)) {
+                    alert('Solo puedes editar publicaciones del Panel de Control.');
+                    return;
+                }
                 const images = getProductGallery(product);
                 setProductForm({
                     id: product.id,
@@ -449,16 +529,21 @@
             };
 
 
-            const toggleProduct = (product) => {
-                saveDoc('products', product.id, { ...product, active: product.active === false, updatedAt: Date.now() });
+            const toggleProduct = async (product) => {
+                if (!isControlPanelProduct(product)) { alert('Solo puedes administrar publicaciones del Panel de Control.'); return; }
+                const next = { ...product, active: product.active === false, publicationType: PRODUCT_ORIGIN_CONTROL, sourcePanel: PRODUCT_ORIGIN_CONTROL, updatedAt: Date.now(), updatedBy: sessionUser?.email || ADMIN_EMAIL };
+                await saveDoc(ADMIN_PRODUCTS_COLLECTION, product.id, next);
+                await saveDoc(PUBLIC_PRODUCTS_COLLECTION, product.id, next);
             };
 
             const deleteProduct = async (id) => {
+                setAdminProducts(prev => { const next = prev.filter(x => x.id !== id); writeLocal(ADMIN_PRODUCTS_LOCAL_KEY, next); return next; });
                 setProducts(prev => { const next = prev.filter(x => x.id !== id); writeLocal('driveMxProducts', next); return next; });
                 try {
                     const db = fbase.getFirestore();
-                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'products', id));
-                } catch(err) { console.error('Firestore borrar producto:', err); }
+                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', ADMIN_PRODUCTS_COLLECTION, id));
+                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', PUBLIC_PRODUCTS_COLLECTION, id));
+                } catch(err) { console.error('Firestore borrar producto Panel de Control:', err); }
             };
 
             const handleUserProductImagesSelect = (e) => {
@@ -498,7 +583,7 @@
                     return;
                 }
                 const id = editingUserProductId || userProductForm.id;
-                const existing = products.find(p => p.id === id);
+                const existing = getSessionOwnedProductsList().find(p => p.id === id);
                 if (!id || !existing || !isProductOwnedBySessionUser(existing)) {
                     alert('Solo puedes reemplazar fotografías de tus propias publicaciones.');
                     return;
@@ -533,7 +618,7 @@
                 if (!ownerId) { alert('Inicia sesión para administrar tus publicaciones.'); return; }
                 const safeOwnerId = getSafeSessionUserId() || `usuario_${Date.now()}`;
                 const id = editingUserProductId || userProductForm.id || `userprod_${safeOwnerId}_${Date.now()}`;
-                const existing = products.find(p => p.id === id);
+                const existing = getSessionOwnedProductsList().find(p => p.id === id);
                 if (editingUserProductId && (!existing || !isProductOwnedBySessionUser(existing))) {
                     alert('Solo puedes editar tus propias publicaciones.');
                     return;
@@ -564,13 +649,14 @@
                         ownerPhone: sessionUser?.phone || '',
                         saleNotificationEmail: notificationEmail,
                         sellerNotificationEmail: notificationEmail,
-                        publicationType: 'usuario',
+                        publicationType: PRODUCT_ORIGIN_USER,
+                        sourcePanel: 'panel_usuario',
                         updatedAt: Date.now(),
                         updatedBy: sessionUser?.email || '',
                         createdAt: existing?.createdAt || Date.now(),
                         createdBy: existing?.createdBy || sessionUser?.email || ''
                     };
-                    await saveDoc('products', id, product);
+                    await saveDoc(PUBLIC_PRODUCTS_COLLECTION, id, product);
                     await saveUserProductMirror(product);
                     resetUserProductForm();
                     alert('Publicación guardada correctamente. Se mostrará en la portada principal si está activa.');
@@ -607,7 +693,7 @@
             const toggleUserProduct = async (product) => {
                 if (!isProductOwnedBySessionUser(product)) { alert('Solo puedes administrar tus propias publicaciones.'); return; }
                 const next = { ...product, active: product.active === false, updatedAt: Date.now(), updatedBy: sessionUser?.email || '' };
-                await saveDoc('products', product.id, next);
+                await saveDoc(PUBLIC_PRODUCTS_COLLECTION, product.id, next);
                 await saveUserProductMirror(next);
             };
 
@@ -617,13 +703,19 @@
                 setProducts(prev => { const next = prev.filter(x => x.id !== product.id); writeLocal('driveMxProducts', next); return next; });
                 try {
                     const db = fbase.getFirestore();
-                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'products', product.id));
+                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', PUBLIC_PRODUCTS_COLLECTION, product.id));
                     await deleteUserProductMirror(product.id);
                 } catch(err) { console.error('Firestore borrar publicación usuario:', err); }
                 if (editingUserProductId === product.id) resetUserProductForm();
             };
 
-            const currentUserProducts = products.filter(isProductOwnedBySessionUser).sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
+            const controlProducts = (() => {
+                const byId = new Map();
+                adminProducts.filter(isControlPanelProduct).forEach(product => byId.set(String(product.id), product));
+                products.filter(isControlPanelProduct).forEach(product => byId.set(String(product.id), product));
+                return Array.from(byId.values()).sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
+            })();
+            const currentUserProducts = getSessionOwnedProductsList().sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
             const activeProducts = products.filter(p => p.active !== false);
             const selectedProduct = products.find(p => p.id === selectedProductId);
             const selectedGallery = getProductGallery(selectedProduct);
@@ -794,6 +886,7 @@
                 setAssignmentsUnlocking(false);
                 setSaleNotificationEmail('');
                 setSaleNotificationSaving(false);
+                setUserPanelProducts([]);
                 resetUserProductForm();
                 resetPublicFlow();
                 try {
@@ -880,7 +973,7 @@
                 setSaleNotificationSaving(true);
                 try {
                     await saveDoc(STAFF_USERS_COLLECTION, userId, next);
-                    const ownedProducts = products.filter(product => normalizeOwnerValue(getProductOwnerId(product)) === normalizeOwnerValue(userId));
+                    const ownedProducts = getSessionOwnedProductsList();
                     for (const product of ownedProducts) {
                         const updatedProduct = {
                             ...product,
@@ -889,7 +982,7 @@
                             updatedAt: Date.now(),
                             updatedBy: sessionUser?.email || ''
                         };
-                        await saveDoc('products', product.id, updatedProduct);
+                        await saveDoc(PUBLIC_PRODUCTS_COLLECTION, product.id, updatedProduct);
                         await saveUserProductMirror(updatedProduct);
                     }
                     setSessionUser(prev => ({ ...(prev || {}), saleNotificationEmail: email, updatedAt: next.updatedAt }));
@@ -1222,9 +1315,9 @@
                 }
 
                 // Buscador independiente del Panel de Control:
-                // busca SOLO productos registrados en la colección/lista de productos.
-                // No consulta envíos, guías, paquetes ni transferencias.
-                const foundProduct = products.find(product => normalizeTrackingCode(product.id) === productId);
+                // busca SOLO publicaciones creadas y administradas desde el Panel de Control.
+                // No consulta publicaciones de usuarios, envíos, guías, paquetes ni transferencias.
+                const foundProduct = controlProducts.find(product => normalizeTrackingCode(product.id) === productId);
                 setTrackingResult(foundProduct || null);
                 setTrackingNotFound(!foundProduct);
                 if (!foundProduct && notify) alert('No se encontró el producto');
@@ -1997,7 +2090,7 @@
                                             <div className="bg-slate-50 border-b border-slate-100 px-6 py-4 flex items-center justify-between gap-3">
                                                 <div>
                                                     <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Administración de Productos</h2>
-                                                    <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Se sincroniza automáticamente con la portada</p>
+                                                    <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Administra únicamente publicaciones creadas desde el Panel de Control</p>
                                                 </div>
                                                 {editingProductId && <button onClick={resetProductForm} className="text-[9px] font-black text-slate-400 uppercase">Cancelar edición</button>}
                                             </div>
@@ -2062,7 +2155,7 @@
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-slate-50">
-                                                        {products.map(product => (
+                                                        {controlProducts.map(product => (
                                                             <tr key={product.id} className="text-[10px] font-bold text-slate-600">
                                                                 <td className="px-6 py-4">
                                                                     <div className="w-12 h-12 rounded-xl bg-slate-100 overflow-hidden">
@@ -2082,7 +2175,7 @@
                                                                 </td>
                                                             </tr>
                                                         ))}
-                                                        {products.length === 0 && (
+                                                        {controlProducts.length === 0 && (
                                                             <tr><td colSpan="6" className="px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase">Aún no hay productos registrados</td></tr>
                                                         )}
                                                     </tbody>
@@ -2335,6 +2428,7 @@
     </script>
 </body>
 </html>
+
 
 
 
