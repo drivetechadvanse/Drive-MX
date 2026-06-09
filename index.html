@@ -54,7 +54,8 @@
             ChevronLeft: ({size=18}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>,
             ChevronRight: ({size=18}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>,
             Menu: ({size=20}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>,
-            Send: ({size=16}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+            Send: ({size=16}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>,
+            Cart: ({size=18}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h8.9a2 2 0 0 0 2-1.6L23 6H6"/></svg>
         };
 
         const STEPS = ['Recolectado', 'Procesando', 'En Camino', 'Entregado'];
@@ -68,6 +69,10 @@
         const PRODUCT_ORIGIN_USER = 'usuario';
         const STAFF_USERS_LOCAL_KEY = 'driveMxOperators';
         const ADMIN_PRODUCTS_LOCAL_KEY = 'driveMxAdminProducts';
+        const VISITOR_CART_LOCAL_KEY = 'driveMxVisitorCart';
+        const VISITOR_CART_MAX_ITEMS = 2;
+        const VISITOR_CART_TTL_MS = 1000 * 60 * 60 * 24;
+        const CART_CHECKOUT_PRODUCT_ID = '__drive_mx_cart_checkout__';
         const SALE_NOTIFICATION_MESSAGE = 'Tu producto ha sido vendido. Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.';
         const readLocal = (key) => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; } };
         const writeLocal = (key, data) => { try { localStorage.setItem(key, JSON.stringify(data)); } catch(e) {} };
@@ -76,6 +81,56 @@
             const gallery = Array.isArray(product?.images) ? product.images.filter(Boolean) : [];
             if (gallery.length > 0) return gallery.slice(0, 5);
             return legacyImage ? [legacyImage] : [];
+        };
+
+        const getProductsTotal = (items = []) => items.reduce((total, item) => total + Number(item?.price || 0), 0);
+
+        const normalizeCartProduct = (product = {}) => {
+            const gallery = getProductGallery(product);
+            return {
+                id: String(product.id || '').trim(),
+                name: String(product.name || '').trim(),
+                price: Number(product.price || 0),
+                stock: product.stock ?? '',
+                image: gallery[0] || product.imageUrl || product.image || '',
+                ownerId: product.ownerId || product.sellerId || '',
+                ownerName: product.ownerName || product.sellerName || '',
+                ownerEmail: product.ownerEmail || product.sellerEmail || '',
+                ownerPhone: product.ownerPhone || product.sellerPhone || '',
+                saleNotificationEmail: product.saleNotificationEmail || product.sellerNotificationEmail || product.notificationEmail || '',
+                sellerNotificationEmail: product.sellerNotificationEmail || product.saleNotificationEmail || product.notificationEmail || ''
+            };
+        };
+
+        const readVisitorCart = () => {
+            try {
+                const raw = localStorage.getItem(VISITOR_CART_LOCAL_KEY);
+                if (!raw) return [];
+                const parsed = JSON.parse(raw);
+                if (parsed?.expiresAt && Number(parsed.expiresAt) < Date.now()) {
+                    localStorage.removeItem(VISITOR_CART_LOCAL_KEY);
+                    return [];
+                }
+                const items = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.items) ? parsed.items : []);
+                return items.map(normalizeCartProduct).filter(item => item.id).slice(0, VISITOR_CART_MAX_ITEMS);
+            } catch(e) {
+                return [];
+            }
+        };
+
+        const writeVisitorCart = (items = []) => {
+            try {
+                const normalized = items.map(normalizeCartProduct).filter(item => item.id).slice(0, VISITOR_CART_MAX_ITEMS);
+                if (normalized.length === 0) {
+                    localStorage.removeItem(VISITOR_CART_LOCAL_KEY);
+                    return;
+                }
+                localStorage.setItem(VISITOR_CART_LOCAL_KEY, JSON.stringify({
+                    items: normalized,
+                    updatedAt: Date.now(),
+                    expiresAt: Date.now() + VISITOR_CART_TTL_MS
+                }));
+            } catch(e) {}
         };
 
         const App = () => {
@@ -102,6 +157,8 @@
             const [editingProductId, setEditingProductId] = useState(null);
             const [selectedProductId, setSelectedProductId] = useState(null);
             const [currentImageIndex, setCurrentImageIndex] = useState(0);
+            const [cartItems, setCartItems] = useState(() => readVisitorCart());
+            const [showCartModal, setShowCartModal] = useState(false);
             const [deliveryForm, setDeliveryForm] = useState({ street: '', state: '', municipality: '', neighborhood: '', zip: '', fullName: '', phone: '', email: '', references: '' });
             const [emailSettings, setEmailSettings] = useState(() => { try { return JSON.parse(localStorage.getItem('driveMxEmailSettings') || '{\"senderEmail\":\"\",\"appPassword\":\"\",\"receiverEmail\":\"\"}'); } catch(e) { return { senderEmail: '', appPassword: '', receiverEmail: '' }; } });
             const [paymentSettings, setPaymentSettings] = useState(() => { try { return JSON.parse(localStorage.getItem('driveMxPaymentSettings') || '{\"bankAccount\":\"\",\"paypalClientId\":\"\",\"paypalClientSecret\":\"\"}'); } catch(e) { return { bankAccount: '', paypalClientId: '', paypalClientSecret: '' }; } });
@@ -144,6 +201,10 @@
                 if (!sessionUser || sessionUser.role === 'admin') return;
                 setSaleNotificationEmail(sessionUser.saleNotificationEmail || sessionUser.email || '');
             }, [sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.saleNotificationEmail, sessionUser?.role]);
+
+            useEffect(() => {
+                writeVisitorCart(cartItems);
+            }, [cartItems]);
 
             useEffect(() => {
                 const app = fbase.initializeApp(window.firebaseConfig);
@@ -720,8 +781,80 @@
             const selectedProduct = products.find(p => p.id === selectedProductId);
             const selectedGallery = getProductGallery(selectedProduct);
             const selectedMainImage = selectedGallery[currentImageIndex] || '';
+            const cartProducts = cartItems.map(item => {
+                const liveProduct = products.find(p => String(p.id) === String(item.id));
+                return normalizeCartProduct(liveProduct ? { ...item, ...liveProduct } : item);
+            }).filter(item => item.id).slice(0, VISITOR_CART_MAX_ITEMS);
+            const isCartCheckout = selectedProductId === CART_CHECKOUT_PRODUCT_ID;
+            const checkoutProducts = isCartCheckout ? cartProducts : (selectedProduct ? [selectedProduct] : []);
+            const checkoutPrimaryProduct = checkoutProducts[0] || null;
+            const checkoutTotal = getProductsTotal(checkoutProducts);
+            const checkoutProductLabel = checkoutProducts.length > 1 ? `${checkoutProducts.length} productos seleccionados` : (checkoutPrimaryProduct?.name || '');
+            const checkoutIdLabel = checkoutProducts.length > 1 ? checkoutProducts.map(p => p.id).filter(Boolean).join(', ') : (checkoutPrimaryProduct?.id || '');
+            const checkoutProductDescription = checkoutProducts.length > 1 ? checkoutProducts.map(p => p.name).filter(Boolean).join(' + ') : (checkoutPrimaryProduct?.name || 'Solicitud Drive MX');
 
-            const resetPublicFlow = () => {
+            const clearVisitorCart = () => {
+                setCartItems([]);
+                try { localStorage.removeItem(VISITOR_CART_LOCAL_KEY); } catch(e) {}
+            };
+
+            const addProductToCart = (product) => {
+                const item = normalizeCartProduct(product);
+                if (!item.id) {
+                    alert('No se pudo agregar el producto al carrito.');
+                    return;
+                }
+                if (cartItems.some(cartItem => String(cartItem.id) === String(item.id))) {
+                    alert('Este producto ya está en el carrito.');
+                    setShowCartModal(true);
+                    return;
+                }
+                if (cartItems.length >= VISITOR_CART_MAX_ITEMS) {
+                    alert('El carrito permite máximo 2 productos por compra.');
+                    setShowCartModal(true);
+                    return;
+                }
+                setCartItems(prev => [...prev, item].slice(0, VISITOR_CART_MAX_ITEMS));
+                setShowCartModal(true);
+            };
+
+            const removeCartItem = (productId) => {
+                setCartItems(prev => prev.filter(item => String(item.id) !== String(productId)));
+            };
+
+            const startSingleCheckout = (product) => {
+                if (!product?.id) {
+                    alert('No se encontró el producto seleccionado.');
+                    return;
+                }
+                setSelectedProductId(product.id);
+                setCurrentImageIndex(0);
+                resetDeliveryForm();
+                setSelectedPaymentMethod('paypal');
+                setShowCartModal(false);
+                setView('delivery-data');
+            };
+
+            const startCartCheckout = () => {
+                if (cartProducts.length === 0) {
+                    alert('Agrega al menos un producto al carrito.');
+                    return;
+                }
+                setCartItems(cartProducts.map(normalizeCartProduct).slice(0, VISITOR_CART_MAX_ITEMS));
+                setSelectedProductId(CART_CHECKOUT_PRODUCT_ID);
+                setCurrentImageIndex(0);
+                resetDeliveryForm();
+                setSelectedPaymentMethod('paypal');
+                setShowCartModal(false);
+                setView('delivery-data');
+            };
+
+            const handleDeliveryBack = () => {
+                resetDeliveryForm();
+                setView(isCartCheckout ? 'home' : 'product-detail');
+            };
+
+            const resetPublicFlow = ({ clearCart = false } = {}) => {
                 setView('home');
                 setSearchQuery('');
                 setTrackingResult(null);
@@ -730,6 +863,8 @@
                 setCurrentImageIndex(0);
                 setSelectedPaymentMethod('paypal');
                 resetDeliveryForm();
+                setShowCartModal(false);
+                if (clearCart) clearVisitorCart();
                 setOrderSending(false);
             };
 
@@ -740,7 +875,7 @@
             };
 
             useEffect(() => {
-                if (view !== 'payment-method' || selectedPaymentMethod !== 'paypal' || !paymentSettings.paypalClientId || !selectedProduct) return;
+                if (view !== 'payment-method' || selectedPaymentMethod !== 'paypal' || !paymentSettings.paypalClientId || checkoutProducts.length === 0) return;
                 if (!emailSettings.senderEmail.trim() || !emailSettings.appPassword.trim() || !emailSettings.receiverEmail.trim()) return;
                 const containerId = 'paypal-buttons-container';
                 const renderPayPalButtons = () => {
@@ -751,10 +886,10 @@
                         style: { layout: 'vertical', shape: 'rect', label: 'paypal' },
                         createOrder: (data, actions) => actions.order.create({
                             purchase_units: [{
-                                description: selectedProduct.name || 'Solicitud Drive MX',
+                                description: checkoutProductDescription || 'Solicitud Drive MX',
                                 amount: {
                                     currency_code: 'MXN',
-                                    value: Number(selectedProduct.price || 0).toFixed(2)
+                                    value: Number(checkoutTotal || 0).toFixed(2)
                                 }
                             }]
                         }),
@@ -771,7 +906,7 @@
                                     paypalOrderId: data.orderID || capture?.id || ''
                                 });
                                 alert('Pago PayPal confirmado. La solicitud fue enviada correctamente.');
-                                resetPublicFlow();
+                                resetPublicFlow({ clearCart: isCartCheckout });
                             } catch(err) {
                                 console.error('Confirmar PayPal:', err);
                                 alert(err.message || 'No se pudo procesar el pago PayPal.');
@@ -812,7 +947,7 @@
                 script.onload = renderPayPalButtons;
                 script.onerror = () => alert('No se pudo cargar PayPal. Revisa el Client ID configurado.');
                 document.body.appendChild(script);
-            }, [view, selectedPaymentMethod, paymentSettings.paypalClientId, selectedProductId, emailSettings.senderEmail, emailSettings.appPassword, emailSettings.receiverEmail]);
+            }, [view, selectedPaymentMethod, paymentSettings.paypalClientId, selectedProductId, cartItems.length, checkoutTotal, checkoutProductDescription, emailSettings.senderEmail, emailSettings.appPassword, emailSettings.receiverEmail]);
 
             const getSecondaryAuth = () => {
                 if (!window.secondaryAuthApp) {
@@ -1022,22 +1157,32 @@
             };
 
             const buildOrderPayload = () => {
-                const seller = getSellerInfoForProduct(selectedProduct || {});
+                const payloadProducts = checkoutProducts.map(product => {
+                    const seller = getSellerInfoForProduct(product || {});
+                    return {
+                        id: product?.id || '',
+                        name: product?.name || '',
+                        price: Number(product?.price || 0),
+                        ownerId: seller.id,
+                        ownerName: seller.name,
+                        ownerEmail: seller.email,
+                        ownerPhone: seller.phone,
+                        sellerNotificationEmail: seller.saleNotificationEmail,
+                        saleNotificationEmail: seller.saleNotificationEmail
+                    };
+                });
+                const primaryProduct = payloadProducts[0] || {};
                 return {
                     mailSettings: {
                         senderEmail: emailSettings.senderEmail.trim(),
                         appPassword: emailSettings.appPassword.trim(),
                         receiverEmail: emailSettings.receiverEmail.trim()
                     },
-                    product: {
-                        id: selectedProduct?.id || '',
-                        name: selectedProduct?.name || '',
-                        price: Number(selectedProduct?.price || 0),
-                        ownerId: seller.id,
-                        ownerName: seller.name,
-                        ownerEmail: seller.email,
-                        ownerPhone: seller.phone,
-                        sellerNotificationEmail: seller.saleNotificationEmail
+                    product: primaryProduct,
+                    products: payloadProducts,
+                    cart: {
+                        count: payloadProducts.length,
+                        total: getProductsTotal(payloadProducts)
                     },
                     delivery: {
                         street: deliveryForm.street.trim(),
@@ -1053,57 +1198,108 @@
                 };
             };
 
+            const getPayloadProducts = (payload = {}) => {
+                const payloadProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
+                return payloadProducts.filter(product => product && (product.id || product.name));
+            };
+
             const appendSaleNotificationToPayload = (payload = {}) => {
-                const payloadProduct = payload.product || {};
-                const sourceProduct = products.find(product => String(product.id) === String(payloadProduct.id)) || payloadProduct;
-                const seller = getSellerInfoForProduct(sourceProduct);
-                const notificationEmail = String(
-                    seller.saleNotificationEmail ||
-                    payloadProduct.sellerNotificationEmail ||
-                    payloadProduct.saleNotificationEmail ||
-                    payloadProduct.notificationEmail ||
-                    ''
-                ).trim();
-                const enrichedProduct = {
-                    ...payloadProduct,
-                    ownerId: seller.id || payloadProduct.ownerId || '',
-                    ownerName: seller.name || payloadProduct.ownerName || '',
-                    ownerEmail: seller.email || payloadProduct.ownerEmail || '',
-                    ownerPhone: seller.phone || payloadProduct.ownerPhone || '',
-                    saleNotificationEmail: notificationEmail || payloadProduct.saleNotificationEmail || '',
-                    sellerNotificationEmail: notificationEmail || payloadProduct.sellerNotificationEmail || ''
-                };
-                if (!notificationEmail) return { ...payload, product: enrichedProduct };
+                const payloadProducts = getPayloadProducts(payload);
+                const enrichedProducts = payloadProducts.map(payloadProduct => {
+                    const sourceProduct = products.find(product => String(product.id) === String(payloadProduct.id)) || payloadProduct;
+                    const seller = getSellerInfoForProduct(sourceProduct);
+                    const notificationEmail = String(
+                        seller.saleNotificationEmail ||
+                        payloadProduct.sellerNotificationEmail ||
+                        payloadProduct.saleNotificationEmail ||
+                        payloadProduct.notificationEmail ||
+                        ''
+                    ).trim();
+                    return {
+                        ...payloadProduct,
+                        id: payloadProduct.id || sourceProduct.id || '',
+                        name: payloadProduct.name || sourceProduct.name || '',
+                        price: Number(payloadProduct.price || sourceProduct.price || 0),
+                        ownerId: seller.id || payloadProduct.ownerId || '',
+                        ownerName: seller.name || payloadProduct.ownerName || '',
+                        ownerEmail: seller.email || payloadProduct.ownerEmail || '',
+                        ownerPhone: seller.phone || payloadProduct.ownerPhone || '',
+                        saleNotificationEmail: notificationEmail || payloadProduct.saleNotificationEmail || '',
+                        sellerNotificationEmail: notificationEmail || payloadProduct.sellerNotificationEmail || ''
+                    };
+                });
+                const saleNotificationMap = new Map();
+                enrichedProducts.forEach(product => {
+                    const to = String(product.sellerNotificationEmail || product.saleNotificationEmail || '').trim();
+                    if (!to) return;
+                    const current = saleNotificationMap.get(to) || {
+                        to,
+                        message: SALE_NOTIFICATION_MESSAGE,
+                        sellerName: product.ownerName || '',
+                        products: []
+                    };
+                    current.products.push(product);
+                    saleNotificationMap.set(to, current);
+                });
+                const saleNotifications = Array.from(saleNotificationMap.values()).map(item => ({
+                    ...item,
+                    products: enrichedProducts,
+                    productName: enrichedProducts.map(product => product.name).filter(Boolean).join(', '),
+                    buyer: {
+                        fullName: payload.delivery?.fullName || '',
+                        phone: payload.delivery?.phone || '',
+                        email: payload.delivery?.email || ''
+                    }
+                }));
                 return {
                     ...payload,
-                    product: enrichedProduct,
-                    saleNotification: {
-                        to: notificationEmail,
-                        message: SALE_NOTIFICATION_MESSAGE,
-                        sellerName: seller.name || '',
-                        productName: payloadProduct.name || sourceProduct.name || ''
-                    }
+                    product: enrichedProducts[0] || payload.product || {},
+                    products: enrichedProducts,
+                    cart: {
+                        ...(payload.cart || {}),
+                        count: enrichedProducts.length,
+                        total: getProductsTotal(enrichedProducts)
+                    },
+                    saleNotification: saleNotifications[0] || payload.saleNotification,
+                    saleNotifications
                 };
             };
 
             const registerCompletedSale = async ({ payload = {}, paymentMethod = '', saleId = '', transferId = '', paypalOrderId = '', soldAt = Date.now() }) => {
-                const payloadProduct = payload.product || {};
-                const sourceProduct = products.find(product => String(product.id) === String(payloadProduct.id)) || payloadProduct;
-                const seller = getSellerInfoForProduct(sourceProduct);
+                const payloadProducts = getPayloadProducts(payload);
+                const saleProducts = payloadProducts.length > 0 ? payloadProducts : (payload.product ? [payload.product] : []);
+                const enrichedSaleProducts = saleProducts.map(payloadProduct => {
+                    const sourceProduct = products.find(product => String(product.id) === String(payloadProduct.id)) || payloadProduct;
+                    const seller = getSellerInfoForProduct(sourceProduct);
+                    return {
+                        ...payloadProduct,
+                        sellerId: seller.id || payloadProduct.ownerId || '',
+                        sellerName: seller.name || payloadProduct.ownerName || 'Admin Central',
+                        sellerEmail: seller.email || payloadProduct.ownerEmail || ADMIN_EMAIL,
+                        sellerPhone: seller.phone || payloadProduct.ownerPhone || '-',
+                        sellerNotificationEmail: seller.saleNotificationEmail || payloadProduct.sellerNotificationEmail || ''
+                    };
+                });
+                const primaryProduct = enrichedSaleProducts[0] || {};
+                const sellerNames = Array.from(new Set(enrichedSaleProducts.map(product => product.sellerName).filter(Boolean)));
+                const sellerEmails = Array.from(new Set(enrichedSaleProducts.map(product => product.sellerEmail).filter(Boolean)));
+                const sellerPhones = Array.from(new Set(enrichedSaleProducts.map(product => product.sellerPhone).filter(Boolean)));
                 const id = saleId || `sale_${Date.now()}`;
                 const sale = {
                     saleId: id,
                     paymentMethod,
                     transferId,
                     paypalOrderId,
-                    productId: payloadProduct.id || sourceProduct.id || '',
-                    productName: payloadProduct.name || sourceProduct.name || '',
-                    productCost: Number(payloadProduct.price || sourceProduct.price || 0),
-                    sellerId: seller.id || payloadProduct.ownerId || '',
-                    sellerName: seller.name || payloadProduct.ownerName || 'Admin Central',
-                    sellerEmail: seller.email || payloadProduct.ownerEmail || ADMIN_EMAIL,
-                    sellerPhone: seller.phone || payloadProduct.ownerPhone || '-',
-                    sellerNotificationEmail: seller.saleNotificationEmail || payloadProduct.sellerNotificationEmail || '',
+                    productId: enrichedSaleProducts.map(product => product.id).filter(Boolean).join(', ') || primaryProduct.id || '',
+                    productName: enrichedSaleProducts.map(product => product.name).filter(Boolean).join(', ') || primaryProduct.name || '',
+                    productCost: getProductsTotal(enrichedSaleProducts),
+                    productCount: enrichedSaleProducts.length,
+                    products: enrichedSaleProducts,
+                    sellerId: primaryProduct.sellerId || primaryProduct.ownerId || '',
+                    sellerName: sellerNames.length > 1 ? 'Varios vendedores' : (sellerNames[0] || 'Admin Central'),
+                    sellerEmail: sellerEmails.length > 1 ? sellerEmails.join(', ') : (sellerEmails[0] || ADMIN_EMAIL),
+                    sellerPhone: sellerPhones.length > 1 ? sellerPhones.join(', ') : (sellerPhones[0] || '-'),
+                    sellerNotificationEmail: enrichedSaleProducts.map(product => product.sellerNotificationEmail).filter(Boolean).join(', '),
                     buyerName: payload.delivery?.fullName || '',
                     buyerEmail: payload.delivery?.email || '',
                     buyerPhone: payload.delivery?.phone || '',
@@ -1151,7 +1347,7 @@
                         updatedAt: Date.now()
                     });
                     alert('Transferencia registrada como Pendiente. Tu solicitud se procesará cuando el administrador confirme el pago.');
-                    resetPublicFlow();
+                    resetPublicFlow({ clearCart: isCartCheckout });
                 } catch(err) {
                     console.error('Registrar transferencia:', err);
                     alert('No se pudo registrar la transferencia pendiente.');
@@ -1167,7 +1363,7 @@
                     await sendOrderEmail(payload);
                     await registerCompletedSale({ payload, paymentMethod: 'PayPal', saleId: `paypal_manual_${Date.now()}` });
                     alert('Pago PayPal confirmado. La solicitud fue enviada correctamente.');
-                    resetPublicFlow();
+                    resetPublicFlow({ clearCart: isCartCheckout });
                 } catch(err) {
                     console.error('Confirmar PayPal:', err);
                     alert(err.message || 'No se pudo procesar el pago PayPal.');
@@ -1248,7 +1444,7 @@
             };
 
             const handleDeliveryContinue = async () => {
-                if (!selectedProduct) {
+                if (checkoutProducts.length === 0) {
                     alert('No se encontró el producto seleccionado.');
                     return;
                 }
@@ -1259,7 +1455,7 @@
 
             const findProductByTracking = (tracking) => {
                 if (!tracking) return null;
-                const productId = tracking.productId || tracking.product?.id || tracking.order?.product?.id || '';
+                const productId = tracking.productId || tracking.product?.id || tracking.order?.product?.id || tracking.order?.products?.[0]?.id || '';
                 return products.find(p => String(p.id) === String(productId)) || tracking.product || tracking.order?.product || null;
             };
 
@@ -1267,7 +1463,7 @@
 
             const buildPackageFromOrder = (transfer, trackingCode) => {
                 const order = transfer?.order || {};
-                const product = order.product || {};
+                const product = (Array.isArray(order.products) && order.products.length > 0 ? order.products[0] : order.product) || {};
                 const delivery = order.delivery || {};
                 const address = [delivery.street, delivery.neighborhood, delivery.municipality, delivery.state, delivery.zip].filter(Boolean).join(', ');
                 return {
@@ -1647,6 +1843,10 @@
                             </div>
                         ) : (
                             <div className="flex items-center gap-3">
+                                <button type="button" onClick={() => setShowCartModal(true)} className="relative w-11 h-11 rounded-xl bg-slate-100 text-slate-600 flex items-center justify-center hover:bg-red-50 hover:text-red-600" title="Ver carrito">
+                                    <Icons.Cart />
+                                    {cartItems.length > 0 && <span className="absolute -top-2 -right-2 min-w-[20px] h-5 px-1 rounded-full bg-red-500 text-white text-[10px] font-black flex items-center justify-center">{cartItems.length}</span>}
+                                </button>
                                 <button onClick={openSupportFromCover} className="px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-red-50 hover:text-red-600">Soporte Técnico</button>
                                 <button onClick={() => { resetPublicFlow(); setLoginForm({ email: '', p: '' }); setView('login'); }} className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Acceso Staff</button>
                             </div>
@@ -1709,6 +1909,10 @@
                                                                     <p className="text-xl font-black text-red-500">${Number(product.price || 0).toFixed(2)}</p>
                                                                     <span className="px-3 py-1 bg-slate-50 rounded-full text-[9px] font-black text-slate-500 uppercase">Stock: {Number(product.stock || 0)}</span>
                                                                 </div>
+                                                                <div className="grid grid-cols-2 gap-2 pt-1">
+                                                                    <button type="button" onClick={(e) => { e.stopPropagation(); startSingleCheckout(product); }} className="btn-primary h-11 px-3 text-[9px]">Comprar</button>
+                                                                    <button type="button" onClick={(e) => { e.stopPropagation(); addProductToCart(product); }} className="h-11 rounded-xl border-2 border-red-100 text-red-500 bg-red-50 hover:bg-red-500 hover:text-white text-[9px] font-black uppercase tracking-widest flex items-center justify-center gap-2"><Icons.Cart size={14} />Agregar al carrito</button>
+                                                                </div>
                                                             </div>
                                                         </article>
                                                     ))}
@@ -1717,6 +1921,53 @@
                                         )}
                                     </div>
                                 
+                            </div>
+                        )}
+
+                        {showCartModal && (
+                            <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm p-4 flex items-center justify-center">
+                                <div className="bg-white rounded-[1.5rem] shadow-2xl border border-slate-100 w-full max-w-md overflow-hidden animate-slide">
+                                    <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between gap-4">
+                                        <div>
+                                            <p className="text-[10px] text-red-500 font-black uppercase tracking-widest">Carrito de compra</p>
+                                            <h2 className="text-2xl font-black tracking-tight">Productos seleccionados</h2>
+                                        </div>
+                                        <button type="button" onClick={() => setShowCartModal(false)} className="w-10 h-10 rounded-xl bg-slate-50 text-slate-400 hover:bg-red-50 hover:text-red-500 text-lg font-black">×</button>
+                                    </div>
+                                    <div className="p-6 space-y-5">
+                                        {cartProducts.length === 0 ? (
+                                            <div className="text-center py-8">
+                                                <div className="mx-auto mb-4 w-14 h-14 rounded-2xl bg-slate-50 text-slate-300 flex items-center justify-center"><Icons.Cart size={28} /></div>
+                                                <p className="text-sm font-black text-slate-700">Tu carrito está vacío</p>
+                                                <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">Puedes agregar hasta 2 productos por compra.</p>
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <div className="space-y-3">
+                                                    {cartProducts.map(item => (
+                                                        <div key={item.id} className="flex items-center justify-between gap-3 bg-slate-50 rounded-2xl p-3">
+                                                            <div className="min-w-0">
+                                                                <p className="text-sm font-black text-slate-800 truncate">{item.name}</p>
+                                                                <p className="text-[9px] font-bold text-slate-400 uppercase">ID: {item.id}</p>
+                                                            </div>
+                                                            <div className="text-right shrink-0">
+                                                                <p className="text-sm font-black text-red-500">${Number(item.price || 0).toFixed(2)}</p>
+                                                                <button type="button" onClick={() => removeCartItem(item.id)} className="text-[8px] font-black uppercase text-slate-400 hover:text-red-500">Quitar</button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <div className="border-t border-slate-100 pt-4 flex items-center justify-between">
+                                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total acumulado</p>
+                                                    <p className="text-3xl font-black text-red-500">${getProductsTotal(cartProducts).toFixed(2)}</p>
+                                                </div>
+                                                <button type="button" onClick={startCartCheckout} className="btn-primary w-full h-12">Quiero comprar</button>
+                                                <button type="button" onClick={clearVisitorCart} className="w-full text-[9px] font-black text-slate-400 uppercase hover:text-red-500">Vaciar carrito</button>
+                                                <p className="text-center text-[9px] font-bold text-slate-300 uppercase">Máximo {VISITOR_CART_MAX_ITEMS} productos por compra. Este carrito se guarda solo en este navegador.</p>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
                             </div>
                         )}
 
@@ -1771,21 +2022,24 @@
                                             <p className="text-sm font-semibold text-slate-600 leading-relaxed whitespace-pre-line">{selectedProduct.specifications || 'Sin especificaciones registradas.'}</p>
                                         </div>
 
-                                        <button type="button" onClick={() => setView('delivery-data')} className="btn-primary w-full sm:w-auto h-12">Comprar</button>
+                                        <div className="flex flex-col sm:flex-row gap-3">
+                                            <button type="button" onClick={() => startSingleCheckout(selectedProduct)} className="btn-primary w-full sm:w-auto h-12">Comprar</button>
+                                            <button type="button" onClick={() => addProductToCart(selectedProduct)} className="w-full sm:w-auto h-12 rounded-xl border-2 border-red-100 text-red-500 bg-red-50 hover:bg-red-500 hover:text-white text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 px-5"><Icons.Cart size={16} />Agregar al carrito</button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         )}
 
-                        {view === 'delivery-data' && selectedProduct && (
+                        {view === 'delivery-data' && checkoutProducts.length > 0 && (
                             <div className="w-full max-w-5xl py-6 animate-slide">
-                                <button onClick={() => { resetDeliveryForm(); setView('product-detail'); }} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Volver al detalle</button>
+                                <button onClick={handleDeliveryBack} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← {isCartCheckout ? 'Volver a la portada' : 'Volver al detalle'}</button>
                                 <div className="card-glass overflow-hidden">
                                     <div className="bg-white border-b border-slate-100 px-6 py-5 flex items-center justify-between gap-4">
                                         <div>
-                                            <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-1">Producto seleccionado: {selectedProduct.name}</p>
+                                            <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-1">Producto seleccionado: {checkoutProductLabel}</p>
                                             <h1 className="text-2xl sm:text-3xl font-black tracking-tight">Datos de entrega</h1>
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">ID del producto conservado: {selectedProduct.id}</p>
+                                            <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">ID conservado: {checkoutIdLabel}</p>
                                         </div>
                                         <div className="flex items-center gap-3 shrink-0">
                                             <button type="button" onClick={resetPublicFlow} className="text-[9px] font-black uppercase text-slate-400 hover:text-red-500">Cancelar</button>
@@ -1794,6 +2048,19 @@
                                     </div>
 
                                     <form onSubmit={(e) => { e.preventDefault(); handleDeliveryContinue(); }} className="p-6 lg:p-8 space-y-6">
+                                        <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
+                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Resumen de productos</p>
+                                            {checkoutProducts.map(item => (
+                                                <div key={item.id} className="flex items-center justify-between gap-3 text-[10px] font-bold text-slate-600">
+                                                    <span>{item.name}</span>
+                                                    <span className="font-black text-red-500">${Number(item.price || 0).toFixed(2)}</span>
+                                                </div>
+                                            ))}
+                                            <div className="pt-2 border-t border-slate-200 flex items-center justify-between text-sm font-black">
+                                                <span>Total</span>
+                                                <span className="text-red-500">${checkoutTotal.toFixed(2)}</span>
+                                            </div>
+                                        </div>
                                         <div className="grid md:grid-cols-2 gap-4">
                                             <div className="md:col-span-2">
                                                 <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Calle</label>
@@ -1838,16 +2105,25 @@
                         )}
 
 
-                        {view === 'payment-method' && selectedProduct && (
+                        {view === 'payment-method' && checkoutProducts.length > 0 && (
                             <div className="w-full max-w-4xl py-6 animate-slide">
                                 <button onClick={resetAfterIncompletePayment} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Cancelar pago y volver al inicio</button>
                                 <div className="card-glass overflow-hidden">
                                     <div className="bg-white border-b border-slate-100 px-6 py-5">
-                                        <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-1">Producto seleccionado: {selectedProduct.name}</p>
+                                        <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-1">Producto seleccionado: {checkoutProductLabel}</p>
                                         <h1 className="text-2xl sm:text-3xl font-black tracking-tight">Método de pago</h1>
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">ID del producto conservado: {selectedProduct.id}</p>
+                                        <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">ID conservado: {checkoutIdLabel}</p>
                                     </div>
                                     <div className="p-6 lg:p-8 space-y-5">
+                                        <div className="bg-slate-50 rounded-2xl p-4 space-y-2">
+                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Resumen de compra</p>
+                                            {checkoutProducts.map(item => (
+                                                <div key={item.id} className="flex items-center justify-between gap-3 text-[10px] font-bold text-slate-600">
+                                                    <span>{item.name}</span>
+                                                    <span className="font-black text-red-500">${Number(item.price || 0).toFixed(2)}</span>
+                                                </div>
+                                            ))}
+                                        </div>
                                         <div className="grid md:grid-cols-2 gap-4">
                                             {[
                                                 ['paypal', 'PayPal', 'Completa el pago para procesar la solicitud.'],
@@ -1885,7 +2161,7 @@
                                         <div className="bg-slate-50 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                                             <div>
                                                 <p className="text-[9px] font-black text-slate-400 uppercase">Total</p>
-                                                <p className="text-3xl font-black text-red-500">${Number(selectedProduct.price || 0).toFixed(2)}</p>
+                                                <p className="text-3xl font-black text-red-500">${checkoutTotal.toFixed(2)}</p>
                                             </div>
                                             {selectedPaymentMethod === 'transfer' ? (
                                                 <button type="button" onClick={createPendingTransfer} disabled={orderSending || !paymentSettings.bankAccount} className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{orderSending ? 'Registrando...' : 'Registrar transferencia pendiente'}</button>
@@ -2020,9 +2296,13 @@
                                                                 <td className="px-6 py-4">{t.createdAt ? new Date(t.createdAt).toLocaleString('es-MX') : '-'}</td>
                                                                 <td className="px-6 py-4"><span className={`px-2 py-1 rounded-full text-[8px] uppercase ${t.status === 'Pagado' ? 'bg-green-50 text-green-600' : 'bg-yellow-50 text-yellow-700'}`}>{t.status}</span></td>
                                                                 <td className="px-6 py-4">
-                                                                    <p className="font-black">{t.order?.product?.name}</p>
-                                                                    <p className="text-slate-400 font-mono">ID: {t.order?.product?.id}</p>
-                                                                    <p className="text-red-600 font-black">${Number(t.order?.product?.price || 0).toFixed(2)}</p>
+                                                                    {(Array.isArray(t.order?.products) && t.order.products.length > 0 ? t.order.products : [t.order?.product].filter(Boolean)).map(item => (
+                                                                        <div key={item.id || item.name} className="mb-2 last:mb-0">
+                                                                            <p className="font-black">{item.name}</p>
+                                                                            <p className="text-slate-400 font-mono">ID: {item.id}</p>
+                                                                            <p className="text-red-600 font-black">${Number(item.price || 0).toFixed(2)}</p>
+                                                                        </div>
+                                                                    ))}
                                                                     <p className="text-slate-400">{t.order?.delivery?.phone} · {t.order?.delivery?.email}</p>
                                                                 </td>
                                                                 <td className="px-6 py-4 min-w-[210px]">
@@ -2428,6 +2708,7 @@
     </script>
 </body>
 </html>
+
 
 
 
