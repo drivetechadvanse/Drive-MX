@@ -20,121 +20,52 @@ function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(value));
 }
 
-function normalizeProducts(primaryProduct = {}, products = []) {
-  const sourceProducts = Array.isArray(products) && products.length > 0 ? products : [primaryProduct];
-  return sourceProducts
+function money(value) {
+  return Number(value || 0).toFixed(2);
+}
+
+function normalizeProducts(product = {}, products = []) {
+  const source = Array.isArray(products) && products.length > 0 ? products : [product];
+  return source
     .filter(Boolean)
     .map((item) => ({
       id: clean(item.id),
       name: clean(item.name),
       price: Number(item.price || 0),
-      ownerId: clean(item.ownerId || item.sellerId),
-      ownerName: clean(item.ownerName || item.sellerName),
-      ownerEmail: clean(item.ownerEmail || item.sellerEmail),
-      ownerPhone: clean(item.ownerPhone || item.sellerPhone),
-      saleNotificationEmail: clean(item.saleNotificationEmail || item.sellerNotificationEmail || item.notificationEmail || item.ownerNotificationEmail),
-      sellerNotificationEmail: clean(item.sellerNotificationEmail || item.saleNotificationEmail || item.notificationEmail || item.ownerNotificationEmail),
+      ownerId: clean(item.ownerId),
+      ownerName: clean(item.ownerName),
+      ownerEmail: clean(item.ownerEmail),
+      ownerPhone: clean(item.ownerPhone),
+      sellerNotificationEmail: clean(item.sellerNotificationEmail),
+      saleNotificationEmail: clean(item.saleNotificationEmail),
+      notificationEmail: clean(item.notificationEmail),
+      ownerNotificationEmail: clean(item.ownerNotificationEmail),
     }))
-    .filter((item) => item.id || item.name);
+    .filter((item) => item.id && item.name);
 }
 
-function getProductsTotal(products = []) {
-  return products.reduce((total, item) => total + Number(item.price || 0), 0);
-}
-
-function renderProductsTable(products = []) {
-  const rows = products
-    .map((item, index) => `
-      <tr>
-        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${index + 1}</td>
-        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(item.id)}</td>
-        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(item.name)}</td>
-        <td style="padding:8px;border-bottom:1px solid #e5e7eb;text-align:right;">$${Number(item.price || 0).toFixed(2)}</td>
-      </tr>
-    `)
+function productsHtml(orderProducts = []) {
+  return orderProducts
+    .map(
+      (item, index) => `
+        <div style="padding:12px 0; border-bottom:1px solid #e5e7eb;">
+          <p><b>Producto ${index + 1}</b></p>
+          <p><b>ID:</b> ${escapeHtml(item.id)}</p>
+          <p><b>Nombre:</b> ${escapeHtml(item.name)}</p>
+          <p><b>Precio:</b> $${money(item.price)}</p>
+        </div>
+      `
+    )
     .join("");
-
-  return `
-    <table style="border-collapse:collapse;width:100%;font-size:14px;">
-      <thead>
-        <tr style="background:#f9fafb;">
-          <th style="padding:8px;text-align:left;border-bottom:1px solid #e5e7eb;">#</th>
-          <th style="padding:8px;text-align:left;border-bottom:1px solid #e5e7eb;">ID</th>
-          <th style="padding:8px;text-align:left;border-bottom:1px solid #e5e7eb;">Producto</th>
-          <th style="padding:8px;text-align:right;border-bottom:1px solid #e5e7eb;">Precio</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-      <tfoot>
-        <tr>
-          <td colspan="3" style="padding:10px 8px;text-align:right;font-weight:bold;">Total acumulado</td>
-          <td style="padding:10px 8px;text-align:right;font-weight:bold;color:#dc2626;">$${getProductsTotal(products).toFixed(2)}</td>
-        </tr>
-      </tfoot>
-    </table>
-  `;
 }
 
-function renderDeliveryDetails(delivery = {}) {
-  return `
-    <p><b>Calle:</b> ${escapeHtml(delivery.street)}</p>
-    <p><b>Estado:</b> ${escapeHtml(delivery.state)}</p>
-    <p><b>Municipio:</b> ${escapeHtml(delivery.municipality)}</p>
-    <p><b>Colonia:</b> ${escapeHtml(delivery.neighborhood)}</p>
-    <p><b>Código Postal:</b> ${escapeHtml(delivery.zip)}</p>
-    <p><b>Nombre completo:</b> ${escapeHtml(delivery.fullName)}</p>
-    <p><b>Teléfono:</b> ${escapeHtml(delivery.phone)}</p>
-    <p><b>Correo electrónico:</b> ${escapeHtml(delivery.email)}</p>
-    <p><b>Referencias:</b> ${escapeHtml(delivery.references)}</p>
-  `;
-}
-
-function buildSaleNotificationRequests({ orderProducts, primaryProduct, saleNotification, saleNotifications }) {
-  if (Array.isArray(saleNotifications) && saleNotifications.length > 0) {
-    return saleNotifications
-      .map((item) => {
-        const notificationProducts = normalizeProducts({}, item.products);
-        return {
-          to: clean(item.to),
-          message: clean(item.message) || SALE_NOTIFICATION_MESSAGE,
-          sellerName: clean(item.sellerName),
-          products: notificationProducts.length > 0 ? notificationProducts : orderProducts,
-        };
-      })
-      .filter((item) => item.to);
-  }
-
-  const grouped = new Map();
-  orderProducts.forEach((item) => {
-    const to = clean(item.sellerNotificationEmail || item.saleNotificationEmail || item.notificationEmail || item.ownerNotificationEmail);
-    if (!to) return;
-    const current = grouped.get(to) || {
-      to,
-      message: clean(saleNotification.message) || SALE_NOTIFICATION_MESSAGE,
-      sellerName: clean(item.ownerName || item.sellerName),
-      products: [],
-    };
-    current.products.push(item);
-    grouped.set(to, current);
-  });
-
-  if (grouped.size > 0) return Array.from(grouped.values());
-
-  const legacyEmail = clean(
-    saleNotification.to ||
-      primaryProduct.sellerNotificationEmail ||
-      primaryProduct.saleNotificationEmail ||
-      primaryProduct.notificationEmail ||
-      primaryProduct.ownerNotificationEmail
-  );
-
-  if (!legacyEmail) return [];
-  return [{
-    to: legacyEmail,
-    message: clean(saleNotification.message) || SALE_NOTIFICATION_MESSAGE,
-    sellerName: clean(saleNotification.sellerName || primaryProduct.ownerName || primaryProduct.sellerName),
-    products: orderProducts,
-  }];
+function productsText(orderProducts = []) {
+  return orderProducts
+    .map(
+      (item, index) =>
+        `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nPrecio: $${money(item.price)}`
+    )
+    .join("\n\n");
 }
 
 module.exports = async function handler(req, res) {
@@ -152,6 +83,7 @@ module.exports = async function handler(req, res) {
       mailSettings = {},
       product = {},
       products = [],
+      cart = {},
       delivery = {},
       saleNotification = {},
       saleNotifications = [],
@@ -168,13 +100,6 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    const orderProducts = normalizeProducts(product, products);
-    const invalidProduct = orderProducts.find((item) => !clean(item.id) || !clean(item.name));
-
-    if (orderProducts.length === 0 || invalidProduct) {
-      return res.status(400).json({ success: false, error: "Faltan datos del producto." });
-    }
-
     const requiredDelivery = {
       street: "Calle",
       state: "Estado",
@@ -187,11 +112,25 @@ module.exports = async function handler(req, res) {
       references: "Referencias del domicilio",
     };
 
+    const orderProducts = normalizeProducts(product, products);
+
+    if (orderProducts.length === 0) {
+      return res.status(400).json({ success: false, error: "Faltan datos del producto." });
+    }
+
+    if (orderProducts.length > 2) {
+      return res.status(400).json({ success: false, error: "El carrito permite máximo 2 productos por compra." });
+    }
+
     for (const [key, label] of Object.entries(requiredDelivery)) {
       if (!clean(delivery[key])) {
         return res.status(400).json({ success: false, error: `Falta el campo: ${label}.` });
       }
     }
+
+    const orderTotal = orderProducts.reduce((total, item) => total + Number(item.price || 0), 0);
+    const itemCount = Number(cart.itemCount || orderProducts.length);
+    const productSubject = orderProducts.length > 1 ? `${orderProducts.length} productos` : orderProducts[0].name;
 
     const transporter = nodemailer.createTransport({
       service: "gmail",
@@ -201,21 +140,27 @@ module.exports = async function handler(req, res) {
       },
     });
 
-    const productSubject = orderProducts.length > 1
-      ? `${orderProducts.length} productos`
-      : clean(orderProducts[0].name);
-
     const html = `
       <div style="font-family: Arial, sans-serif; color:#111827;">
         <h2>Nueva solicitud de compra</h2>
 
         <h3>Productos</h3>
-        ${renderProductsTable(orderProducts)}
+        ${productsHtml(orderProducts)}
+        <p><b>Total acumulado:</b> $${money(orderTotal)}</p>
+        <p><b>Cantidad de productos:</b> ${itemCount}</p>
 
         <hr />
 
         <h3>Datos de entrega</h3>
-        ${renderDeliveryDetails(delivery)}
+        <p><b>Calle:</b> ${escapeHtml(delivery.street)}</p>
+        <p><b>Estado:</b> ${escapeHtml(delivery.state)}</p>
+        <p><b>Municipio:</b> ${escapeHtml(delivery.municipality)}</p>
+        <p><b>Colonia:</b> ${escapeHtml(delivery.neighborhood)}</p>
+        <p><b>Código Postal:</b> ${escapeHtml(delivery.zip)}</p>
+        <p><b>Nombre completo:</b> ${escapeHtml(delivery.fullName)}</p>
+        <p><b>Teléfono:</b> ${escapeHtml(delivery.phone)}</p>
+        <p><b>Correo electrónico:</b> ${escapeHtml(delivery.email)}</p>
+        <p><b>Referencias:</b> ${escapeHtml(delivery.references)}</p>
       </div>
     `;
 
@@ -227,55 +172,116 @@ module.exports = async function handler(req, res) {
       replyTo: clean(delivery.email),
     });
 
-    const notificationRequests = buildSaleNotificationRequests({
-      orderProducts,
-      primaryProduct: product,
-      saleNotification,
-      saleNotifications,
+    const inferredTargets = orderProducts
+      .map((item) => ({
+        to: clean(
+          item.sellerNotificationEmail ||
+            item.saleNotificationEmail ||
+            item.notificationEmail ||
+            item.ownerNotificationEmail
+        ),
+        message: SALE_NOTIFICATION_MESSAGE,
+        sellerName: item.ownerName,
+        productName: item.name,
+        productId: item.id,
+      }))
+      .filter((target) => target.to);
+
+    const explicitTargets = Array.isArray(saleNotifications)
+      ? saleNotifications.map((target) => ({
+          to: clean(target.to || target.email),
+          message: clean(target.message) || SALE_NOTIFICATION_MESSAGE,
+          sellerName: clean(target.sellerName),
+          productName: clean(target.productName),
+          productId: clean(target.productId),
+        }))
+      : [];
+
+    const legacyTargetEmail = clean(
+      saleNotification.to ||
+        product.sellerNotificationEmail ||
+        product.saleNotificationEmail ||
+        product.notificationEmail ||
+        product.ownerNotificationEmail
+    );
+
+    const legacyTargets = legacyTargetEmail
+      ? [
+          {
+            to: legacyTargetEmail,
+            message: clean(saleNotification.message) || SALE_NOTIFICATION_MESSAGE,
+            sellerName: clean(saleNotification.sellerName),
+            productName: clean(saleNotification.productName || product.name),
+            productId: clean(saleNotification.productId || product.id),
+          },
+        ]
+      : [];
+
+    const targetsByEmail = new Map();
+    [...explicitTargets, ...inferredTargets, ...legacyTargets].forEach((target) => {
+      if (!target.to || targetsByEmail.has(target.to.toLowerCase())) return;
+      targetsByEmail.set(target.to.toLowerCase(), target);
     });
 
     let saleNotificationSent = false;
     let saleNotificationCount = 0;
     const saleNotificationErrors = [];
 
-    for (const notification of notificationRequests) {
-      const saleNotificationEmail = clean(notification.to);
-      if (!isValidEmail(saleNotificationEmail)) {
-        saleNotificationErrors.push(`El correo de notificación de venta no es válido: ${saleNotificationEmail || "sin correo"}.`);
+    const saleProductsHtml = productsHtml(orderProducts);
+    const saleProductsText = productsText(orderProducts);
+
+    for (const target of targetsByEmail.values()) {
+      if (!isValidEmail(target.to)) {
+        saleNotificationErrors.push(`${target.to}: correo de notificación de venta no válido.`);
         continue;
       }
 
-      const saleProducts = Array.isArray(notification.products) && notification.products.length > 0
-        ? notification.products
-        : orderProducts;
-      const saleMessage = clean(notification.message) || SALE_NOTIFICATION_MESSAGE;
+      const saleMessage = clean(target.message) || SALE_NOTIFICATION_MESSAGE;
       const saleHtml = `
         <div style="font-family: Arial, sans-serif; color:#111827;">
           <p>${escapeHtml(saleMessage)}</p>
 
-          <h3>Productos vendidos</h3>
-          ${renderProductsTable(saleProducts)}
+          <h3>Productos de la compra</h3>
+          ${saleProductsHtml}
+          <p><b>Total acumulado:</b> $${money(orderTotal)}</p>
 
           <hr />
 
-          <h3>Información del comprador</h3>
-          ${renderDeliveryDetails(delivery)}
+          <h3>Datos del comprador</h3>
+          <p><b>Nombre completo:</b> ${escapeHtml(delivery.fullName)}</p>
+          <p><b>Teléfono:</b> ${escapeHtml(delivery.phone)}</p>
+          <p><b>Correo electrónico:</b> ${escapeHtml(delivery.email)}</p>
+          <p><b>Dirección:</b> ${escapeHtml(
+            [delivery.street, delivery.neighborhood, delivery.municipality, delivery.state, delivery.zip]
+              .map(clean)
+              .filter(Boolean)
+              .join(", ")
+          )}</p>
+          <p><b>Referencias:</b> ${escapeHtml(delivery.references)}</p>
         </div>
       `;
+
+      const saleText = `${saleMessage}\n\nProductos de la compra:\n${saleProductsText}\n\nTotal acumulado: $${money(
+        orderTotal
+      )}\n\nComprador:\nNombre: ${clean(delivery.fullName)}\nTeléfono: ${clean(
+        delivery.phone
+      )}\nCorreo: ${clean(delivery.email)}\nReferencias: ${clean(delivery.references)}`;
 
       try {
         await transporter.sendMail({
           from: `"Drive MX" <${senderEmail}>`,
-          to: saleNotificationEmail,
+          to: target.to,
           subject: "Tu producto ha sido vendido - Drive MX",
-          text: saleMessage,
+          text: saleText,
           html: saleHtml,
         });
         saleNotificationSent = true;
         saleNotificationCount += 1;
       } catch (saleError) {
         console.error("Error enviando notificación de venta:", saleError);
-        saleNotificationErrors.push(saleError.message || "No se pudo enviar la notificación de venta.");
+        saleNotificationErrors.push(
+          `${target.to}: ${saleError.message || "No se pudo enviar la notificación de venta."}`
+        );
       }
     }
 
@@ -283,7 +289,7 @@ module.exports = async function handler(req, res) {
       success: true,
       saleNotificationSent,
       saleNotificationCount,
-      saleNotificationError: saleNotificationErrors.join(" "),
+      saleNotificationError: saleNotificationErrors.join(" | "),
     });
   } catch (error) {
     console.error("Error enviando correo:", error);
@@ -293,5 +299,6 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
 
 
