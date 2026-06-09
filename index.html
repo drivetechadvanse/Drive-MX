@@ -1219,6 +1219,7 @@
                         ownerName: seller.name,
                         ownerEmail: seller.email,
                         ownerPhone: seller.phone,
+                        saleNotificationEmail: seller.saleNotificationEmail,
                         sellerNotificationEmail: seller.saleNotificationEmail
                     };
                 }).filter(product => product.id && product.name).slice(0, CART_MAX_ITEMS);
@@ -1266,6 +1267,9 @@
                     ).trim();
                     return {
                         ...payloadProduct,
+                        id: payloadProduct.id || sourceProduct.id || '',
+                        name: payloadProduct.name || sourceProduct.name || '',
+                        price: Number(payloadProduct.price ?? sourceProduct.price ?? 0),
                         ownerId: seller.id || payloadProduct.ownerId || '',
                         ownerName: seller.name || payloadProduct.ownerName || '',
                         ownerEmail: seller.email || payloadProduct.ownerEmail || '',
@@ -1278,10 +1282,17 @@
                     .filter(product => String(product.sellerNotificationEmail || product.saleNotificationEmail || '').trim())
                     .map(product => ({
                         to: String(product.sellerNotificationEmail || product.saleNotificationEmail || '').trim(),
-                        message: SALE_NOTIFICATION_MESSAGE,
+                        message: `Tu producto ha sido vendido.
+
+Producto: ${product.name || ''}
+ID: ${product.id || ''}
+Precio: $${Number(product.price || 0).toFixed(2)}
+
+Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         sellerName: product.ownerName || '',
                         productName: product.name || '',
-                        productId: product.id || ''
+                        productId: product.id || '',
+                        productPrice: Number(product.price || 0)
                     }));
                 const enrichedTotal = enrichedProducts.reduce((total, product) => total + Number(product.price || 0), 0);
                 return {
@@ -2739,6 +2750,7 @@
     </script>
 </body>
 </html>
+
 
 
 
