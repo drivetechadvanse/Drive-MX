@@ -1,9 +1,7 @@
 const nodemailer = require("nodemailer");
 
-const SALE_NOTIFICATION_INTRO = "Tu producto ha sido vendido.";
-const SALE_NOTIFICATION_CONTACT =
-  "Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.";
-const SALE_NOTIFICATION_MESSAGE = `${SALE_NOTIFICATION_INTRO} ${SALE_NOTIFICATION_CONTACT}`;
+const SALE_NOTIFICATION_MESSAGE =
+  "Tu producto ha sido vendido. Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.";
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -68,101 +66,6 @@ function productsText(orderProducts = []) {
         `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nPrecio: $${money(item.price)}`
     )
     .join("\n\n");
-}
-
-function productKey(item = {}) {
-  return clean(item.id) || `${clean(item.name).toLowerCase()}-${money(item.price)}`;
-}
-
-function mergeUniqueProducts(current = [], incoming = []) {
-  const byKey = new Map();
-  [...current, ...incoming].forEach((item) => {
-    if (!item) return;
-    const normalized = {
-      id: clean(item.id),
-      name: clean(item.name || item.productName),
-      price: Number(item.price ?? item.productPrice ?? 0),
-      ownerId: clean(item.ownerId),
-      ownerName: clean(item.ownerName),
-      ownerEmail: clean(item.ownerEmail),
-      ownerPhone: clean(item.ownerPhone),
-      sellerNotificationEmail: clean(item.sellerNotificationEmail),
-      saleNotificationEmail: clean(item.saleNotificationEmail),
-      notificationEmail: clean(item.notificationEmail),
-      ownerNotificationEmail: clean(item.ownerNotificationEmail),
-    };
-    const key = productKey(normalized);
-    if (!key || !normalized.name) return;
-    byKey.set(key, normalized);
-  });
-  return Array.from(byKey.values());
-}
-
-function findOrderProduct(orderProducts = [], target = {}) {
-  const targetId = clean(target.productId || target.id);
-  if (!targetId) return null;
-  return orderProducts.find((item) => clean(item.id) === targetId) || null;
-}
-
-function productsFromTarget(target = {}, orderProducts = []) {
-  if (Array.isArray(target.products) && target.products.length > 0) {
-    return mergeUniqueProducts([], target.products);
-  }
-
-  const matchedProduct = findOrderProduct(orderProducts, target);
-  if (matchedProduct) return [matchedProduct];
-
-  const productId = clean(target.productId || target.id);
-  const productName = clean(target.productName || target.name);
-  const productPrice = Number(target.productPrice ?? target.price ?? 0);
-
-  if (!productId && !productName) return [];
-
-  return mergeUniqueProducts([], [
-    {
-      id: productId,
-      name: productName,
-      price: productPrice,
-    },
-  ]);
-}
-
-function saleNotificationProductsHtml(orderProducts = []) {
-  return orderProducts
-    .map((item, index) => {
-      const label = orderProducts.length > 1 ? `Producto ${index + 1}` : "Producto";
-      return `
-        <div style="padding:12px 0; border-bottom:1px solid #e5e7eb;">
-          <p><b>${label}:</b> ${escapeHtml(item.name)}</p>
-          <p><b>ID:</b> ${escapeHtml(item.id)}</p>
-          <p><b>Precio:</b> $${money(item.price)}</p>
-        </div>
-      `;
-    })
-    .join("");
-}
-
-function saleNotificationProductsText(orderProducts = []) {
-  return orderProducts
-    .map((item, index) => {
-      const label = orderProducts.length > 1 ? `Producto ${index + 1}` : "Producto";
-      return `${label}: ${item.name}\nID: ${item.id}\nPrecio: $${money(item.price)}`;
-    })
-    .join("\n\n");
-}
-
-function splitSaleMessage(message) {
-  const saleMessage = clean(message) || SALE_NOTIFICATION_MESSAGE;
-  const contactIndex = saleMessage.indexOf(SALE_NOTIFICATION_CONTACT);
-
-  if (contactIndex === -1) {
-    return { intro: saleMessage, contact: "" };
-  }
-
-  return {
-    intro: clean(saleMessage.slice(0, contactIndex)) || SALE_NOTIFICATION_INTRO,
-    contact: SALE_NOTIFICATION_CONTACT,
-  };
 }
 
 module.exports = async function handler(req, res) {
@@ -281,29 +184,17 @@ module.exports = async function handler(req, res) {
         sellerName: item.ownerName,
         productName: item.name,
         productId: item.id,
-        productPrice: item.price,
-        products: [item],
       }))
       .filter((target) => target.to);
 
     const explicitTargets = Array.isArray(saleNotifications)
-      ? saleNotifications.map((target) => {
-          const matchedProduct = findOrderProduct(orderProducts, target);
-          const targetProduct = {
-            id: clean(target.productId || matchedProduct?.id),
-            name: clean(target.productName || matchedProduct?.name),
-            price: Number(target.productPrice ?? matchedProduct?.price ?? 0),
-          };
-          return {
-            to: clean(target.to || target.email),
-            message: clean(target.message) || SALE_NOTIFICATION_MESSAGE,
-            sellerName: clean(target.sellerName),
-            productName: targetProduct.name,
-            productId: targetProduct.id,
-            productPrice: targetProduct.price,
-            products: Array.isArray(target.products) && target.products.length > 0 ? target.products : [targetProduct],
-          };
-        })
+      ? saleNotifications.map((target) => ({
+          to: clean(target.to || target.email),
+          message: clean(target.message) || SALE_NOTIFICATION_MESSAGE,
+          sellerName: clean(target.sellerName),
+          productName: clean(target.productName),
+          productId: clean(target.productId),
+        }))
       : [];
 
     const legacyTargetEmail = clean(
@@ -322,47 +213,22 @@ module.exports = async function handler(req, res) {
             sellerName: clean(saleNotification.sellerName),
             productName: clean(saleNotification.productName || product.name),
             productId: clean(saleNotification.productId || product.id),
-            productPrice: Number(saleNotification.productPrice ?? product.price ?? 0),
-            products: productsFromTarget(
-              {
-                productName: saleNotification.productName || product.name,
-                productId: saleNotification.productId || product.id,
-                productPrice: saleNotification.productPrice ?? product.price,
-                products: saleNotification.products,
-              },
-              orderProducts
-            ),
           },
         ]
       : [];
 
     const targetsByEmail = new Map();
     [...explicitTargets, ...inferredTargets, ...legacyTargets].forEach((target) => {
-      if (!target.to) return;
-
-      const emailKey = target.to.toLowerCase();
-      const existingTarget = targetsByEmail.get(emailKey);
-      const targetProducts = productsFromTarget(target, orderProducts);
-
-      if (!existingTarget) {
-        targetsByEmail.set(emailKey, {
-          ...target,
-          products: targetProducts.length > 0 ? targetProducts : orderProducts,
-        });
-        return;
-      }
-
-      targetsByEmail.set(emailKey, {
-        ...existingTarget,
-        sellerName: existingTarget.sellerName || target.sellerName,
-        message: existingTarget.message || target.message || SALE_NOTIFICATION_MESSAGE,
-        products: mergeUniqueProducts(existingTarget.products, targetProducts),
-      });
+      if (!target.to || targetsByEmail.has(target.to.toLowerCase())) return;
+      targetsByEmail.set(target.to.toLowerCase(), target);
     });
 
     let saleNotificationSent = false;
     let saleNotificationCount = 0;
     const saleNotificationErrors = [];
+
+    const saleProductsHtml = productsHtml(orderProducts);
+    const saleProductsText = productsText(orderProducts);
 
     for (const target of targetsByEmail.values()) {
       if (!isValidEmail(target.to)) {
@@ -371,20 +237,13 @@ module.exports = async function handler(req, res) {
       }
 
       const saleMessage = clean(target.message) || SALE_NOTIFICATION_MESSAGE;
-      const saleMessageParts = splitSaleMessage(saleMessage);
-      const targetProducts = Array.isArray(target.products) && target.products.length > 0 ? target.products : orderProducts;
-      const targetTotal = targetProducts.reduce((total, item) => total + Number(item.price || 0), 0);
-      const saleProductsHtml = saleNotificationProductsHtml(targetProducts);
-      const saleProductsText = saleNotificationProductsText(targetProducts);
-      const contactHtml = saleMessageParts.contact ? `<p>${escapeHtml(saleMessageParts.contact)}</p>` : "";
-      const contactText = saleMessageParts.contact ? `\n\n${saleMessageParts.contact}` : "";
       const saleHtml = `
         <div style="font-family: Arial, sans-serif; color:#111827;">
-          <p>${escapeHtml(saleMessageParts.intro)}</p>
+          <p>${escapeHtml(saleMessage).replace(/\n/g, "<br />")}</p>
 
+          <h3>Productos de la compra</h3>
           ${saleProductsHtml}
-
-          ${contactHtml}
+          <p><b>Total acumulado:</b> $${money(orderTotal)}</p>
 
           <hr />
 
@@ -399,15 +258,14 @@ module.exports = async function handler(req, res) {
               .join(", ")
           )}</p>
           <p><b>Referencias:</b> ${escapeHtml(delivery.references)}</p>
-          ${targetProducts.length > 1 ? `<p><b>Total de productos vendidos:</b> $${money(targetTotal)}</p>` : ""}
         </div>
       `;
 
-      const saleText = `${saleMessageParts.intro}\n\n${saleProductsText}${contactText}\n\nComprador:\nNombre: ${clean(
-        delivery.fullName
-      )}\nTeléfono: ${clean(delivery.phone)}\nCorreo: ${clean(delivery.email)}\nReferencias: ${clean(
-        delivery.references
-      )}${targetProducts.length > 1 ? `\nTotal de productos vendidos: $${money(targetTotal)}` : ""}`;
+      const saleText = `${saleMessage}\n\nProductos de la compra:\n${saleProductsText}\n\nTotal acumulado: $${money(
+        orderTotal
+      )}\n\nComprador:\nNombre: ${clean(delivery.fullName)}\nTeléfono: ${clean(
+        delivery.phone
+      )}\nCorreo: ${clean(delivery.email)}\nReferencias: ${clean(delivery.references)}`;
 
       try {
         await transporter.sendMail({
@@ -441,6 +299,7 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
 
 
 
