@@ -55,7 +55,9 @@
             ChevronRight: ({size=18}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>,
             Menu: ({size=20}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>,
             Send: ({size=16}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>,
-            Cart: ({size=18}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"/></svg>
+            Cart: ({size=18}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"/></svg>,
+            Lock: ({size=14}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
+            Unlock: ({size=14}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>
         };
 
         const STEPS = ['Recolectado', 'Procesando', 'En Camino', 'Entregado'];
@@ -74,6 +76,8 @@
         const CART_LOCAL_PREFIX = 'driveMxVisitorCart';
         const CART_SESSION_KEY = 'driveMxVisitorCartSessionId';
         const SALE_NOTIFICATION_MESSAGE = 'Tu producto ha sido vendido. Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.';
+        const BLOCKED_ACCOUNT_MESSAGE = 'La cuenta ha sido bloqueada por el administrador.';
+        const ASSIGNMENTS_AUTH_LOCAL_PREFIX = 'driveMxAssignmentsAuthorization';
         const createVisitorCartSessionId = () => `${Date.now()}_${Math.random().toString(36).slice(2)}`;
         const getVisitorCartStorageKey = () => {
             try {
@@ -244,6 +248,7 @@
             const pendingHistoryModeRef = useRef(null);
             const lastHistorySnapshotKeyRef = useRef('');
             const allowNativeBackExitRef = useRef(false);
+            const blockedAccountHandledRef = useRef(false);
 
             const getCurrentNavigationSnapshot = useCallback(() => normalizeNavigationSnapshot({
                 view,
@@ -327,6 +332,16 @@
                     next.showUserMenu = false;
                     next.assignmentsUnlocked = false;
                     next.showAssignmentsPasswordModal = false;
+                }
+                if (next.view === 'operator' && activeSession && activeSession.role !== 'admin') {
+                    if (isUserBlocked(activeSession)) {
+                        next.view = 'home';
+                        next.showUserMenu = false;
+                        next.assignmentsUnlocked = false;
+                        next.showAssignmentsPasswordModal = false;
+                    } else if (next.assignmentsUnlocked && !userHasAssignmentsAuthorization(activeSession)) {
+                        next.assignmentsUnlocked = false;
+                    }
                 }
                 const currentKey = latestNavigationSnapshotRef.current ? stringifyNavigationSnapshot(latestNavigationSnapshotRef.current) : '';
                 const nextKey = stringifyNavigationSnapshot(next);
@@ -648,6 +663,90 @@
 
             const getSessionUserId = () => sessionUser?.uid || sessionUser?.id || '';
             const normalizeOwnerValue = (value) => String(value || '').trim();
+            const getUserProfileId = (user = {}) => normalizeOwnerValue(user.uid || user.id);
+            const getUserProfileEmail = (user = {}) => String(user.email || '').trim().toLowerCase();
+            const findRegisteredUserProfile = (target = sessionUser) => {
+                const targetId = getUserProfileId(target || {});
+                const targetEmail = getUserProfileEmail(target || {});
+                return users.find(user => {
+                    const userId = getUserProfileId(user);
+                    const userEmail = getUserProfileEmail(user);
+                    return (targetId && userId && userId === targetId) || (targetEmail && userEmail && userEmail === targetEmail);
+                }) || null;
+            };
+            const isUserBlocked = (user = {}) => {
+                const status = String(user.accountStatus || '').toLowerCase();
+                return Boolean(user.blocked === true || user.isBlocked === true || user.active === false || status.includes('bloqueado') || status.includes('inactivo'));
+            };
+            const getCurrentSessionProfile = () => findRegisteredUserProfile(sessionUser) || sessionUser || {};
+            const showBlockedAccountMessage = () => alert(BLOCKED_ACCOUNT_MESSAGE);
+            const ensureAccountAllowed = () => {
+                if (!sessionUser || sessionUser.role === 'admin') return true;
+                if (isUserBlocked(getCurrentSessionProfile())) {
+                    showBlockedAccountMessage();
+                    return false;
+                }
+                return true;
+            };
+            const getAssignmentsAuthorizationStorageKey = (userId = getSessionUserId()) => {
+                const safeId = normalizeOwnerValue(userId).replace(/[^a-zA-Z0-9_-]/g, '_');
+                return safeId ? `${ASSIGNMENTS_AUTH_LOCAL_PREFIX}_${safeId}` : '';
+            };
+            const readAssignmentsAuthorization = (userId = getSessionUserId()) => {
+                const key = getAssignmentsAuthorizationStorageKey(userId);
+                if (!key) return false;
+                try {
+                    const data = JSON.parse(localStorage.getItem(key) || '{}');
+                    return data?.authorized === true;
+                } catch(e) {
+                    return false;
+                }
+            };
+            const writeAssignmentsAuthorization = (userId = getSessionUserId(), authorizedAt = Date.now()) => {
+                const key = getAssignmentsAuthorizationStorageKey(userId);
+                if (!key) return;
+                try {
+                    localStorage.setItem(key, JSON.stringify({
+                        authorized: true,
+                        userId: normalizeOwnerValue(userId),
+                        authorizedAt,
+                        updatedAt: Date.now()
+                    }));
+                } catch(e) {}
+            };
+            const userHasAssignmentsAuthorization = (user = sessionUser) => {
+                const userId = getUserProfileId(user || {}) || getSessionUserId();
+                return Boolean(
+                    user?.assignmentsAuthorized === true ||
+                    user?.assignmentsAccessAuthorized === true ||
+                    user?.misAsignacionesAutorizadas === true ||
+                    readAssignmentsAuthorization(userId)
+                );
+            };
+            const persistAssignmentsAuthorization = async () => {
+                const userId = getSessionUserId();
+                if (!userId || !sessionUser) return false;
+                const now = Date.now();
+                const baseProfile = getCurrentSessionProfile();
+                const authorizedAt = baseProfile.assignmentsAuthorizedAt || now;
+                const next = {
+                    ...baseProfile,
+                    uid: baseProfile.uid || userId,
+                    email: baseProfile.email || sessionUser.email || '',
+                    assignmentsAuthorized: true,
+                    assignmentsAuthorizedAt: authorizedAt,
+                    assignmentsAuthorizationUpdatedAt: now,
+                    updatedAt: now,
+                    updatedBy: ADMIN_EMAIL
+                };
+                delete next.assignmentsPassword;
+                delete next.masterPassword;
+                writeAssignmentsAuthorization(userId, authorizedAt);
+                await saveDoc(STAFF_USERS_COLLECTION, userId, next);
+                sessionUserRef.current = { ...(sessionUser || {}), ...next, id: userId };
+                setSessionUser(prev => ({ ...(prev || {}), ...next, id: userId }));
+                return true;
+            };
             const getProductOwnerId = (product = {}) => product.ownerId || product.sellerId || product.userId || product.createdByUid || '';
             const getProductPublicationType = (product = {}) => String(product.publicationType || product.productOrigin || product.sourcePanel || product.createdFromPanel || '').toLowerCase().trim();
             const isUserPanelPublication = (product = {}) => {
@@ -661,6 +760,7 @@
             };
             const isProductOwnedBySessionUser = (product = {}) => isUserPanelPublication(product) && normalizeOwnerValue(getProductOwnerId(product)) === normalizeOwnerValue(getSessionUserId());
             const getSessionOwnedProductsList = () => {
+                if (sessionUser && sessionUser.role !== 'admin' && isUserBlocked(getCurrentSessionProfile())) return [];
                 const byId = new Map();
                 userPanelProducts.forEach(product => {
                     if (!product?.id) return;
@@ -886,6 +986,10 @@
             };
 
             const handleUserProductImagesSelect = (e) => {
+                if (!ensureAccountAllowed()) {
+                    e.target.value = '';
+                    return;
+                }
                 const files = Array.from(e.target.files || []).filter(file => file.type.startsWith('image/'));
                 if (files.length === 0) return;
                 const currentCount = (userProductForm.images || []).length + userProductImageFiles.length;
@@ -902,10 +1006,12 @@
             };
 
             const removeExistingUserProductImage = (index) => {
+                if (!ensureAccountAllowed()) return;
                 setUserProductForm(prev => ({ ...prev, images: (prev.images || []).filter((_, i) => i !== index) }));
             };
 
             const removeNewUserProductImage = (index) => {
+                if (!ensureAccountAllowed()) return;
                 setUserProductImageFiles(prev => {
                     const item = prev[index];
                     if (item?.preview) { try { URL.revokeObjectURL(item.preview); } catch(e) {} }
@@ -916,6 +1022,7 @@
             const replaceExistingUserProductImage = async (index, e) => {
                 const file = e.target.files?.[0];
                 e.target.value = '';
+                if (!ensureAccountAllowed()) return;
                 if (!file) return;
                 if (!file.type.startsWith('image/')) {
                     alert('Selecciona un archivo de imagen válido.');
@@ -953,6 +1060,7 @@
 
             const handleUserProductSubmit = async (e) => {
                 e.preventDefault();
+                if (!ensureAccountAllowed()) return;
                 const ownerId = getSessionUserId();
                 if (!ownerId) { alert('Inicia sesión para administrar tus publicaciones.'); return; }
                 const safeOwnerId = getSafeSessionUserId() || `usuario_${Date.now()}`;
@@ -1007,6 +1115,7 @@
             };
 
             const editUserProduct = (product) => {
+                if (!ensureAccountAllowed()) return;
                 if (!isProductOwnedBySessionUser(product)) {
                     alert('Solo puedes editar tus propias publicaciones.');
                     return;
@@ -1030,6 +1139,7 @@
             };
 
             const toggleUserProduct = async (product) => {
+                if (!ensureAccountAllowed()) return;
                 if (!isProductOwnedBySessionUser(product)) { alert('Solo puedes administrar tus propias publicaciones.'); return; }
                 const next = { ...product, active: product.active === false, updatedAt: Date.now(), updatedBy: sessionUser?.email || '' };
                 await saveDoc(PUBLIC_PRODUCTS_COLLECTION, product.id, next);
@@ -1037,6 +1147,7 @@
             };
 
             const deleteUserProduct = async (product) => {
+                if (!ensureAccountAllowed()) return;
                 if (!product?.id || !isProductOwnedBySessionUser(product)) { alert('Solo puedes eliminar tus propias publicaciones.'); return; }
                 if (!confirm('¿Eliminar esta publicación?')) return;
                 setProducts(prev => { const next = prev.filter(x => x.id !== product.id); writeLocal('driveMxProducts', next); return next; });
@@ -1273,6 +1384,7 @@
                         name: 'Admin Central',
                         role: 'admin',
                         active: true,
+                        blocked: false,
                         createdAt: Date.now(),
                         updatedAt: Date.now()
                     };
@@ -1289,16 +1401,24 @@
                     const auth = fbase.getAuth();
                     const credential = await fbase.signInWithEmailAndPassword(auth, loginForm.email.trim(), loginForm.p);
                     const profile = await getStaffProfile(credential.user);
-                    if (!profile || profile.active === false) {
+                    if (!profile) {
                         await fbase.signOut(auth);
                         await fbase.signInAnonymously(auth).catch(() => {});
                         setLoginForm({ email: '', p: '' });
                         alert('Tu cuenta no tiene acceso activo al panel.');
                         return;
                     }
+                    if (profile.role !== 'admin' && isUserBlocked(profile)) {
+                        await fbase.signOut(auth);
+                        await fbase.signInAnonymously(auth).catch(() => {});
+                        setLoginForm({ email: '', p: '' });
+                        alert(BLOCKED_ACCOUNT_MESSAGE);
+                        return;
+                    }
+                    const assignmentsAuthorized = profile.role !== 'admin' && userHasAssignmentsAuthorization(profile);
                     sessionUserRef.current = profile;
                     setSessionUser(profile);
-                    setAssignmentsUnlocked(false);
+                    setAssignmentsUnlocked(assignmentsAuthorized);
                     setShowUserMenu(false);
                     setShowAssignmentsPasswordModal(false);
                     setAssignmentsPassword('');
@@ -1315,6 +1435,7 @@
             const handleLogout = async () => {
                 const auth = fbase.getAuth();
                 sessionUserRef.current = null;
+                blockedAccountHandledRef.current = false;
                 setSessionUser(null);
                 setLoginForm({ email: '', p: '' });
                 setUserForm({ email: '', p: '', n: '', phone: '' });
@@ -1338,6 +1459,48 @@
                 }
             };
 
+            useEffect(() => {
+                if (!sessionUser || sessionUser.role === 'admin') return;
+                const profile = findRegisteredUserProfile(sessionUser);
+                if (!profile) return;
+
+                if (isUserBlocked(profile)) {
+                    if (!blockedAccountHandledRef.current) {
+                        blockedAccountHandledRef.current = true;
+                        alert(BLOCKED_ACCOUNT_MESSAGE);
+                    }
+                    handleLogout();
+                    return;
+                }
+
+                blockedAccountHandledRef.current = false;
+                const mergedProfile = {
+                    ...(sessionUser || {}),
+                    ...profile,
+                    id: profile.id || profile.uid || sessionUser.id,
+                    uid: profile.uid || profile.id || sessionUser.uid
+                };
+                sessionUserRef.current = mergedProfile;
+                setSessionUser(prev => {
+                    const previousKey = JSON.stringify({
+                        saleNotificationEmail: prev?.saleNotificationEmail || '',
+                        assignmentsAuthorized: prev?.assignmentsAuthorized === true,
+                        accountStatus: prev?.accountStatus || '',
+                        active: prev?.active !== false,
+                        blocked: prev?.blocked === true
+                    });
+                    const nextKey = JSON.stringify({
+                        saleNotificationEmail: mergedProfile.saleNotificationEmail || '',
+                        assignmentsAuthorized: mergedProfile.assignmentsAuthorized === true,
+                        accountStatus: mergedProfile.accountStatus || '',
+                        active: mergedProfile.active !== false,
+                        blocked: mergedProfile.blocked === true
+                    });
+                    return previousKey === nextKey ? prev : mergedProfile;
+                });
+                if (userHasAssignmentsAuthorization(mergedProfile)) setAssignmentsUnlocked(true);
+            }, [users, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role]);
+
             const registerUser = async (e) => {
                 e.preventDefault();
                 if (!userForm.email.trim() || !userForm.p || !userForm.n.trim() || !userForm.phone.trim()) return;
@@ -1353,7 +1516,9 @@
                         saleNotificationEmail: credential.user.email,
                         role: 'usuario',
                         active: true,
+                        blocked: false,
                         accountStatus: 'Activo',
+                        assignmentsAuthorized: false,
                         createdAt: now,
                         updatedAt: now
                     };
@@ -1366,6 +1531,34 @@
                     console.error('Crear usuario Firebase Auth:', err);
                     alert('No se pudo crear el usuario. Revisa que el correo sea válido y que la contraseña tenga mínimo 6 caracteres.');
                 }
+            };
+
+            const toggleUserBlocked = async (user) => {
+                if (!user?.id) return;
+                if (user.role === 'admin') {
+                    alert('No se puede bloquear al administrador central.');
+                    return;
+                }
+                const currentlyBlocked = isUserBlocked(user);
+                const nextBlocked = !currentlyBlocked;
+                const actionLabel = nextBlocked ? 'bloquear' : 'desbloquear';
+                if (!confirm(`¿Deseas ${actionLabel} a ${user.name || user.email || 'este usuario'}?`)) return;
+                const now = Date.now();
+                const next = {
+                    ...user,
+                    uid: user.uid || user.id,
+                    active: !nextBlocked,
+                    blocked: nextBlocked,
+                    accountStatus: nextBlocked ? 'Bloqueado' : 'Activo',
+                    blockedAt: nextBlocked ? now : null,
+                    blockedBy: nextBlocked ? (sessionUser?.email || ADMIN_EMAIL) : '',
+                    unblockedAt: nextBlocked ? null : now,
+                    unblockedBy: nextBlocked ? '' : (sessionUser?.email || ADMIN_EMAIL),
+                    updatedAt: now,
+                    updatedBy: sessionUser?.email || ADMIN_EMAIL
+                };
+                await saveDoc(STAFF_USERS_COLLECTION, user.id, next);
+                alert(nextBlocked ? 'Usuario bloqueado correctamente.' : 'Usuario desbloqueado correctamente.');
             };
 
             const saveEmailSettings = async (e) => {
@@ -1396,6 +1589,7 @@
 
             const saveSaleNotificationEmail = async (e) => {
                 e.preventDefault();
+                if (!ensureAccountAllowed()) return;
                 const userId = getSessionUserId();
                 const email = saleNotificationEmail.trim();
                 if (!userId) { alert('Inicia sesión para guardar el correo de venta.'); return; }
@@ -1924,15 +2118,23 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             };
 
             const openAssignmentsAccess = () => {
+                if (!ensureAccountAllowed()) return;
                 setShowUserMenu(false);
                 setAssignmentsPassword('');
                 setAssignmentsPasswordError('');
-                if (assignmentsUnlocked) return;
+                if (assignmentsUnlocked || userHasAssignmentsAuthorization(getCurrentSessionProfile())) {
+                    setAssignmentsUnlocked(true);
+                    return;
+                }
                 setShowAssignmentsPasswordModal(true);
             };
 
             const validateAssignmentsPassword = async (e) => {
                 e.preventDefault();
+                if (!ensureAccountAllowed()) {
+                    setAssignmentsPassword('');
+                    return;
+                }
                 if (!assignmentsPassword) {
                     setAssignmentsPasswordError('Ingresa la contraseña maestra.');
                     return;
@@ -1943,6 +2145,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     const secondaryAuth = getSecondaryAuth();
                     await fbase.signInWithEmailAndPassword(secondaryAuth, ADMIN_EMAIL, assignmentsPassword);
                     await fbase.signOut(secondaryAuth).catch(() => {});
+                    await persistAssignmentsAuthorization();
                     setAssignmentsUnlocked(true);
                     setShowAssignmentsPasswordModal(false);
                     setAssignmentsPassword('');
@@ -1958,7 +2161,17 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 }
             };
 
+            const updateAssignedPackageStatus = async (pkg, status, currentStep) => {
+                if (!ensureAccountAllowed()) return;
+                if (!assignmentsUnlocked && !userHasAssignmentsAuthorization(getCurrentSessionProfile())) {
+                    alert('Valida primero la contraseña maestra para acceder a Mis Asignaciones.');
+                    return;
+                }
+                await saveDoc('packages', pkg.id, { ...pkg, status, currentStep });
+            };
+
             const sendSupportMessage = async (role = 'user') => {
+                if (sessionUser && sessionUser.role !== 'admin' && !ensureAccountAllowed()) return;
                 const text = supportInput.trim();
                 if (!text) return;
                 let chat = role === 'admin' ? adminSelectedSupportChat : activeSupportChat;
@@ -2581,7 +2794,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                             <th className="px-6 py-3">Estado</th>
                                                             <th className="px-6 py-3">Datos del pedido</th>
                                                             <th className="px-6 py-3">Guía del producto</th>
-                                                            <th className="px-6 py-3 text-right">Acción</th>
+                                                            <th className="px-6 py-3 text-right">Acciones</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-slate-50">
@@ -2773,7 +2986,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                         <th className="px-6 py-3">Correo electrónico</th>
                                                         <th className="px-6 py-3">Teléfono</th>
                                                         <th className="px-6 py-3">Estado</th>
-                                                        <th className="px-6 py-3 text-right">Acción</th>
+                                                        <th className="px-6 py-3 text-right">Acciones</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-slate-50">
@@ -2782,8 +2995,16 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                             <td className="px-6 py-4">{o.name}</td>
                                                             <td className="px-6 py-4 font-mono text-slate-400">{o.email}</td>
                                                             <td className="px-6 py-4 font-mono text-slate-400">{o.phone || '-'}</td>
-                                                            <td className="px-6 py-4"><span className={`px-2 py-1 rounded-full text-[8px] uppercase ${o.active !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400'}`}>{o.accountStatus || (o.active !== false ? 'Activo' : 'Inactivo')}</span></td>
-                                                            <td className="px-6 py-4 text-right"><button onClick={() => deleteUser(o.id)} className="text-slate-300 hover:text-red-500"><Icons.Trash /></button></td>
+                                                            <td className="px-6 py-4"><span className={`px-2 py-1 rounded-full text-[8px] uppercase ${isUserBlocked(o) ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>{isUserBlocked(o) ? 'Bloqueado' : (o.accountStatus || 'Activo')}</span></td>
+                                                            <td className="px-6 py-4 text-right">
+                                                                <div className="flex justify-end gap-2 flex-wrap">
+                                                                    <button type="button" onClick={() => toggleUserBlocked(o)} title={isUserBlocked(o) ? 'Desbloquear usuario' : 'Bloquear usuario'} className={`px-3 py-2 rounded-xl text-[8px] font-black uppercase inline-flex items-center gap-1 ${isUserBlocked(o) ? 'bg-green-50 text-green-600 hover:bg-green-100' : 'bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-600'}`}>
+                                                                        {isUserBlocked(o) ? <Icons.Unlock size={12} /> : <Icons.Lock size={12} />}
+                                                                        {isUserBlocked(o) ? 'Desbloquear' : 'Bloquear Usuario'}
+                                                                    </button>
+                                                                    <button onClick={() => deleteUser(o.id)} className="text-slate-300 hover:text-red-500"><Icons.Trash /></button>
+                                                                </div>
+                                                            </td>
                                                         </tr>
                                                     ))}
                                                 </tbody>
@@ -2912,7 +3133,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         </button>
                                         {showUserMenu && (
                                             <div className="absolute right-0 top-14 w-56 bg-white border border-slate-100 rounded-2xl shadow-xl p-2 z-50 animate-slide">
-                                                <button type="button" onClick={() => { setShowUserMenu(false); document.getElementById('user-products-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Administración de Productos</button>
+                                                <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-products-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Administración de Productos</button>
                                                 <button type="button" onClick={openAssignmentsAccess} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Mis Asignaciones</button>
                                             </div>
                                         )}
@@ -2930,7 +3151,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                     <div className="flex justify-between items-center"><h3 className="text-xl font-black text-red-600">#{p.id}</h3><span className="text-[9px] font-black uppercase text-slate-400">{p.o} → {p.d}</span></div>
                                                     <div className="grid grid-cols-2 gap-2">
                                                         {STEPS.map((s, i) => (
-                                                            <button key={s} onClick={() => saveDoc('packages', p.id, { ...p, status: s, currentStep: i })} className={`p-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${p.status === s ? 'bg-red-500 border-red-500 text-white shadow-lg' : 'border-slate-100 text-slate-400'}`}>{s}</button>
+                                                            <button key={s} onClick={() => updateAssignedPackageStatus(p, s, i)} className={`p-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${p.status === s ? 'bg-red-500 border-red-500 text-white shadow-lg' : 'border-slate-100 text-slate-400'}`}>{s}</button>
                                                         ))}
                                                     </div>
                                                 </div>
@@ -2970,7 +3191,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
                             <div className="card-glass max-w-sm w-full p-10 animate-slide">
                                 <h2 className="text-sm font-black text-center uppercase mb-2">Acceso Protegido</h2>
-                                <p className="text-[10px] font-bold text-slate-400 uppercase text-center mb-8 leading-relaxed">Ingresa la contraseña maestra del administrador central para abrir Mis Asignaciones.</p>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase text-center mb-8 leading-relaxed">Ingresa la contraseña maestra del administrador central para abrir Mis Asignaciones. Al validarse, solo se guarda la autorización del usuario; la contraseña no se almacena.</p>
                                 <form onSubmit={validateAssignmentsPassword} className="space-y-4">
                                     <input required autoFocus type="password" className="input-field" placeholder="CONTRASEÑA MAESTRA" value={assignmentsPassword} onChange={e => { setAssignmentsPassword(e.target.value); setAssignmentsPasswordError(''); }} />
                                     {assignmentsPasswordError && <p className="text-center text-[10px] font-black text-red-500 uppercase tracking-widest">{assignmentsPasswordError}</p>}
@@ -3004,6 +3225,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
