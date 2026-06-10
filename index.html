@@ -67,6 +67,7 @@
         const PUBLIC_PRODUCTS_COLLECTION = 'products';
         const ADMIN_PRODUCTS_COLLECTION = 'admin_products';
         const USER_PRODUCTS_COLLECTION = 'user_products';
+        const USER_SALES_COLLECTION = 'user_sales';
         const PRODUCT_ORIGIN_CONTROL = 'panel_control';
         const PRODUCT_ORIGIN_USER = 'usuario';
         const STAFF_USERS_LOCAL_KEY = 'driveMxOperators';
@@ -77,7 +78,9 @@
         const CART_SESSION_KEY = 'driveMxVisitorCartSessionId';
         const SALE_NOTIFICATION_MESSAGE = 'Tu producto ha sido vendido. Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.';
         const BLOCKED_ACCOUNT_MESSAGE = 'La cuenta ha sido bloqueada por el administrador.';
+        const DELETED_ACCOUNT_MESSAGE = 'La cuenta ha sido eliminada por el administrador.';
         const ASSIGNMENTS_AUTH_LOCAL_PREFIX = 'driveMxAssignmentsAuthorization';
+        const getSafeFirestoreDocId = (value = '') => String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
         const createVisitorCartSessionId = () => `${Date.now()}_${Math.random().toString(36).slice(2)}`;
         const getVisitorCartStorageKey = () => {
             try {
@@ -192,9 +195,11 @@
             const [sessionUser, setSessionUser] = useState(null);
             const [pkgs, setPkgs] = useState(() => readLocal('driveMxPackages'));
             const [users, setUsers] = useState(() => readLocal(STAFF_USERS_LOCAL_KEY));
+            const [staffUsersLoaded, setStaffUsersLoaded] = useState(false);
             const [products, setProducts] = useState(() => readLocal('driveMxProducts'));
             const [adminProducts, setAdminProducts] = useState(() => readLocal(ADMIN_PRODUCTS_LOCAL_KEY));
             const [userPanelProducts, setUserPanelProducts] = useState([]);
+            const [userCompletedSales, setUserCompletedSales] = useState([]);
             const [searchQuery, setSearchQuery] = useState('');
             const [trackingResult, setTrackingResult] = useState(null);
             const [trackingNotFound, setTrackingNotFound] = useState(false);
@@ -217,7 +222,7 @@
             const [emailSettings, setEmailSettings] = useState(() => { try { return JSON.parse(localStorage.getItem('driveMxEmailSettings') || '{\"senderEmail\":\"\",\"appPassword\":\"\",\"receiverEmail\":\"\"}'); } catch(e) { return { senderEmail: '', appPassword: '', receiverEmail: '' }; } });
             const [paymentSettings, setPaymentSettings] = useState(() => { try { return JSON.parse(localStorage.getItem('driveMxPaymentSettings') || '{\"bankAccount\":\"\",\"paypalClientId\":\"\",\"paypalClientSecret\":\"\"}'); } catch(e) { return { bankAccount: '', paypalClientId: '', paypalClientSecret: '' }; } });
             const [pendingTransfers, setPendingTransfers] = useState(() => readLocal('driveMxPendingTransfers'));
-            const [completedSales, setCompletedSales] = useState(() => readLocal('driveMxCompletedSales'));
+            const [completedSales, setCompletedSales] = useState([]);
             const [transferTrackingDrafts, setTransferTrackingDrafts] = useState({});
             const [emailSaving, setEmailSaving] = useState(false);
             const [paymentSaving, setPaymentSaving] = useState(false);
@@ -528,6 +533,7 @@
                 const unsubUsers = fbase.onSnapshot(userCol, (s) => {
                     const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
                     setUsers(l);
+                    setStaffUsersLoaded(true);
                     writeLocal(STAFF_USERS_LOCAL_KEY, l);
                 }, (err) => { console.error('Firestore usuarios:', err); });
 
@@ -551,12 +557,18 @@
                     writeLocal('driveMxPendingTransfers', l);
                 }, (err) => { console.error('Firestore transferencias:', err); });
 
-                const unsubCompletedSales = fbase.onSnapshot(completedSalesCol, (s) => {
-                    const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
-                    l.sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0));
-                    setCompletedSales(l);
-                    writeLocal('driveMxCompletedSales', l);
-                }, (err) => { console.error('Firestore ventas realizadas:', err); });
+                let unsubCompletedSales = () => {};
+                if (sessionUser?.role === 'admin') {
+                    setCompletedSales(readLocal('driveMxCompletedSales'));
+                    unsubCompletedSales = fbase.onSnapshot(completedSalesCol, (s) => {
+                        const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
+                        l.sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0));
+                        setCompletedSales(l);
+                        writeLocal('driveMxCompletedSales', l);
+                    }, (err) => { console.error('Firestore ventas realizadas:', err); });
+                } else {
+                    setCompletedSales([]);
+                }
 
                 const unsubMailSettings = fbase.onSnapshot(mailSettingsRef, (snap) => {
                     if (!snap.exists()) return;
@@ -590,14 +602,14 @@
                 }, (err) => { console.error('Firestore configuración pagos:', err); });
 
                 return () => { unsubPkgs(); unsubUsers(); unsubProducts(); unsubAdminProducts(); unsubTransfers(); unsubCompletedSales(); unsubSupportChats(); unsubMailSettings(); unsubPaymentSettings(); };
-            }, [fbUser]);
+            }, [fbUser, sessionUser?.role]);
 
             useEffect(() => {
                 if (!fbUser || !sessionUser || sessionUser.role === 'admin') {
                     setUserPanelProducts([]);
                     return;
                 }
-                const userDocId = String(sessionUser.uid || sessionUser.id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+                const userDocId = getSafeFirestoreDocId(sessionUser.uid || sessionUser.id);
                 if (!userDocId) {
                     setUserPanelProducts([]);
                     return;
@@ -614,6 +626,41 @@
                 }, (err) => { console.error('Firestore productos Panel de Usuario:', err); });
                 return () => unsubUserProducts();
             }, [fbUser, sessionUser?.uid, sessionUser?.id, sessionUser?.role]);
+
+            useEffect(() => {
+                if (!fbUser || !sessionUser || sessionUser.role === 'admin') {
+                    setUserCompletedSales([]);
+                    return;
+                }
+                const userDocId = getSafeFirestoreDocId(sessionUser.uid || sessionUser.id);
+                if (!userDocId) {
+                    setUserCompletedSales([]);
+                    return;
+                }
+                const localKey = `driveMxUserCompletedSales_${userDocId}`;
+                const sessionEmail = String(sessionUser.email || '').trim().toLowerCase();
+                const localSales = readLocal(localKey).filter(sale => {
+                    const saleSellerId = getSafeFirestoreDocId(sale.sellerId || sale.ownerId || sale.userId);
+                    const saleSellerEmail = String(sale.sellerEmail || sale.ownerEmail || '').trim().toLowerCase();
+                    return saleSellerId === userDocId || (sessionEmail && saleSellerEmail === sessionEmail);
+                });
+                setUserCompletedSales(localSales);
+                const db = fbase.getFirestore();
+                const userSalesCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', USER_SALES_COLLECTION, userDocId, 'items');
+                const unsubUserSales = fbase.onSnapshot(userSalesCol, (s) => {
+                    const l = [];
+                    s.forEach(d => {
+                        const data = { id: d.id, ...d.data() };
+                        const saleSellerId = getSafeFirestoreDocId(data.sellerId || data.ownerId || data.userId);
+                        const saleSellerEmail = String(data.sellerEmail || data.ownerEmail || '').trim().toLowerCase();
+                        if (saleSellerId === userDocId || (sessionEmail && saleSellerEmail === sessionEmail)) l.push(data);
+                    });
+                    l.sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0));
+                    setUserCompletedSales(l);
+                    writeLocal(localKey, l);
+                }, (err) => { console.error('Firestore ventas realizadas Panel de Usuario:', err); });
+                return () => unsubUserSales();
+            }, [fbUser, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role]);
 
             const saveDoc = async (col, id, data) => {
                 if (col === 'packages') {
@@ -653,18 +700,153 @@
                 } catch(err) { console.error('Firestore borrar paquete:', err); }
             };
 
-            const deleteUser = async (id) => {
-                setUsers(prev => { const next = prev.filter(x => x.id !== id); writeLocal(STAFF_USERS_LOCAL_KEY, next); return next; });
-                try {
-                    const db = fbase.getFirestore();
-                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, id));
-                } catch(err) { console.error('Firestore borrar usuario:', err); }
-            };
-
             const getSessionUserId = () => sessionUser?.uid || sessionUser?.id || '';
             const normalizeOwnerValue = (value) => String(value || '').trim();
             const getUserProfileId = (user = {}) => normalizeOwnerValue(user.uid || user.id);
             const getUserProfileEmail = (user = {}) => String(user.email || '').trim().toLowerCase();
+            const getSaleRecordId = (sale = {}) => normalizeOwnerValue(sale.id || sale.saleId);
+            const getSaleOwnerId = (sale = {}) => normalizeOwnerValue(sale.sellerId || sale.ownerId || sale.userId);
+            const getSaleOwnerEmail = (sale = {}) => String(sale.sellerEmail || sale.ownerEmail || sale.userEmail || '').trim().toLowerCase();
+            const isSaleOwnedByUser = (sale = {}, user = sessionUser) => {
+                const saleOwnerId = getSaleOwnerId(sale);
+                const saleOwnerEmail = getSaleOwnerEmail(sale);
+                const userId = getUserProfileId(user || {});
+                const userEmail = getUserProfileEmail(user || {});
+                return Boolean((saleOwnerId && userId && saleOwnerId === userId) || (saleOwnerEmail && userEmail && saleOwnerEmail === userEmail));
+            };
+            const isProductOwnedByUserProfile = (product = {}, user = {}) => {
+                const ownerId = normalizeOwnerValue(getProductOwnerId(product));
+                const ownerEmail = String(product.ownerEmail || product.sellerEmail || '').trim().toLowerCase();
+                const userId = getUserProfileId(user);
+                const userEmail = getUserProfileEmail(user);
+                return Boolean((ownerId && userId && ownerId === userId) || (ownerEmail && userEmail && ownerEmail === userEmail));
+            };
+            const updateUserCompletedSalesLocal = (userDocId, updater) => {
+                if (!userDocId) return;
+                const localKey = `driveMxUserCompletedSales_${userDocId}`;
+                setUserCompletedSales(prev => {
+                    const next = updater(Array.isArray(prev) ? prev : []);
+                    writeLocal(localKey, next);
+                    return next;
+                });
+            };
+            const saveUserCompletedSaleMirror = async (sale = {}) => {
+                const saleId = getSaleRecordId(sale);
+                const ownerId = getSaleOwnerId(sale);
+                const userDocId = getSafeFirestoreDocId(ownerId);
+                if (!saleId || !userDocId) return;
+                const normalizedSale = {
+                    ...sale,
+                    id: saleId,
+                    saleId: sale.saleId || saleId,
+                    sellerId: ownerId,
+                    visibleToUserId: ownerId,
+                    updatedAt: sale.updatedAt || Date.now()
+                };
+                const currentUserDocId = getSafeFirestoreDocId(getSessionUserId());
+                if (currentUserDocId && currentUserDocId === userDocId && sessionUser?.role !== 'admin') {
+                    updateUserCompletedSalesLocal(userDocId, prev => [{ id: saleId, ...normalizedSale }, ...prev.filter(x => getSaleRecordId(x) !== saleId)].sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0)));
+                }
+                try {
+                    const db = fbase.getFirestore();
+                    await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_SALES_COLLECTION, userDocId, 'items', saleId), normalizedSale);
+                } catch(err) { console.error('Firestore espejo venta usuario:', err); }
+            };
+            const deleteUserCompletedSaleMirror = async (sale = {}) => {
+                const saleId = getSaleRecordId(sale);
+                const userDocId = getSafeFirestoreDocId(getSaleOwnerId(sale));
+                if (!saleId || !userDocId) return;
+                const currentUserDocId = getSafeFirestoreDocId(getSessionUserId());
+                if (currentUserDocId && currentUserDocId === userDocId && sessionUser?.role !== 'admin') {
+                    updateUserCompletedSalesLocal(userDocId, prev => prev.filter(x => getSaleRecordId(x) !== saleId));
+                }
+                try {
+                    const db = fbase.getFirestore();
+                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_SALES_COLLECTION, userDocId, 'items', saleId));
+                } catch(err) { console.error('Firestore borrar espejo venta usuario:', err); }
+            };
+            const deleteCompletedSale = async (sale) => {
+                const saleId = getSaleRecordId(sale);
+                if (!saleId) return;
+                if (!confirm('¿Eliminar este registro de Ventas Realizadas? Solo se eliminará el registro de venta.')) return;
+                setCompletedSales(prev => { const next = prev.filter(x => getSaleRecordId(x) !== saleId); writeLocal('driveMxCompletedSales', next); return next; });
+                try {
+                    const db = fbase.getFirestore();
+                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'completed_sales', saleId));
+                    await deleteUserCompletedSaleMirror(sale);
+                } catch(err) {
+                    console.error('Firestore borrar venta realizada:', err);
+                    alert('No se pudo eliminar la venta realizada en Firestore.');
+                }
+            };
+            const deleteUser = async (userOrId) => {
+                const targetUser = typeof userOrId === 'object' && userOrId ? userOrId : (users.find(u => (u.id || u.uid) === userOrId) || { id: userOrId });
+                const targetId = getUserProfileId(targetUser);
+                const targetEmail = getUserProfileEmail(targetUser);
+                if (!targetId) return;
+                if (targetUser.role === 'admin' || targetEmail === ADMIN_EMAIL.toLowerCase()) {
+                    alert('No se puede eliminar al administrador central.');
+                    return;
+                }
+                const label = targetUser.name || targetUser.email || targetId;
+                if (!confirm(`¿Eliminar Usuario ${label}? Se eliminará su cuenta de Authentication y sus datos asociados en Firestore.`)) return;
+
+                const removedUserIds = new Set([targetId, getSafeFirestoreDocId(targetId)].filter(Boolean));
+                const matchesTargetProduct = (product = {}) => isProductOwnedByUserProfile(product, targetUser);
+                const matchesTargetSale = (sale = {}) => isSaleOwnedByUser(sale, targetUser);
+                const matchesTargetSupportChat = (chat = {}) => {
+                    const chatUserId = normalizeOwnerValue(chat.userId || chat.uid || chat.ownerId);
+                    const chatEmail = String(chat.userEmail || chat.email || '').trim().toLowerCase();
+                    return Boolean((chatUserId && removedUserIds.has(chatUserId)) || (chatEmail && targetEmail && chatEmail === targetEmail));
+                };
+                const productIdsToDelete = products.filter(matchesTargetProduct).map(product => product.id).filter(Boolean);
+                const salesToDelete = completedSales.filter(matchesTargetSale);
+                const supportChatsToDelete = supportChats.filter(matchesTargetSupportChat);
+
+                setUsers(prev => { const next = prev.filter(x => getUserProfileId(x) !== targetId && getUserProfileEmail(x) !== targetEmail); writeLocal(STAFF_USERS_LOCAL_KEY, next); return next; });
+                setProducts(prev => { const next = prev.filter(product => !matchesTargetProduct(product)); writeLocal('driveMxProducts', next); return next; });
+                setCompletedSales(prev => { const next = prev.filter(sale => !matchesTargetSale(sale)); writeLocal('driveMxCompletedSales', next); return next; });
+                setSupportChats(prev => { const next = prev.filter(chat => !matchesTargetSupportChat(chat)); writeLocal('driveMxSupportChats', next); return next; });
+                if (activeSupportChatId && supportChatsToDelete.some(chat => (chat.id || chat.chatId) === activeSupportChatId)) setActiveSupportChatId('');
+
+                try {
+                    const auth = fbase.getAuth();
+                    const adminToken = await auth.currentUser?.getIdToken?.(true);
+                    if (!adminToken) throw new Error('No se pudo validar la sesión del administrador.');
+
+                    const db = fbase.getFirestore();
+                    const clientDeletes = [
+                        fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, targetId)),
+                        ...productIdsToDelete.map(productId => fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', PUBLIC_PRODUCTS_COLLECTION, productId))),
+                        ...salesToDelete.map(sale => {
+                            const saleId = getSaleRecordId(sale);
+                            return saleId ? fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'completed_sales', saleId)) : Promise.resolve();
+                        }),
+                        ...salesToDelete.map(sale => {
+                            const userDocId = getSafeFirestoreDocId(getSaleOwnerId(sale));
+                            const saleId = getSaleRecordId(sale);
+                            return userDocId && saleId ? fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_SALES_COLLECTION, userDocId, 'items', saleId)) : Promise.resolve();
+                        }),
+                        ...supportChatsToDelete.map(chat => {
+                            const chatId = chat.id || chat.chatId;
+                            return chatId ? fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'support_chats', chatId)) : Promise.resolve();
+                        })
+                    ];
+                    await Promise.allSettled(clientDeletes);
+
+                    const res = await fetch('/api/delete-user', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
+                        body: JSON.stringify({ uid: targetId, email: targetEmail })
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || !data.success) throw new Error(data.error || 'No se pudo eliminar la cuenta de Authentication.');
+                    alert('Usuario eliminado correctamente.');
+                } catch(err) {
+                    console.error('Eliminar usuario:', err);
+                    alert(`No se pudo completar la eliminación del usuario: ${err.message || err}`);
+                }
+            };
             const findRegisteredUserProfile = (target = sessionUser) => {
                 const targetId = getUserProfileId(target || {});
                 const targetEmail = getUserProfileEmail(target || {});
@@ -784,7 +966,7 @@
                 };
             };
 
-            const getSafeSessionUserId = () => normalizeOwnerValue(getSessionUserId()).replace(/[^a-zA-Z0-9_-]/g, '_');
+            const getSafeSessionUserId = () => getSafeFirestoreDocId(getSessionUserId());
 
             const saveUserProductMirror = async (product) => {
                 const userDocId = getSafeSessionUserId();
@@ -1166,6 +1348,9 @@
                 return Array.from(byId.values()).sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
             })();
             const currentUserProducts = getSessionOwnedProductsList().sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
+            const currentUserSales = userCompletedSales
+                .filter(sale => isSaleOwnedByUser(sale, sessionUser))
+                .sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0));
             const activeProducts = products.filter(p => p.active !== false);
             const findProductById = (productId) => products.find(p => String(p.id) === String(productId));
             const selectedProduct = findProductById(selectedProductId);
@@ -1449,6 +1634,7 @@
                 setSaleNotificationEmail('');
                 setSaleNotificationSaving(false);
                 setUserPanelProducts([]);
+                setUserCompletedSales([]);
                 resetUserProductForm();
                 resetPublicFlow();
                 try {
@@ -1462,7 +1648,16 @@
             useEffect(() => {
                 if (!sessionUser || sessionUser.role === 'admin') return;
                 const profile = findRegisteredUserProfile(sessionUser);
-                if (!profile) return;
+                if (!profile) {
+                    if (staffUsersLoaded) {
+                        if (!blockedAccountHandledRef.current) {
+                            blockedAccountHandledRef.current = true;
+                            alert(DELETED_ACCOUNT_MESSAGE);
+                        }
+                        handleLogout();
+                    }
+                    return;
+                }
 
                 if (isUserBlocked(profile)) {
                     if (!blockedAccountHandledRef.current) {
@@ -1499,7 +1694,7 @@
                     return previousKey === nextKey ? prev : mergedProfile;
                 });
                 if (userHasAssignmentsAuthorization(mergedProfile)) setAssignmentsUnlocked(true);
-            }, [users, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role]);
+            }, [users, staffUsersLoaded, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role]);
 
             const registerUser = async (e) => {
                 e.preventDefault();
@@ -1787,7 +1982,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         updatedAt: Date.now()
                     };
                     await saveDoc('completed_sales', id, sale);
-                    savedSales.push(sale);
+                    await saveUserCompletedSaleMirror({ id, ...sale });
+                    savedSales.push({ id, ...sale });
                 }
 
                 return savedSales.length === 1 ? savedSales[0] : savedSales;
@@ -2230,6 +2426,36 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                             </div>
                             <button disabled={saleNotificationSaving} type="submit" className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{saleNotificationSaving ? 'Guardando...' : 'Guardar correo'}</button>
                         </form>
+                    </div>
+
+                    <div id="user-sales-section" className="card-glass overflow-hidden">
+                        <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
+                            <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Ventas Realizadas</h2>
+                            <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Historial individual de productos vendidos de este usuario</p>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left">
+                                <thead className="bg-white border-b border-slate-50">
+                                    <tr className="text-[8px] font-black uppercase text-slate-400">
+                                        <th className="px-6 py-3">Nombre del producto</th>
+                                        <th className="px-6 py-3">Precio del producto</th>
+                                        <th className="px-6 py-3">Fecha de venta</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-50">
+                                    {currentUserSales.map(sale => (
+                                        <tr key={sale.id || sale.saleId} className="text-[10px] font-bold text-slate-600">
+                                            <td className="px-6 py-4 font-black text-slate-800">{sale.productName || sale.name || sale.productId || '-'}</td>
+                                            <td className="px-6 py-4 text-red-600 font-black">${Number(sale.productCost || sale.productPrice || sale.price || 0).toFixed(2)}</td>
+                                            <td className="px-6 py-4">{(sale.soldAt || sale.createdAt) ? new Date(sale.soldAt || sale.createdAt).toLocaleString('es-MX') : '-'}</td>
+                                        </tr>
+                                    ))}
+                                    {currentUserSales.length === 0 && (
+                                        <tr><td colSpan="3" className="px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase">Aún no tienes ventas realizadas registradas</td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
 
                     <div id="user-products-section" className="card-glass overflow-hidden">
@@ -2855,6 +3081,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                             <th className="px-6 py-3">Teléfono</th>
                                                             <th className="px-6 py-3">Costo vendido</th>
                                                             <th className="px-6 py-3">Fecha y hora</th>
+                                                            <th className="px-6 py-3 text-right">Acciones</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-slate-50">
@@ -2865,10 +3092,11 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                                 <td className="px-6 py-4 font-mono text-slate-400">{sale.sellerPhone || '-'}</td>
                                                                 <td className="px-6 py-4 text-red-600 font-black">${Number(sale.productCost || 0).toFixed(2)}</td>
                                                                 <td className="px-6 py-4">{sale.soldAt ? new Date(sale.soldAt).toLocaleString('es-MX') : '-'}</td>
+                                                                <td className="px-6 py-4 text-right"><button type="button" onClick={() => deleteCompletedSale(sale)} className="px-3 py-2 bg-red-50 text-red-500 hover:bg-red-500 hover:text-white rounded-xl text-[8px] font-black uppercase inline-flex items-center gap-1"><Icons.Trash size={11} /> Eliminar</button></td>
                                                             </tr>
                                                         ))}
                                                         {completedSales.length === 0 && (
-                                                            <tr><td colSpan="5" className="px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase">Aún no hay ventas realizadas registradas</td></tr>
+                                                            <tr><td colSpan="6" className="px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase">Aún no hay ventas realizadas registradas</td></tr>
                                                         )}
                                                     </tbody>
                                                 </table>
@@ -3002,7 +3230,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                                         {isUserBlocked(o) ? <Icons.Unlock size={12} /> : <Icons.Lock size={12} />}
                                                                         {isUserBlocked(o) ? 'Desbloquear' : 'Bloquear Usuario'}
                                                                     </button>
-                                                                    <button onClick={() => deleteUser(o.id)} className="text-slate-300 hover:text-red-500"><Icons.Trash /></button>
+                                                                    <button type="button" onClick={() => deleteUser(o)} className="px-3 py-2 bg-red-50 text-red-500 hover:bg-red-500 hover:text-white rounded-xl text-[8px] font-black uppercase inline-flex items-center gap-1"><Icons.Trash size={11} /> Eliminar Usuario</button>
                                                                 </div>
                                                             </td>
                                                         </tr>
@@ -3134,6 +3362,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         {showUserMenu && (
                                             <div className="absolute right-0 top-14 w-56 bg-white border border-slate-100 rounded-2xl shadow-xl p-2 z-50 animate-slide">
                                                 <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-products-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Administración de Productos</button>
+                                                <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-sales-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Ventas Realizadas</button>
                                                 <button type="button" onClick={openAssignmentsAccess} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Mis Asignaciones</button>
                                             </div>
                                         )}
@@ -3225,6 +3454,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
+                         
 
 
 
