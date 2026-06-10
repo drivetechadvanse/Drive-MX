@@ -44,7 +44,7 @@
     </script>
 
     <script type="text/babel" data-presets="react">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useRef, useCallback } = React;
         const fbase = window.FirebaseSDK;
         
         const Icons = {
@@ -151,8 +151,39 @@
             return legacyImage ? [legacyImage] : [];
         };
 
+        const DRIVE_MX_HISTORY_KEY = 'driveMxBackNavigation';
+        const VALID_APP_VIEWS = new Set(['home', 'product-detail', 'delivery-data', 'payment-method', 'login', 'admin', 'admin-tracking', 'support', 'admin-support', 'operator']);
+        const normalizeNavigationSnapshot = (snapshot = {}) => ({
+            view: VALID_APP_VIEWS.has(snapshot.view) ? snapshot.view : 'home',
+            selectedProductId: snapshot.selectedProductId ? String(snapshot.selectedProductId) : null,
+            checkoutProductIds: Array.isArray(snapshot.checkoutProductIds) ? snapshot.checkoutProductIds.filter(Boolean).map(id => String(id)).slice(0, CART_MAX_ITEMS) : [],
+            isCartOpen: Boolean(snapshot.isCartOpen),
+            showUserModal: Boolean(snapshot.showUserModal),
+            showAssignmentsPasswordModal: Boolean(snapshot.showAssignmentsPasswordModal),
+            showAdminMenu: Boolean(snapshot.showAdminMenu),
+            showUserMenu: Boolean(snapshot.showUserMenu),
+            assignmentsUnlocked: Boolean(snapshot.assignmentsUnlocked)
+        });
+        const stringifyNavigationSnapshot = (snapshot) => JSON.stringify(normalizeNavigationSnapshot(snapshot));
+        const createDriveMxHistoryState = (snapshot, exitBoundary = false) => ({
+            [DRIVE_MX_HISTORY_KEY]: true,
+            exitBoundary,
+            snapshot: normalizeNavigationSnapshot(snapshot),
+            createdAt: Date.now()
+        });
+        const isDriveMxMainSnapshot = (snapshot = {}) => {
+            const normalized = normalizeNavigationSnapshot(snapshot);
+            return normalized.view === 'home'
+                && !normalized.isCartOpen
+                && !normalized.showUserModal
+                && !normalized.showAssignmentsPasswordModal
+                && !normalized.showAdminMenu
+                && !normalized.showUserMenu;
+        };
+        const resolveStateValue = (nextValue, previousValue) => typeof nextValue === 'function' ? nextValue(previousValue) : nextValue;
+
         const App = () => {
-            const [view, setView] = useState('home');
+            const [view, setViewState] = useState('home');
             const [fbUser, setFbUser] = useState(null);
             const [sessionUser, setSessionUser] = useState(null);
             const [pkgs, setPkgs] = useState(() => readLocal('driveMxPackages'));
@@ -176,7 +207,7 @@
             const [selectedProductId, setSelectedProductId] = useState(null);
             const [currentImageIndex, setCurrentImageIndex] = useState(0);
             const [cartItems, setCartItems] = useState(() => readVisitorCart());
-            const [isCartOpen, setIsCartOpen] = useState(false);
+            const [isCartOpen, setIsCartOpenState] = useState(false);
             const [checkoutProductIds, setCheckoutProductIds] = useState([]);
             const [deliveryForm, setDeliveryForm] = useState({ street: '', state: '', municipality: '', neighborhood: '', zip: '', fullName: '', phone: '', email: '', references: '' });
             const [emailSettings, setEmailSettings] = useState(() => { try { return JSON.parse(localStorage.getItem('driveMxEmailSettings') || '{\"senderEmail\":\"\",\"appPassword\":\"\",\"receiverEmail\":\"\"}'); } catch(e) { return { senderEmail: '', appPassword: '', receiverEmail: '' }; } });
@@ -188,14 +219,14 @@
             const [paymentSaving, setPaymentSaving] = useState(false);
             const [orderSending, setOrderSending] = useState(false);
             const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('paypal');
-            const [showUserModal, setShowUserModal] = useState(false);
+            const [showUserModal, setShowUserModalState] = useState(false);
             const [supportChats, setSupportChats] = useState(() => readLocal('driveMxSupportChats'));
             const [supportInput, setSupportInput] = useState('');
             const [activeSupportChatId, setActiveSupportChatId] = useState('');
-            const [showAdminMenu, setShowAdminMenu] = useState(false);
-            const [showUserMenu, setShowUserMenu] = useState(false);
-            const [assignmentsUnlocked, setAssignmentsUnlocked] = useState(false);
-            const [showAssignmentsPasswordModal, setShowAssignmentsPasswordModal] = useState(false);
+            const [showAdminMenu, setShowAdminMenuState] = useState(false);
+            const [showUserMenu, setShowUserMenuState] = useState(false);
+            const [assignmentsUnlocked, setAssignmentsUnlockedState] = useState(false);
+            const [showAssignmentsPasswordModal, setShowAssignmentsPasswordModalState] = useState(false);
             const [assignmentsPassword, setAssignmentsPassword] = useState('');
             const [assignmentsPasswordError, setAssignmentsPasswordError] = useState('');
             const [assignmentsUnlocking, setAssignmentsUnlocking] = useState(false);
@@ -205,6 +236,227 @@
             const [userProductImageFiles, setUserProductImageFiles] = useState([]);
             const [userProductUploading, setUserProductUploading] = useState(false);
             const [editingUserProductId, setEditingUserProductId] = useState(null);
+
+            const latestNavigationSnapshotRef = useRef(null);
+            const sessionUserRef = useRef(null);
+            const historyInitializedRef = useRef(false);
+            const suppressHistorySyncRef = useRef(false);
+            const pendingHistoryModeRef = useRef(null);
+            const lastHistorySnapshotKeyRef = useRef('');
+            const allowNativeBackExitRef = useRef(false);
+
+            const getCurrentNavigationSnapshot = useCallback(() => normalizeNavigationSnapshot({
+                view,
+                selectedProductId,
+                checkoutProductIds,
+                isCartOpen,
+                showUserModal,
+                showAssignmentsPasswordModal,
+                showAdminMenu,
+                showUserMenu,
+                assignmentsUnlocked
+            }), [view, selectedProductId, checkoutProductIds, isCartOpen, showUserModal, showAssignmentsPasswordModal, showAdminMenu, showUserMenu, assignmentsUnlocked]);
+
+            const requestHistorySync = useCallback((mode = 'push') => {
+                if (suppressHistorySyncRef.current) return;
+                if (mode === 'push') {
+                    pendingHistoryModeRef.current = 'push';
+                    return;
+                }
+                if (!pendingHistoryModeRef.current) pendingHistoryModeRef.current = 'replace';
+            }, []);
+
+            const setView = useCallback((nextValue) => {
+                const previous = latestNavigationSnapshotRef.current?.view || view;
+                const resolved = resolveStateValue(nextValue, previous);
+                if (resolved !== previous) requestHistorySync('push');
+                setViewState(resolved);
+            }, [requestHistorySync, view]);
+
+            const setIsCartOpen = useCallback((nextValue) => {
+                const previous = Boolean(latestNavigationSnapshotRef.current?.isCartOpen ?? isCartOpen);
+                const resolved = Boolean(resolveStateValue(nextValue, previous));
+                if (resolved !== previous) requestHistorySync(resolved ? 'push' : 'replace');
+                setIsCartOpenState(resolved);
+            }, [requestHistorySync, isCartOpen]);
+
+            const setShowUserModal = useCallback((nextValue) => {
+                const previous = Boolean(latestNavigationSnapshotRef.current?.showUserModal ?? showUserModal);
+                const resolved = Boolean(resolveStateValue(nextValue, previous));
+                if (resolved !== previous) requestHistorySync(resolved ? 'push' : 'replace');
+                setShowUserModalState(resolved);
+            }, [requestHistorySync, showUserModal]);
+
+            const setShowAssignmentsPasswordModal = useCallback((nextValue) => {
+                const previous = Boolean(latestNavigationSnapshotRef.current?.showAssignmentsPasswordModal ?? showAssignmentsPasswordModal);
+                const resolved = Boolean(resolveStateValue(nextValue, previous));
+                if (resolved !== previous) requestHistorySync(resolved ? 'push' : 'replace');
+                setShowAssignmentsPasswordModalState(resolved);
+            }, [requestHistorySync, showAssignmentsPasswordModal]);
+
+            const setShowAdminMenu = useCallback((nextValue) => {
+                const previous = Boolean(latestNavigationSnapshotRef.current?.showAdminMenu ?? showAdminMenu);
+                const resolved = Boolean(resolveStateValue(nextValue, previous));
+                if (resolved !== previous) requestHistorySync(resolved ? 'push' : 'replace');
+                setShowAdminMenuState(resolved);
+            }, [requestHistorySync, showAdminMenu]);
+
+            const setShowUserMenu = useCallback((nextValue) => {
+                const previous = Boolean(latestNavigationSnapshotRef.current?.showUserMenu ?? showUserMenu);
+                const resolved = Boolean(resolveStateValue(nextValue, previous));
+                if (resolved !== previous) requestHistorySync(resolved ? 'push' : 'replace');
+                setShowUserMenuState(resolved);
+            }, [requestHistorySync, showUserMenu]);
+
+            const setAssignmentsUnlocked = useCallback((nextValue) => {
+                const previous = Boolean(latestNavigationSnapshotRef.current?.assignmentsUnlocked ?? assignmentsUnlocked);
+                const resolved = Boolean(resolveStateValue(nextValue, previous));
+                if (resolved !== previous) requestHistorySync('replace');
+                setAssignmentsUnlockedState(resolved);
+            }, [requestHistorySync, assignmentsUnlocked]);
+
+            const applyNavigationSnapshot = useCallback((snapshot) => {
+                const next = normalizeNavigationSnapshot(snapshot);
+                const activeSession = sessionUserRef.current;
+                if (['admin', 'admin-tracking', 'admin-support'].includes(next.view) && activeSession?.role !== 'admin') {
+                    next.view = activeSession ? 'operator' : 'home';
+                    next.showAdminMenu = false;
+                }
+                if (next.view === 'operator' && (!activeSession || activeSession.role === 'admin')) {
+                    next.view = activeSession?.role === 'admin' ? 'admin' : 'home';
+                    next.showUserMenu = false;
+                    next.assignmentsUnlocked = false;
+                    next.showAssignmentsPasswordModal = false;
+                }
+                const currentKey = latestNavigationSnapshotRef.current ? stringifyNavigationSnapshot(latestNavigationSnapshotRef.current) : '';
+                const nextKey = stringifyNavigationSnapshot(next);
+                if (currentKey === nextKey) {
+                    suppressHistorySyncRef.current = false;
+                    pendingHistoryModeRef.current = null;
+                    latestNavigationSnapshotRef.current = next;
+                    lastHistorySnapshotKeyRef.current = nextKey;
+                    return;
+                }
+                suppressHistorySyncRef.current = true;
+                setViewState(next.view);
+                setSelectedProductId(next.selectedProductId);
+                setCheckoutProductIds(next.checkoutProductIds);
+                setIsCartOpenState(next.isCartOpen);
+                setShowUserModalState(next.showUserModal);
+                setShowAssignmentsPasswordModalState(next.showAssignmentsPasswordModal);
+                setShowAdminMenuState(next.showAdminMenu);
+                setShowUserMenuState(next.showUserMenu);
+                setAssignmentsUnlockedState(next.assignmentsUnlocked);
+                if (!next.showUserModal) setUserForm({ email: '', p: '', n: '', phone: '' });
+                if (!next.showAssignmentsPasswordModal) {
+                    setAssignmentsPassword('');
+                    setAssignmentsPasswordError('');
+                    setAssignmentsUnlocking(false);
+                }
+            }, []);
+
+            useEffect(() => {
+                sessionUserRef.current = sessionUser;
+            }, [sessionUser]);
+
+            useEffect(() => {
+                const snapshot = getCurrentNavigationSnapshot();
+                const key = stringifyNavigationSnapshot(snapshot);
+                latestNavigationSnapshotRef.current = snapshot;
+
+                if (!historyInitializedRef.current) {
+                    historyInitializedRef.current = true;
+                    lastHistorySnapshotKeyRef.current = key;
+                    try {
+                        window.history.replaceState(createDriveMxHistoryState(snapshot, true), '', window.location.href);
+                        window.history.pushState(createDriveMxHistoryState(snapshot, false), '', window.location.href);
+                    } catch(err) {
+                        console.warn('Historial Drive MX no disponible:', err);
+                    }
+                    return;
+                }
+
+                if (suppressHistorySyncRef.current) {
+                    suppressHistorySyncRef.current = false;
+                    pendingHistoryModeRef.current = null;
+                    lastHistorySnapshotKeyRef.current = key;
+                    return;
+                }
+
+                const mode = pendingHistoryModeRef.current;
+                pendingHistoryModeRef.current = null;
+                if (!mode || key === lastHistorySnapshotKeyRef.current) return;
+
+                try {
+                    const state = createDriveMxHistoryState(snapshot, false);
+                    if (mode === 'replace') window.history.replaceState(state, '', window.location.href);
+                    else window.history.pushState(state, '', window.location.href);
+                    lastHistorySnapshotKeyRef.current = key;
+                } catch(err) {
+                    console.warn('No se pudo sincronizar el historial Drive MX:', err);
+                }
+            }, [getCurrentNavigationSnapshot]);
+
+            useEffect(() => {
+                const handlePopState = (event) => {
+                    if (allowNativeBackExitRef.current) return;
+                    const state = event.state || {};
+
+                    if (state[DRIVE_MX_HISTORY_KEY] && state.exitBoundary) {
+                        const shouldExit = window.confirm('¿Deseas salir de Drive MX?');
+                        if (shouldExit) {
+                            allowNativeBackExitRef.current = true;
+                            window.history.back();
+                            return;
+                        }
+                        const snapshot = latestNavigationSnapshotRef.current || getCurrentNavigationSnapshot();
+                        try {
+                            window.history.pushState(createDriveMxHistoryState(snapshot, false), '', window.location.href);
+                            lastHistorySnapshotKeyRef.current = stringifyNavigationSnapshot(snapshot);
+                        } catch(err) {
+                            console.warn('No se pudo restaurar el historial Drive MX:', err);
+                        }
+                        return;
+                    }
+
+                    if (state[DRIVE_MX_HISTORY_KEY] && state.snapshot) {
+                        const nextSnapshot = normalizeNavigationSnapshot(state.snapshot);
+                        const currentKey = latestNavigationSnapshotRef.current ? stringifyNavigationSnapshot(latestNavigationSnapshotRef.current) : '';
+                        const nextKey = stringifyNavigationSnapshot(nextSnapshot);
+                        if (currentKey === nextKey) {
+                            window.history.back();
+                            return;
+                        }
+                        applyNavigationSnapshot(nextSnapshot);
+                        return;
+                    }
+
+                    const snapshot = latestNavigationSnapshotRef.current || getCurrentNavigationSnapshot();
+                    if (!isDriveMxMainSnapshot(snapshot)) {
+                        try {
+                            window.history.pushState(createDriveMxHistoryState(snapshot, false), '', window.location.href);
+                        } catch(err) {
+                            console.warn('No se pudo proteger la navegación Drive MX:', err);
+                        }
+                        return;
+                    }
+
+                    const shouldExit = window.confirm('¿Deseas salir de Drive MX?');
+                    if (shouldExit) {
+                        allowNativeBackExitRef.current = true;
+                        window.history.back();
+                    } else {
+                        try {
+                            window.history.pushState(createDriveMxHistoryState(snapshot, false), '', window.location.href);
+                        } catch(err) {
+                            console.warn('No se pudo cancelar la salida de Drive MX:', err);
+                        }
+                    }
+                };
+
+                window.addEventListener('popstate', handlePopState);
+                return () => window.removeEventListener('popstate', handlePopState);
+            }, [applyNavigationSnapshot, getCurrentNavigationSnapshot]);
 
             useEffect(() => {
                 if (view === 'operator') return;
@@ -1044,6 +1296,7 @@
                         alert('Tu cuenta no tiene acceso activo al panel.');
                         return;
                     }
+                    sessionUserRef.current = profile;
                     setSessionUser(profile);
                     setAssignmentsUnlocked(false);
                     setShowUserMenu(false);
@@ -1061,6 +1314,7 @@
 
             const handleLogout = async () => {
                 const auth = fbase.getAuth();
+                sessionUserRef.current = null;
                 setSessionUser(null);
                 setLoginForm({ email: '', p: '' });
                 setUserForm({ email: '', p: '', n: '', phone: '' });
@@ -2750,6 +3004,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
