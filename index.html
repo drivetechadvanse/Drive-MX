@@ -689,6 +689,7 @@
                     await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', col, id), data);
                 } catch(err) {
                     console.error('Firestore guardar:', err);
+                    throw err;
                 }
             };
 
@@ -1562,6 +1563,8 @@
                 const profileSnap = await fbase.getDoc(profileRef);
                 if (profileSnap.exists()) return { id: user.uid, uid: user.uid, email: user.email, ...profileSnap.data() };
 
+                const now = Date.now();
+
                 if ((user.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
                     const adminProfile = {
                         uid: user.uid,
@@ -1570,14 +1573,32 @@
                         role: 'admin',
                         active: true,
                         blocked: false,
-                        createdAt: Date.now(),
-                        updatedAt: Date.now()
+                        createdAt: now,
+                        updatedAt: now
                     };
                     await saveDoc(STAFF_USERS_COLLECTION, user.uid, adminProfile);
                     return { id: user.uid, ...adminProfile };
                 }
 
-                return null;
+                const emailKey = String(user.email || '').trim().toLowerCase();
+                const cachedProfile = users.find(existing => String(existing.email || '').trim().toLowerCase() === emailKey) || {};
+                const repairedProfile = {
+                    uid: user.uid,
+                    email: user.email || cachedProfile.email || '',
+                    name: cachedProfile.name || (user.email ? user.email.split('@')[0] : 'Usuario'),
+                    phone: cachedProfile.phone || '',
+                    saleNotificationEmail: cachedProfile.saleNotificationEmail || user.email || cachedProfile.email || '',
+                    role: cachedProfile.role === 'admin' ? 'usuario' : (cachedProfile.role || 'usuario'),
+                    active: cachedProfile.active === false ? false : true,
+                    blocked: cachedProfile.blocked === true,
+                    accountStatus: cachedProfile.accountStatus || (cachedProfile.blocked === true || cachedProfile.active === false ? 'Bloqueado' : 'Activo'),
+                    assignmentsAuthorized: cachedProfile.assignmentsAuthorized === true,
+                    createdAt: cachedProfile.createdAt || now,
+                    updatedAt: now
+                };
+
+                await saveDoc(STAFF_USERS_COLLECTION, user.uid, repairedProfile);
+                return { id: user.uid, ...repairedProfile };
             };
 
             const handleLogin = async (e) => {
@@ -3454,6 +3475,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
                          
 
