@@ -46,10 +46,13 @@
         window.firebaseConfig = firebaseConfig;
         window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, getStorage, ref, uploadBytes, getDownloadURL };
     </script>
+    <script src="./wallet/wallet.js"></script>
 
     <script type="text/babel" data-presets="react">
         const { useState, useEffect, useRef, useCallback } = React;
         const fbase = window.FirebaseSDK;
+        const Wallet = window.DriveMxWallet;
+        const WalletUI = window.DriveMxWalletUI;
         
         const Icons = {
             Truck: ({size=16}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-5l-4-4h-3v10h3Z"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>,
@@ -252,6 +255,14 @@
             const [userProductImageFiles, setUserProductImageFiles] = useState([]);
             const [userProductUploading, setUserProductUploading] = useState(false);
             const [editingUserProductId, setEditingUserProductId] = useState(null);
+            const [wallets, setWallets] = useState([]);
+            const [walletSettings, setWalletSettings] = useState(() => Wallet.defaultSettings());
+            const [walletSettingsSaving, setWalletSettingsSaving] = useState(false);
+            const [walletMovements, setWalletMovements] = useState([]);
+            const [walletRecharges, setWalletRecharges] = useState([]);
+            const [showWalletRecharge, setShowWalletRecharge] = useState(false);
+            const [walletRechargeAmount, setWalletRechargeAmount] = useState('');
+            const [walletRechargeProcessing, setWalletRechargeProcessing] = useState(false);
 
             const latestNavigationSnapshotRef = useRef(null);
             const sessionUserRef = useRef(null);
@@ -613,6 +624,93 @@
 
                 return () => { unsubPkgs(); unsubUsers(); unsubProducts(); unsubAdminProducts(); unsubTransfers(); unsubCompletedSales(); unsubSupportChats(); unsubMailSettings(); unsubPaymentSettings(); };
             }, [fbUser, sessionUser?.role]);
+
+            useEffect(() => {
+                if (!fbUser) return;
+                const unsubWallets = Wallet.subscribeWallets({ fbase, appId, onChange: setWallets });
+                const unsubSettings = Wallet.subscribeSettings({ fbase, appId, onChange: setWalletSettings });
+                return () => { unsubWallets(); unsubSettings(); };
+            }, [fbUser]);
+
+            useEffect(() => {
+                if (!fbUser || !sessionUser || sessionUser.role === 'admin') {
+                    setWalletMovements([]);
+                    setShowWalletRecharge(false);
+                    setWalletRechargeAmount('');
+                    setWalletRechargeProcessing(false);
+                    return;
+                }
+                const userWalletId = Wallet.getUserWalletId(sessionUser);
+                if (!userWalletId) {
+                    setWalletMovements([]);
+                    return;
+                }
+                Wallet.ensureWalletDocument({ fbase, appId, user: sessionUser, createdBy: sessionUser?.email || '' }).catch((err) => console.error('Crear cartera inicial:', err));
+                const unsubMovements = Wallet.subscribeMovements({ fbase, appId, userId: userWalletId, onChange: setWalletMovements });
+                return () => unsubMovements();
+            }, [fbUser, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.name, sessionUser?.phone, sessionUser?.role]);
+
+            useEffect(() => {
+                if (!fbUser || sessionUser?.role !== 'admin') {
+                    setWalletRecharges([]);
+                    return;
+                }
+                return Wallet.subscribeRecharges({ fbase, appId, onChange: setWalletRecharges });
+            }, [fbUser, sessionUser?.role]);
+
+            useEffect(() => {
+                if (view !== 'operator' || !showWalletRecharge || !sessionUser || sessionUser.role === 'admin') {
+                    Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons');
+                    return;
+                }
+                const currentWallet = Wallet.findWalletForUser(wallets, sessionUser);
+                const validation = Wallet.validateRechargeAmount(currentWallet, walletRechargeAmount);
+                if (!paymentSettings.paypalClientId || !validation.ok || walletRechargeProcessing) {
+                    Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons');
+                    return;
+                }
+                let cancelled = false;
+                Wallet.renderPayPalRechargeButtons({
+                    clientId: paymentSettings.paypalClientId,
+                    containerId: 'wallet-paypal-recharge-buttons',
+                    amount: validation.amount,
+                    description: 'Recarga de saldo Drive MX',
+                    onStart: () => setWalletRechargeProcessing(true),
+                    onApprove: async ({ data, capture, amount }) => {
+                        if (cancelled) return;
+                        try {
+                            await Wallet.recordRecharge({
+                                fbase,
+                                appId,
+                                user: sessionUser,
+                                wallet: currentWallet,
+                                amount,
+                                paypalOrderId: data?.orderID || capture?.id || '',
+                                paypalCaptureId: capture?.id || '',
+                                actor: sessionUser?.email || ''
+                            });
+                            alert('Recarga PayPal confirmada. El saldo fue abonado a tu cartera.');
+                            setWalletRechargeAmount('');
+                            setShowWalletRecharge(false);
+                        } catch(err) {
+                            console.error('Registrar recarga de cartera:', err);
+                            alert(err.message || 'No se pudo registrar la recarga en la cartera.');
+                        } finally {
+                            setWalletRechargeProcessing(false);
+                        }
+                    },
+                    onCancel: () => {
+                        setWalletRechargeProcessing(false);
+                        alert('Recarga cancelada.');
+                    },
+                    onError: (err) => {
+                        console.error('PayPal recarga cartera:', err);
+                        setWalletRechargeProcessing(false);
+                        alert(err?.message || 'No se pudo completar la recarga con PayPal.');
+                    }
+                });
+                return () => { cancelled = true; Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons'); };
+            }, [view, showWalletRecharge, walletRechargeAmount, walletRechargeProcessing, paymentSettings.paypalClientId, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role, wallets]);
 
             useEffect(() => {
                 if (!fbUser || !sessionUser || sessionUser.role === 'admin') {
@@ -1262,6 +1360,10 @@
                     alert('Solo puedes editar tus propias publicaciones.');
                     return;
                 }
+                const willBeActive = Boolean(userProductForm.active);
+                const wasActive = existing?.active !== false;
+                const isNewPublication = !editingUserProductId;
+                if (willBeActive && (isNewPublication || !wasActive) && !ensureUserPublicationWalletAllowed({ productPrice: Number(userProductForm.price || 0), willBeActive })) return;
                 setUserProductUploading(true);
                 try {
                     const oldImages = getProductGallery(existing);
@@ -1333,6 +1435,8 @@
             const toggleUserProduct = async (product) => {
                 if (!ensureAccountAllowed()) return;
                 if (!isProductOwnedBySessionUser(product)) { alert('Solo puedes administrar tus propias publicaciones.'); return; }
+                const activating = product.active === false;
+                if (activating && !ensureUserPublicationWalletAllowed({ productPrice: Number(product.price || 0), willBeActive: true })) return;
                 const next = { ...product, active: product.active === false, updatedAt: Date.now(), updatedBy: sessionUser?.email || '' };
                 await saveDoc(PUBLIC_PRODUCTS_COLLECTION, product.id, next);
                 await saveUserProductMirror(next);
@@ -1369,6 +1473,13 @@
             const currentUserSales = userCompletedSales
                 .filter(sale => isSaleOwnedByUser(sale, sessionUser))
                 .sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0));
+            const walletCommissionPercent = Wallet.normalizePercent(walletSettings.globalCommissionPercent);
+            const currentUserWallet = sessionUser && sessionUser.role !== 'admin'
+                ? Wallet.findWalletForUser(wallets, sessionUser)
+                : Wallet.normalizeWallet(null, sessionUser || {});
+            const currentUserWalletBlockedMessage = sessionUser && sessionUser.role !== 'admin' && !Wallet.isWalletActivated(currentUserWallet)
+                ? Wallet.INSUFFICIENT_MESSAGE
+                : '';
             const activeProducts = products.filter(p => p.active !== false);
             const findProductById = (productId) => products.find(p => String(p.id) === String(productId));
             const selectedProduct = findProductById(selectedProductId);
@@ -1383,6 +1494,58 @@
             const checkoutProductKey = checkoutProducts.map(product => `${product.id}:${Number(product.price || 0)}`).join('|');
             const selectedGallery = getProductGallery(selectedProduct);
             const selectedMainImage = selectedGallery[currentImageIndex] || '';
+
+            const ensureCheckoutWalletsAllowed = (productsToValidate = checkoutProducts) => {
+                const validation = Wallet.validateProductsForSale({
+                    products: productsToValidate,
+                    wallets,
+                    commissionPercent: walletCommissionPercent
+                });
+                if (!validation.ok) {
+                    alert(Wallet.INSUFFICIENT_MESSAGE);
+                    return false;
+                }
+                return true;
+            };
+
+            const ensureUserPublicationWalletAllowed = ({ productPrice = 0, willBeActive = true } = {}) => {
+                const validation = Wallet.validatePublication({
+                    wallet: currentUserWallet,
+                    productPrice,
+                    commissionPercent: walletCommissionPercent,
+                    willBeActive
+                });
+                if (!validation.ok) {
+                    alert(Wallet.INSUFFICIENT_MESSAGE);
+                    return false;
+                }
+                return true;
+            };
+
+            const saveWalletCommissionSettings = async (e) => {
+                e.preventDefault();
+                const percent = Number(walletSettings.globalCommissionPercent || 0);
+                if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+                    alert('Ingresa un porcentaje de comisión global entre 0 y 100.');
+                    return;
+                }
+                setWalletSettingsSaving(true);
+                try {
+                    const next = await Wallet.saveSettings({
+                        fbase,
+                        appId,
+                        settings: { ...walletSettings, globalCommissionPercent: percent },
+                        actor: sessionUser?.email || ADMIN_EMAIL
+                    });
+                    setWalletSettings(next);
+                    alert('Configuración de comisiones guardada correctamente.');
+                } catch(err) {
+                    console.error('Guardar configuración de comisiones:', err);
+                    alert('No se pudo guardar la configuración de comisiones.');
+                } finally {
+                    setWalletSettingsSaving(false);
+                }
+            };
 
             const persistCart = (items = []) => {
                 const next = writeVisitorCart(items);
@@ -1448,6 +1611,7 @@
                     alert('No se encontró el producto seleccionado.');
                     return;
                 }
+                if (!ensureCheckoutWalletsAllowed([product])) return;
                 setCheckoutProductIds([]);
                 setSelectedProductId(product.id);
                 setIsCartOpen(false);
@@ -1460,6 +1624,7 @@
                     alert('El carrito está vacío.');
                     return;
                 }
+                if (!ensureCheckoutWalletsAllowed(validCartProducts)) return;
                 const nextCart = validCartProducts.map(product => createCartItemFromProduct(product));
                 persistCart(nextCart);
                 setCheckoutProductIds(nextCart.map(product => product.id));
@@ -1501,18 +1666,24 @@
                     container.innerHTML = '';
                     window.paypal.Buttons({
                         style: { layout: 'vertical', shape: 'rect', label: 'paypal' },
-                        createOrder: (data, actions) => actions.order.create({
-                            purchase_units: [{
-                                description: paypalDescription,
-                                amount: {
-                                    currency_code: 'MXN',
-                                    value: paypalAmount
-                                }
-                            }]
-                        }),
+                        createOrder: async (data, actions) => {
+                            if (!ensureCheckoutWalletsAllowed(checkoutProducts)) {
+                                throw new Error(Wallet.INSUFFICIENT_MESSAGE);
+                            }
+                            return actions.order.create({
+                                purchase_units: [{
+                                    description: paypalDescription,
+                                    amount: {
+                                        currency_code: 'MXN',
+                                        value: paypalAmount
+                                    }
+                                }]
+                            });
+                        },
                         onApprove: async (data, actions) => {
                             setOrderSending(true);
                             try {
+                                if (!ensureCheckoutWalletsAllowed(checkoutProducts)) throw new Error(Wallet.INSUFFICIENT_MESSAGE);
                                 const capture = await actions.order.capture();
                                 const payload = appendSaleNotificationToPayload(buildOrderPayload());
                                 await sendOrderEmail(payload);
@@ -1565,7 +1736,7 @@
                 script.onload = renderPayPalButtons;
                 script.onerror = () => alert('No se pudo cargar PayPal. Revisa el Client ID configurado.');
                 document.body.appendChild(script);
-            }, [view, selectedPaymentMethod, paymentSettings.paypalClientId, checkoutProductKey, checkoutTotal, emailSettings.senderEmail, emailSettings.appPassword, emailSettings.receiverEmail]);
+            }, [view, selectedPaymentMethod, paymentSettings.paypalClientId, checkoutProductKey, checkoutTotal, emailSettings.senderEmail, emailSettings.appPassword, emailSettings.receiverEmail, wallets, walletCommissionPercent]);
 
             const getSecondaryAuth = () => {
                 if (!window.secondaryAuthApp) {
@@ -1652,6 +1823,10 @@
                 setAssignmentsUnlocking(false);
                 setSaleNotificationEmail('');
                 setSaleNotificationSaving(false);
+                setShowWalletRecharge(false);
+                setWalletRechargeAmount('');
+                setWalletRechargeProcessing(false);
+                setWalletMovements([]);
                 setUserPanelProducts([]);
                 setUserCompletedSales([]);
                 resetUserProductForm();
@@ -1771,6 +1946,7 @@
                         updatedBy: sessionUser?.email || ADMIN_EMAIL
                     };
                     await saveDoc(STAFF_USERS_COLLECTION, currentUser.id || editingRegisteredUserId, nextUser);
+                    await Wallet.ensureWalletDocument({ fbase, appId, user: { ...nextUser, id: currentUser.id || editingRegisteredUserId }, createdBy: sessionUser?.email || ADMIN_EMAIL }).catch((err) => console.error('Actualizar cartera de usuario:', err));
                     closeRegisteredUserModal();
                     alert('Usuario actualizado correctamente.');
                     return;
@@ -1796,6 +1972,7 @@
                         updatedAt: now
                     };
                     await saveDoc(STAFF_USERS_COLLECTION, credential.user.uid, newUser);
+                    await Wallet.ensureWalletDocument({ fbase, appId, user: { ...newUser, id: credential.user.uid }, createdBy: sessionUser?.email || ADMIN_EMAIL });
                     await fbase.signOut(secondaryAuth).catch(() => {});
                     closeRegisteredUserModal();
                     alert('Usuario creado correctamente con Firebase Auth.');
@@ -2058,9 +2235,26 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         createdAt: soldAt,
                         updatedAt: Date.now()
                     };
-                    await saveDoc('completed_sales', id, sale);
-                    await saveUserCompletedSaleMirror({ id, ...sale });
-                    savedSales.push({ id, ...sale });
+                    const commissionResult = await Wallet.debitCommissionForSale({
+                        fbase,
+                        appId,
+                        seller: { ...seller, id: seller.id || payloadProduct.ownerId || '', uid: seller.id || payloadProduct.ownerId || '' },
+                        wallet: Wallet.getWalletById(wallets, seller.id || payloadProduct.ownerId || ''),
+                        sale,
+                        commissionPercent: walletCommissionPercent,
+                        actor: sessionUser?.email || paymentMethod || 'sistema'
+                    });
+                    const saleWithWallet = {
+                        ...sale,
+                        walletCommissionPercent: commissionResult.percent ?? walletCommissionPercent,
+                        walletCommissionAmount: Number(commissionResult.commissionAmount || 0),
+                        walletCommissionStatus: commissionResult.applies ? (Number(commissionResult.commissionAmount || 0) > 0 ? 'Descontada' : 'Sin comisión') : 'No aplica',
+                        walletBalanceBeforeCommission: commissionResult.balanceBefore,
+                        walletBalanceAfterCommission: commissionResult.balanceAfter
+                    };
+                    await saveDoc('completed_sales', id, saleWithWallet);
+                    await saveUserCompletedSaleMirror({ id, ...saleWithWallet });
+                    savedSales.push({ id, ...saleWithWallet });
                 }
 
                 return savedSales.length === 1 ? savedSales[0] : savedSales;
@@ -2086,6 +2280,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     alert('Falta configurar el número de cuenta bancaria en el Panel Admin.');
                     return;
                 }
+                if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
                 setOrderSending(true);
                 try {
                     const payload = buildOrderPayload();
@@ -2113,6 +2308,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             };
 
             const confirmPaypalPayment = async () => {
+                if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
                 setOrderSending(true);
                 try {
                     const payload = appendSaleNotificationToPayload(buildOrderPayload());
@@ -2143,6 +2339,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                             receiverEmail: emailSettings.receiverEmail.trim()
                         }
                     });
+                    const transferProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
+                    if (!ensureCheckoutWalletsAllowed(transferProducts)) return;
                     await sendOrderEmail(payload);
                     await saveDoc('bank_transfers', transferId, { ...transfer, status: 'Pagado', paidAt, updatedAt: paidAt, paidBy: sessionUser?.email || '' });
                     await registerCompletedSale({ payload, paymentMethod: 'Transferencia bancaria', saleId: `transfer_${transferId}`, transferId, soldAt: paidAt });
@@ -2206,6 +2404,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     return;
                 }
                 if (!validateDeliveryForm()) return;
+                if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
                 setSelectedPaymentMethod('paypal');
                 setView('payment-method');
             };
@@ -3083,6 +3282,20 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             </form>
                                         </div>
 
+                                        <WalletUI.AdminCommissionSettings
+                                            settings={walletSettings}
+                                            value={walletSettings.globalCommissionPercent}
+                                            onChange={(value) => setWalletSettings(prev => ({ ...prev, globalCommissionPercent: value }))}
+                                            onSubmit={saveWalletCommissionSettings}
+                                            saving={walletSettingsSaving}
+                                        />
+
+                                        <WalletUI.AdminWalletsPanel
+                                            users={users}
+                                            wallets={wallets}
+                                            recharges={walletRecharges}
+                                        />
+
                                         <div className="card-glass overflow-hidden">
                                             <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
                                                 <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Transferencias Pendientes</h2>
@@ -3467,11 +3680,28 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             <div className="absolute right-0 top-14 w-56 bg-white border border-slate-100 rounded-2xl shadow-xl p-2 z-50 animate-slide">
                                                 <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-products-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Administración de Productos</button>
                                                 <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-sales-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Ventas Realizadas</button>
+                                                <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('wallet-movements-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Movimientos</button>
                                                 <button type="button" onClick={openAssignmentsAccess} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Mis Asignaciones</button>
                                             </div>
                                         )}
                                     </div>
                                 </div>
+
+                                <WalletUI.UserWalletCard
+                                    user={sessionUser}
+                                    wallet={currentUserWallet}
+                                    rechargeAmount={walletRechargeAmount}
+                                    onRechargeAmountChange={setWalletRechargeAmount}
+                                    showRecharge={showWalletRecharge}
+                                    onToggleRecharge={() => { if (!ensureAccountAllowed()) return; setShowWalletRecharge(prev => !prev); }}
+                                    onCloseRecharge={() => { setShowWalletRecharge(false); setWalletRechargeAmount(''); Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons'); }}
+                                    paymentConfigured={Boolean(paymentSettings.paypalClientId)}
+                                    paypalContainerId="wallet-paypal-recharge-buttons"
+                                    rechargeProcessing={walletRechargeProcessing}
+                                    blockedMessage={currentUserWalletBlockedMessage}
+                                />
+
+                                <WalletUI.WalletMovementsPanel movements={walletMovements} />
 
                                 {renderUserProductsPanel()}
 
@@ -3559,6 +3789,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
