@@ -32,6 +32,7 @@
         import { getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
+        import "./search/search.js";
         
         const firebaseConfig = {
             apiKey: "AIzaSyDOK0wHv1gV5_wB4OSbYjDcL9lmLEg_Rdo",
@@ -2840,7 +2841,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                             <div className="w-9 h-9 bg-red-500 rounded-xl flex items-center justify-center text-white shadow-lg shadow-red-100">
                                 <Icons.Truck size={18} />
                             </div>
-                            <span className="font-extrabold text-sm tracking-tight">DRIVE <span className="text-red-500">MX</span></span>
                         </div>
                         {sessionUser ? (
                             <div className="flex items-center gap-4">
@@ -3789,6 +3789,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
