@@ -114,6 +114,7 @@
             ownerPhone: item.ownerPhone || '',
             sellerNotificationEmail: item.sellerNotificationEmail || item.saleNotificationEmail || '',
             saleNotificationEmail: item.saleNotificationEmail || item.sellerNotificationEmail || '',
+            ...getProductAttributeFields(item),
             addedAt: Number(item.addedAt || Date.now())
         })).filter(item => item.id && item.name) : [];
         const cleanupExpiredVisitorCarts = () => {
@@ -160,6 +161,71 @@
         };
         const readLocal = (key) => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; } };
         const writeLocal = (key, data) => { try { localStorage.setItem(key, JSON.stringify(data)); } catch(e) {} };
+        const PRODUCT_SIZE_OPTIONS = ['Chica', 'Mediana', 'Grande', 'XL'];
+        const createEmptyProductForm = () => ({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true, sizes: [], colors: [], colorDraft: '' });
+        const splitProductAttributeValues = (...values) => values.flatMap(value => {
+            if (Array.isArray(value)) return value;
+            if (value === undefined || value === null) return [];
+            return String(value).split(/[,;\n|]/);
+        });
+        const normalizeProductSizes = (value = []) => {
+            const allowed = new Map(PRODUCT_SIZE_OPTIONS.map(size => [size.toLowerCase(), size]));
+            const seen = new Set();
+            return splitProductAttributeValues(value).map(item => allowed.get(String(item || '').trim().toLowerCase()) || '').filter(size => {
+                if (!size || seen.has(size)) return false;
+                seen.add(size);
+                return true;
+            });
+        };
+        const normalizeProductColors = (value = []) => {
+            const seen = new Set();
+            return splitProductAttributeValues(value).map(item => String(item || '').trim()).filter(color => {
+                const key = color.toLowerCase();
+                if (!color || seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+        };
+        const getProductSizes = (product = {}) => normalizeProductSizes(splitProductAttributeValues(product.sizes, product.tallas, product.size, product.talla));
+        const getProductColors = (product = {}) => normalizeProductColors(splitProductAttributeValues(product.colors, product.colores, product.color));
+        const getProductAttributeFields = (product = {}) => {
+            const sizes = getProductSizes(product);
+            const colors = getProductColors(product);
+            return { sizes, tallas: sizes, colors, colores: colors };
+        };
+        const getProductAttributesDisplay = (product = {}) => {
+            const sizes = getProductSizes(product);
+            const colors = getProductColors(product);
+            return { sizes, colors, hasAny: sizes.length > 0 || colors.length > 0 };
+        };
+        const productAttributesPlainText = (product = {}) => {
+            const attrs = getProductAttributesDisplay(product);
+            return [
+                attrs.sizes.length ? `Tallas: ${attrs.sizes.join(', ')}` : '',
+                attrs.colors.length ? `Colores: ${attrs.colors.join(', ')}` : ''
+            ].filter(Boolean).join('\n');
+        };
+        const buildSaleNotificationMessage = (product = {}) => {
+            const attributesText = productAttributesPlainText(product);
+            return `Tu producto ha sido vendido.
+
+Producto: ${product.name || ''}
+ID: ${product.id || ''}
+Precio: $${Number(product.price || 0).toFixed(2)}${attributesText ? `
+${attributesText}` : ''}
+
+Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`;
+        };
+        const ProductAttributeSummary = ({ product, className = 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed mt-1' }) => {
+            const attrs = getProductAttributesDisplay(product);
+            if (!attrs.hasAny) return null;
+            return (
+                <div className={className}>
+                    {attrs.sizes.length > 0 && <p><span className="font-black text-slate-500">Tallas:</span> {attrs.sizes.join(', ')}</p>}
+                    {attrs.colors.length > 0 && <p><span className="font-black text-slate-500">Colores:</span> {attrs.colors.join(', ')}</p>}
+                </div>
+            );
+        };
         const getProductGallery = (product) => {
             const legacyImage = product?.imageUrl || product?.image || '';
             const gallery = Array.isArray(product?.images) ? product.images.filter(Boolean) : [];
@@ -220,7 +286,7 @@
             const [userForm, setUserForm] = useState({ email: '', p: '', n: '', phone: '' });
             const [editingRegisteredUserId, setEditingRegisteredUserId] = useState(null);
             const [registeredUsersPage, setRegisteredUsersPage] = useState(1);
-            const [productForm, setProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true });
+            const [productForm, setProductForm] = useState(() => createEmptyProductForm());
             const [productImageFiles, setProductImageFiles] = useState([]);
             const [productUploading, setProductUploading] = useState(false);
             const [editingProductId, setEditingProductId] = useState(null);
@@ -252,7 +318,7 @@
             const [assignmentsUnlocking, setAssignmentsUnlocking] = useState(false);
             const [saleNotificationEmail, setSaleNotificationEmail] = useState('');
             const [saleNotificationSaving, setSaleNotificationSaving] = useState(false);
-            const [userProductForm, setUserProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true });
+            const [userProductForm, setUserProductForm] = useState(() => createEmptyProductForm());
             const [userProductImageFiles, setUserProductImageFiles] = useState([]);
             const [userProductUploading, setUserProductUploading] = useState(false);
             const [editingUserProductId, setEditingUserProductId] = useState(null);
@@ -665,7 +731,7 @@
                     return;
                 }
                 const currentWallet = Wallet.findWalletForUser(wallets, sessionUser);
-                const validation = Wallet.validateRechargeAmount(currentWallet, walletRechargeAmount);
+                const validation = Wallet.validateRechargeAmount(currentWallet, walletRechargeAmount, walletSettings);
                 if (!paymentSettings.paypalClientId || !validation.ok || walletRechargeProcessing) {
                     Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons');
                     return;
@@ -688,7 +754,8 @@
                                 amount,
                                 paypalOrderId: data?.orderID || capture?.id || '',
                                 paypalCaptureId: capture?.id || '',
-                                actor: sessionUser?.email || ''
+                                actor: sessionUser?.email || '',
+                                settings: walletSettings
                             });
                             alert('Recarga PayPal confirmada. El saldo fue abonado a tu cartera.');
                             setWalletRechargeAmount('');
@@ -711,7 +778,7 @@
                     }
                 });
                 return () => { cancelled = true; Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons'); };
-            }, [view, showWalletRecharge, walletRechargeAmount, walletRechargeProcessing, paymentSettings.paypalClientId, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role, wallets]);
+            }, [view, showWalletRecharge, walletRechargeAmount, walletRechargeProcessing, paymentSettings.paypalClientId, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role, wallets, walletSettings.minimumWalletRecharge]);
 
             useEffect(() => {
                 if (!fbUser || !sessionUser || sessionUser.role === 'admin') {
@@ -1100,7 +1167,7 @@
             };
 
             const resetProductForm = () => {
-                setProductForm({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true });
+                setProductForm(createEmptyProductForm());
                 productImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
                 setProductImageFiles([]);
                 setProductUploading(false);
@@ -1108,11 +1175,75 @@
             };
 
             const resetUserProductForm = () => {
-                setUserProductForm({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true });
+                setUserProductForm(createEmptyProductForm());
                 userProductImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
                 setUserProductImageFiles([]);
                 setUserProductUploading(false);
                 setEditingUserProductId(null);
+            };
+
+            const toggleSizeInForm = (setForm, size) => {
+                setForm(prev => {
+                    const current = normalizeProductSizes(prev.sizes);
+                    const next = current.includes(size) ? current.filter(item => item !== size) : [...current, size];
+                    return { ...prev, sizes: next };
+                });
+            };
+
+            const addColorToForm = (setForm) => {
+                setForm(prev => {
+                    const draft = String(prev.colorDraft || '').trim();
+                    if (!draft) return prev;
+                    return { ...prev, colors: normalizeProductColors([...(prev.colors || []), draft]), colorDraft: '' };
+                });
+            };
+
+            const removeColorFromForm = (setForm, index) => {
+                setForm(prev => ({ ...prev, colors: normalizeProductColors(prev.colors).filter((_, colorIndex) => colorIndex !== index) }));
+            };
+
+            const renderProductAttributeFields = (form, setForm) => {
+                const selectedSizes = normalizeProductSizes(form.sizes);
+                const colors = normalizeProductColors(form.colors);
+                return (
+                    <>
+                        <div className="md:col-span-5 rounded-2xl bg-slate-50 border border-slate-100 p-4 space-y-3">
+                            <div>
+                                <p className="text-[10px] font-black uppercase text-slate-600">Tallas</p>
+                                <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">Campo opcional · puedes seleccionar una o varias tallas</p>
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                {PRODUCT_SIZE_OPTIONS.map(size => (
+                                    <label key={size} className={`flex items-center gap-2 rounded-xl px-3 py-2 text-[9px] font-black uppercase cursor-pointer border ${selectedSizes.includes(size) ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-slate-100 text-slate-500'}`}>
+                                        <input type="checkbox" checked={selectedSizes.includes(size)} onChange={() => toggleSizeInForm(setForm, size)} />
+                                        {size}
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="md:col-span-5 rounded-2xl bg-slate-50 border border-slate-100 p-4 space-y-3">
+                            <div>
+                                <p className="text-[10px] font-black uppercase text-slate-600">Colores</p>
+                                <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">Campo opcional · captura manual e ilimitada</p>
+                            </div>
+                            <div className="flex flex-col sm:flex-row gap-2">
+                                <input className="input-field" placeholder="Ej. Rojo, azul marino, negro" value={form.colorDraft || ''} onChange={e => setForm(prev => ({ ...prev, colorDraft: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addColorToForm(setForm); } }} />
+                                <button type="button" onClick={() => addColorToForm(setForm)} className="h-12 px-5 rounded-xl bg-red-500 text-white text-lg font-black hover:bg-red-600">+</button>
+                            </div>
+                            {colors.length > 0 && (
+                                <div className="flex flex-wrap gap-2">
+                                    {colors.map((color, index) => (
+                                        <span key={`${color}_${index}`} className="inline-flex items-center gap-2 rounded-full bg-white border border-slate-100 px-3 py-2 text-[9px] font-black uppercase text-slate-600">
+                                            {color}
+                                            <button type="button" onClick={() => removeColorFromForm(setForm, index)} className="text-red-500 hover:text-red-700">×</button>
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </>
+                );
             };
 
             const uploadSingleProductImage = async (productId, file) => {
@@ -1200,6 +1331,7 @@
                     const uploadedImages = await uploadPendingProductImages(id);
                     const images = [...currentImages, ...uploadedImages].filter(Boolean).slice(0, 5);
                     const mainImage = images[0] || '';
+                    const attributeFields = getProductAttributeFields(productForm);
                     const product = {
                         ...(existing || {}),
                         id,
@@ -1208,6 +1340,7 @@
                         stock: Number(productForm.stock || 0),
                         description: productForm.description.trim(),
                         specifications: productForm.specifications.trim(),
+                        ...attributeFields,
                         images,
                         image: mainImage,
                         imageUrl: mainImage,
@@ -1241,6 +1374,7 @@
                     return;
                 }
                 const images = getProductGallery(product);
+                const attributeFields = getProductAttributeFields(product);
                 setProductForm({
                     id: product.id,
                     name: product.name || '',
@@ -1251,7 +1385,10 @@
                     images,
                     image: images[0] || '',
                     imageUrl: images[0] || '',
-                    active: product.active !== false
+                    active: product.active !== false,
+                    sizes: attributeFields.sizes,
+                    colors: attributeFields.colors,
+                    colorDraft: ''
                 });
                 productImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
                 setProductImageFiles([]);
@@ -1373,6 +1510,7 @@
                     const images = [...currentImages, ...uploadedImages].filter(Boolean).slice(0, 5);
                     const mainImage = images[0] || '';
                     const notificationEmail = (saleNotificationEmail || sessionUser?.saleNotificationEmail || sessionUser?.email || '').trim();
+                    const attributeFields = getProductAttributeFields(userProductForm);
                     const product = {
                         ...(existing || {}),
                         id,
@@ -1381,6 +1519,7 @@
                         stock: Number(userProductForm.stock || 0),
                         description: userProductForm.description.trim(),
                         specifications: userProductForm.specifications.trim(),
+                        ...attributeFields,
                         images,
                         image: mainImage,
                         imageUrl: mainImage,
@@ -1416,6 +1555,7 @@
                     return;
                 }
                 const images = getProductGallery(product);
+                const attributeFields = getProductAttributeFields(product);
                 setUserProductForm({
                     id: product.id,
                     name: product.name || '',
@@ -1426,7 +1566,10 @@
                     images,
                     image: images[0] || '',
                     imageUrl: images[0] || '',
-                    active: product.active !== false
+                    active: product.active !== false,
+                    sizes: attributeFields.sizes,
+                    colors: attributeFields.colors,
+                    colorDraft: ''
                 });
                 userProductImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
                 setUserProductImageFiles([]);
@@ -1500,7 +1643,8 @@
                 const validation = Wallet.validateProductsForSale({
                     products: productsToValidate,
                     wallets,
-                    commissionPercent: walletCommissionPercent
+                    commissionPercent: walletCommissionPercent,
+                    settings: walletSettings
                 });
                 if (!validation.ok) {
                     alert(Wallet.INSUFFICIENT_MESSAGE);
@@ -1514,7 +1658,8 @@
                     wallet: currentUserWallet,
                     productPrice,
                     commissionPercent: walletCommissionPercent,
-                    willBeActive
+                    willBeActive,
+                    settings: walletSettings
                 });
                 if (!validation.ok) {
                     alert(Wallet.INSUFFICIENT_MESSAGE);
@@ -1526,8 +1671,13 @@
             const saveWalletCommissionSettings = async (e) => {
                 e.preventDefault();
                 const percent = Number(walletSettings.globalCommissionPercent || 0);
+                const minimumRecharge = Wallet.normalizeMinimumRecharge(walletSettings.minimumWalletRecharge);
                 if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
                     alert('Ingresa un porcentaje de comisión global entre 0 y 100.');
+                    return;
+                }
+                if (!Number.isFinite(minimumRecharge) || minimumRecharge <= 0) {
+                    alert('Ingresa una recarga mínima de cartera válida.');
                     return;
                 }
                 setWalletSettingsSaving(true);
@@ -1535,14 +1685,14 @@
                     const next = await Wallet.saveSettings({
                         fbase,
                         appId,
-                        settings: { ...walletSettings, globalCommissionPercent: percent },
+                        settings: { ...walletSettings, globalCommissionPercent: percent, minimumWalletRecharge: minimumRecharge },
                         actor: sessionUser?.email || ADMIN_EMAIL
                     });
                     setWalletSettings(next);
-                    alert('Configuración de comisiones guardada correctamente.');
+                    alert('Configuración de cartera guardada correctamente.');
                 } catch(err) {
-                    console.error('Guardar configuración de comisiones:', err);
-                    alert('No se pudo guardar la configuración de comisiones.');
+                    console.error('Guardar configuración de cartera:', err);
+                    alert('No se pudo guardar la configuración de cartera.');
                 } finally {
                     setWalletSettingsSaving(false);
                 }
@@ -1568,6 +1718,7 @@
                     ownerPhone: seller.phone || product.ownerPhone || '',
                     sellerNotificationEmail: seller.saleNotificationEmail || product.sellerNotificationEmail || product.saleNotificationEmail || '',
                     saleNotificationEmail: seller.saleNotificationEmail || product.saleNotificationEmail || product.sellerNotificationEmail || '',
+                    ...getProductAttributeFields(product),
                     addedAt: Date.now()
                 };
             };
@@ -2113,6 +2264,7 @@
                         id: product?.id || '',
                         name: product?.name || '',
                         price: Number(product?.price || 0),
+                        ...getProductAttributeFields(product || {}),
                         ownerId: seller.id,
                         ownerName: seller.name,
                         ownerEmail: seller.email,
@@ -2168,6 +2320,7 @@
                         id: payloadProduct.id || sourceProduct.id || '',
                         name: payloadProduct.name || sourceProduct.name || '',
                         price: Number(payloadProduct.price ?? sourceProduct.price ?? 0),
+                        ...getProductAttributeFields({ ...sourceProduct, ...payloadProduct }),
                         ownerId: seller.id || payloadProduct.ownerId || '',
                         ownerName: seller.name || payloadProduct.ownerName || '',
                         ownerEmail: seller.email || payloadProduct.ownerEmail || '',
@@ -2180,17 +2333,12 @@
                     .filter(product => String(product.sellerNotificationEmail || product.saleNotificationEmail || '').trim())
                     .map(product => ({
                         to: String(product.sellerNotificationEmail || product.saleNotificationEmail || '').trim(),
-                        message: `Tu producto ha sido vendido.
-
-Producto: ${product.name || ''}
-ID: ${product.id || ''}
-Precio: $${Number(product.price || 0).toFixed(2)}
-
-Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
+                        message: buildSaleNotificationMessage(product),
                         sellerName: product.ownerName || '',
                         productName: product.name || '',
                         productId: product.id || '',
-                        productPrice: Number(product.price || 0)
+                        productPrice: Number(product.price || 0),
+                        ...getProductAttributeFields(product)
                     }));
                 const enrichedTotal = enrichedProducts.reduce((total, product) => total + Number(product.price || 0), 0);
                 return {
@@ -2224,6 +2372,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         productId: payloadProduct.id || sourceProduct.id || '',
                         productName: payloadProduct.name || sourceProduct.name || '',
                         productCost: Number(payloadProduct.price || sourceProduct.price || 0),
+                        ...getProductAttributeFields({ ...sourceProduct, ...payloadProduct }),
                         sellerId: seller.id || payloadProduct.ownerId || '',
                         sellerName: seller.name || payloadProduct.ownerName || 'Admin Central',
                         sellerEmail: seller.email || payloadProduct.ownerEmail || ADMIN_EMAIL,
@@ -2290,7 +2439,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         transferId: id,
                         paymentMethod: 'Transferencia bancaria',
                         bankAccount: paymentSettings.bankAccount.trim(),
-                        bankLegend: 'Banco Azteca, el nombre del titular debe coincidir con el nombre registrado en el pedido.',
+                        bankLegend: 'Pagar con Banco Azteca, el nombre del titular debe coincidir con el nombre registrado en el pedido.',
                         holderName: payload.delivery.fullName,
                         status: 'Pendiente',
                         order: payload,
@@ -2514,6 +2663,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
 
             const TrackingStatusCard = ({ pkg }) => {
                 const activeIndex = getTrackingStepIndex(pkg);
+                const trackedProducts = Array.isArray(pkg.products) && pkg.products.length > 0 ? pkg.products : (findProductByTracking(pkg) ? [findProductByTracking(pkg)] : []);
 
             return (
                     <div className="card-glass p-6 max-w-3xl mx-auto animate-slide space-y-5">
@@ -2528,6 +2678,18 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                             <div><p className="text-[8px] font-black text-slate-400 uppercase">Origen</p><p className="text-sm font-black text-slate-900 uppercase">{pkg.o || 'Origen pendiente'}</p></div>
                             <div><p className="text-[8px] font-black text-slate-400 uppercase">Destino</p><p className="text-sm font-black text-slate-900 uppercase">{pkg.d || 'Destino pendiente'}</p></div>
                         </div>
+                        {trackedProducts.length > 0 && (
+                            <div className="bg-white border border-slate-100 rounded-2xl p-4 space-y-3">
+                                <p className="text-[8px] font-black text-slate-400 uppercase">Producto relacionado</p>
+                                {trackedProducts.map((product, index) => (
+                                    <div key={`${product.id || index}_${index}`} className={index > 0 ? 'pt-3 border-t border-slate-100' : ''}>
+                                        <p className="text-sm font-black text-slate-900">{product.name || product.id || 'Producto sin nombre'}</p>
+                                        {product.id && <p className="text-[8px] font-mono font-black text-slate-400 uppercase">ID: {product.id}</p>}
+                                        <ProductAttributeSummary product={product} className="text-[8px] font-bold text-slate-400 uppercase leading-relaxed mt-1" />
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                             {STEPS.map((step, i) => (
                                 <div key={step} className={`p-3 rounded-xl border-2 text-center ${i <= activeIndex ? 'bg-red-500 border-red-500 text-white' : 'bg-white border-slate-100 text-slate-300'}`}>
@@ -2722,7 +2884,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 <tbody className="divide-y divide-slate-50">
                                     {currentUserSales.map(sale => (
                                         <tr key={sale.id || sale.saleId} className="text-[10px] font-bold text-slate-600">
-                                            <td className="px-6 py-4 font-black text-slate-800">{sale.productName || sale.name || sale.productId || '-'}</td>
+                                            <td className="px-6 py-4"><p className="font-black text-slate-800">{sale.productName || sale.name || sale.productId || '-'}</p><ProductAttributeSummary product={sale} className="text-[8px] font-bold text-slate-400 uppercase leading-relaxed mt-1" /></td>
                                             <td className="px-6 py-4 text-red-600 font-black">${Number(sale.productCost || sale.productPrice || sale.price || 0).toFixed(2)}</td>
                                             <td className="px-6 py-4">{(sale.soldAt || sale.createdAt) ? new Date(sale.soldAt || sale.createdAt).toLocaleString('es-MX') : '-'}</td>
                                         </tr>
@@ -2786,6 +2948,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     <input type="checkbox" checked={userProductForm.active} onChange={e => setUserProductForm({...userProductForm, active: e.target.checked})} />
                                     Activo
                                 </label>
+                                {renderProductAttributeFields(userProductForm, setUserProductForm)}
                                 <textarea className="input-field md:col-span-5 min-h-[90px] resize-y" placeholder="DESCRIPCIÓN" value={userProductForm.description} onChange={e => setUserProductForm({...userProductForm, description: e.target.value})}></textarea>
                                 <textarea className="input-field md:col-span-5 min-h-[90px] resize-y" placeholder="ESPECIFICACIONES" value={userProductForm.specifications} onChange={e => setUserProductForm({...userProductForm, specifications: e.target.value})}></textarea>
                                 <button disabled={userProductUploading} type="submit" className="md:col-span-5 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{userProductUploading ? 'Guardando...' : (editingUserProductId ? 'Guardar Cambios' : 'Agregar Producto')}</button>
@@ -2811,7 +2974,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                     {getProductGallery(product)[0] ? <img src={getProductGallery(product)[0]} alt={product.name} className="w-full h-full object-cover" /> : null}
                                                 </div>
                                             </td>
-                                            <td className="px-6 py-4"><p className="font-black text-slate-800">{product.name}</p><p className="font-mono text-[8px] text-slate-400">{product.id}</p></td>
+                                            <td className="px-6 py-4"><p className="font-black text-slate-800">{product.name}</p><p className="font-mono text-[8px] text-slate-400">{product.id}</p><ProductAttributeSummary product={product} className="text-[8px] font-bold text-slate-400 uppercase leading-relaxed mt-1" /></td>
                                             <td className="px-6 py-4 text-red-600 font-black">${Number(product.price || 0).toFixed(2)}</td>
                                             <td className="px-6 py-4">{Number(product.stock || 0)}</td>
                                             <td className="px-6 py-4"><span className={`px-2 py-1 rounded-full text-[8px] uppercase ${product.active !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400'}`}>{product.active !== false ? 'Activo' : 'Inactivo'}</span></td>
@@ -2887,6 +3050,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                     <div className="min-w-0">
                                                         <p className="text-sm font-black text-slate-900 truncate">{product.name}</p>
                                                         <p className="text-[9px] font-bold text-slate-400 uppercase">ID: {product.id}</p>
+                                                        <ProductAttributeSummary product={product} className="text-[8px] font-bold text-slate-400 uppercase leading-relaxed mt-1" />
                                                     </div>
                                                     <div className="text-right shrink-0">
                                                         <p className="text-sm font-black text-red-500">${Number(product.price || 0).toFixed(2)}</p>
@@ -2962,6 +3126,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                                 <div>
                                                                     <h3 className="text-sm font-black text-slate-900 leading-tight">{product.name}</h3>
                                                                     <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">ID: {product.id}</p>
+                                                                    <ProductAttributeSummary product={product} className="text-[8px] font-bold text-slate-400 uppercase leading-relaxed mt-2" />
                                                                 </div>
                                                                 <div className="flex items-center justify-between gap-3">
                                                                     <p className="text-xl font-black text-red-500">${Number(product.price || 0).toFixed(2)}</p>
@@ -3019,6 +3184,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             <span className="px-4 py-2 bg-slate-50 rounded-full text-[10px] font-black text-slate-500 uppercase">Disponibles: {Number(selectedProduct.stock || 0)}</span>
                                         </div>
 
+                                        <ProductAttributeSummary product={selectedProduct} className="rounded-2xl bg-slate-50 border border-slate-100 p-4 text-[10px] font-bold text-slate-500 uppercase leading-relaxed" />
+
                                         <div className="space-y-3">
                                             <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Descripción</h2>
                                             <p className="text-sm font-semibold text-slate-600 leading-relaxed whitespace-pre-line">{selectedProduct.description || 'Sin descripción registrada.'}</p>
@@ -3062,7 +3229,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             </div>
                                             {checkoutProducts.map(product => (
                                                 <div key={product.id} className="flex items-center justify-between gap-3 text-sm font-bold">
-                                                    <span className="text-slate-700">{product.name}</span>
+                                                    <div className="text-slate-700"><p>{product.name}</p><ProductAttributeSummary product={product} className="text-[8px] font-bold text-slate-400 uppercase leading-relaxed mt-1" /></div>
                                                     <span className="text-red-500 font-black">${Number(product.price || 0).toFixed(2)}</span>
                                                 </div>
                                             ))}
@@ -3129,7 +3296,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             <p className="text-[9px] font-black text-slate-400 uppercase">Resumen de compra</p>
                                             {checkoutProducts.map(product => (
                                                 <div key={product.id} className="flex items-center justify-between gap-3 text-sm font-bold">
-                                                    <span className="text-slate-700">{product.name}</span>
+                                                    <div className="text-slate-700"><p>{product.name}</p><ProductAttributeSummary product={product} className="text-[8px] font-bold text-slate-400 uppercase leading-relaxed mt-1" /></div>
                                                     <span className="text-red-500 font-black">${Number(product.price || 0).toFixed(2)}</span>
                                                 </div>
                                             ))}
@@ -3155,7 +3322,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             <div className="bg-slate-50 rounded-2xl p-5 space-y-3">
                                                 <p className="text-[9px] font-black text-slate-400 uppercase">Cuenta bancaria Banco Azteca</p>
                                                 <p className="text-2xl font-black text-slate-900 break-all">{paymentSettings.bankAccount || 'Cuenta no configurada'}</p>
-                                                <p className="text-[10px] font-bold text-slate-500 uppercase leading-relaxed">Banco Azteca, el nombre del titular debe coincidir con el nombre registrado en el pedido.</p>
+                                                <p className="text-[10px] font-bold text-slate-500 uppercase leading-relaxed">Pagar con Banco Azteca, el nombre del titular debe coincidir con el nombre registrado en el pedido.</p>
                                             </div>
                                         )}
 
@@ -3286,6 +3453,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             settings={walletSettings}
                                             value={walletSettings.globalCommissionPercent}
                                             onChange={(value) => setWalletSettings(prev => ({ ...prev, globalCommissionPercent: value }))}
+                                            minimumRechargeValue={walletSettings.minimumWalletRecharge}
+                                            onMinimumRechargeChange={(value) => setWalletSettings(prev => ({ ...prev, minimumWalletRecharge: value }))}
                                             onSubmit={saveWalletCommissionSettings}
                                             saving={walletSettingsSaving}
                                         />
@@ -3294,6 +3463,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             users={users}
                                             wallets={wallets}
                                             recharges={walletRecharges}
+                                            settings={walletSettings}
                                         />
 
                                         <div className="card-glass overflow-hidden">
@@ -3325,6 +3495,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                                             <p className="font-black">{product.name}</p>
                                                                             <p className="text-slate-400 font-mono">ID: {product.id}</p>
                                                                             <p className="text-red-600 font-black">${Number(product.price || 0).toFixed(2)}</p>
+                                                                            <ProductAttributeSummary product={product} className="text-[8px] font-bold text-slate-400 uppercase leading-relaxed mt-1" />
                                                                         </div>
                                                                     ))}
                                                                     <p className="text-slate-800 font-black mt-2">Total: ${Number(t.order?.cart?.total || (Array.isArray(t.order?.products) ? t.order.products : [t.order?.product || {}]).reduce((total, product) => total + Number(product.price || 0), 0)).toFixed(2)}</p>
@@ -3377,7 +3548,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                     <tbody className="divide-y divide-slate-50">
                                                         {completedSales.map(sale => (
                                                             <tr key={sale.id || sale.saleId} className="text-[10px] font-bold text-slate-600 align-top">
-                                                                <td className="px-6 py-4"><p className="font-black text-slate-800">{sale.sellerName || '-'}</p><p className="text-[8px] text-slate-400 uppercase">{sale.productName || sale.productId || ''}</p></td>
+                                                                <td className="px-6 py-4"><p className="font-black text-slate-800">{sale.sellerName || '-'}</p><p className="text-[8px] text-slate-400 uppercase">{sale.productName || sale.productId || ''}</p><ProductAttributeSummary product={sale} className="text-[8px] font-bold text-slate-400 uppercase leading-relaxed mt-1" /></td>
                                                                 <td className="px-6 py-4 font-mono text-slate-400">{sale.sellerEmail || '-'}</td>
                                                                 <td className="px-6 py-4 font-mono text-slate-400">{sale.sellerPhone || '-'}</td>
                                                                 <td className="px-6 py-4 text-red-600 font-black">${Number(sale.productCost || 0).toFixed(2)}</td>
@@ -3444,6 +3615,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                         <input type="checkbox" checked={productForm.active} onChange={e => setProductForm({...productForm, active: e.target.checked})} />
                                                         Activo
                                                     </label>
+                                                    {renderProductAttributeFields(productForm, setProductForm)}
                                                     <textarea className="input-field md:col-span-5 min-h-[90px] resize-y" placeholder="DESCRIPCIÓN" value={productForm.description} onChange={e => setProductForm({...productForm, description: e.target.value})}></textarea>
                                                     <textarea className="input-field md:col-span-5 min-h-[90px] resize-y" placeholder="ESPECIFICACIONES" value={productForm.specifications} onChange={e => setProductForm({...productForm, specifications: e.target.value})}></textarea>
                                                     <button disabled={productUploading} type="submit" className="md:col-span-5 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{productUploading ? 'Guardando...' : (editingProductId ? 'Guardar Cambios' : 'Agregar Producto')}</button>
@@ -3469,7 +3641,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                                         {getProductGallery(product)[0] ? <img src={getProductGallery(product)[0]} alt={product.name} className="w-full h-full object-cover" /> : null}
                                                                     </div>
                                                                 </td>
-                                                                <td className="px-6 py-4"><p className="font-black text-slate-800">{product.name}</p><p className="font-mono text-[8px] text-slate-400">{product.id}</p></td>
+                                                                <td className="px-6 py-4"><p className="font-black text-slate-800">{product.name}</p><p className="font-mono text-[8px] text-slate-400">{product.id}</p><ProductAttributeSummary product={product} className="text-[8px] font-bold text-slate-400 uppercase leading-relaxed mt-1" /></td>
                                                                 <td className="px-6 py-4 text-red-600 font-black">${Number(product.price || 0).toFixed(2)}</td>
                                                                 <td className="px-6 py-4">{Number(product.stock || 0)}</td>
                                                                 <td className="px-6 py-4"><span className={`px-2 py-1 rounded-full text-[8px] uppercase ${product.active !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400'}`}>{product.active !== false ? 'Activo' : 'Inactivo'}</span></td>
@@ -3595,6 +3767,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                             <div><p className="text-[8px] font-black text-slate-400 uppercase">Nombre</p><p className="text-sm font-black text-slate-900">{product.name || 'Producto sin nombre'}</p></div>
                                                             <div><p className="text-[8px] font-black text-slate-400 uppercase">ID (Guías de envío Noo)</p><p className="text-sm font-mono font-black text-slate-700">{product.id || '-'}</p></div>
                                                         </div>
+                                                        <ProductAttributeSummary product={product} className="rounded-2xl bg-white border border-slate-100 p-4 text-[9px] font-bold text-slate-500 uppercase leading-relaxed" />
                                                     </div>
                                                 </div>
                                             </div>
@@ -3699,6 +3872,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     paypalContainerId="wallet-paypal-recharge-buttons"
                                     rechargeProcessing={walletRechargeProcessing}
                                     blockedMessage={currentUserWalletBlockedMessage}
+                                    settings={walletSettings}
                                 />
 
                                 <WalletUI.WalletMovementsPanel movements={walletMovements} />
@@ -3789,6 +3963,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
