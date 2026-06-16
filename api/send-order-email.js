@@ -24,56 +24,51 @@ function money(value) {
   return Number(value || 0).toFixed(2);
 }
 
-const PRODUCT_SIZE_OPTIONS = ["Chica", "Mediana", "Grande", "XL"];
-
-function splitAttributeValues(...values) {
-  return values
-    .flatMap((value) => {
-      if (Array.isArray(value)) return value;
-      if (value === undefined || value === null) return [];
-      return String(value).split(/[,;\n|]/);
-    })
-    .map(clean)
-    .filter(Boolean);
-}
-
-function normalizeSizes(...values) {
-  const normalized = splitAttributeValues(...values)
-    .map((size) => PRODUCT_SIZE_OPTIONS.find((option) => option.toLowerCase() === size.toLowerCase()))
-    .filter(Boolean);
-  return Array.from(new Set(normalized));
-}
-
-function normalizeColors(...values) {
-  const normalized = splitAttributeValues(...values).map((color) => color.replace(/\s+/g, " ").trim());
+function normalizeList(value) {
+  const raw = Array.isArray(value) ? value : clean(value).split(/[\n,;|]+/);
   const seen = new Set();
-  return normalized.filter((color) => {
-    const key = color.toLowerCase();
-    if (!color || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return raw
+    .map((item) => clean(item))
+    .filter(Boolean)
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
-function getProductAttributes(item = {}) {
-  const sizes = normalizeSizes(item.sizes, item.tallas, item.size, item.talla);
-  const colors = normalizeColors(item.colors, item.colores, item.color);
-  return { sizes, tallas: sizes, colors, colores: colors };
+function getProductSizes(item = {}) {
+  const allowed = ["Chica", "Mediana", "Grande", "XL"];
+  const requested = normalizeList(
+    item.sizes ?? item.tallas ?? item.productSizes ?? item.productTallas ?? item.size ?? item.talla ?? []
+  );
+  return requested
+    .map((size) => allowed.find((option) => option.toLowerCase() === size.toLowerCase()) || "")
+    .filter(Boolean);
 }
 
-function attributesHtml(item = {}) {
-  const { sizes, colors } = getProductAttributes(item);
+function getProductColors(item = {}) {
+  return normalizeList(
+    item.colors ?? item.colores ?? item.productColors ?? item.productColores ?? item.color ?? ""
+  );
+}
+
+function productOptionsHtml(item = {}) {
+  const parts = [];
+  if (Array.isArray(item.sizes) && item.sizes.length) {
+    parts.push(`<p><b>Tallas:</b> ${escapeHtml(item.sizes.join(", "))}</p>`);
+  }
+  if (Array.isArray(item.colors) && item.colors.length) {
+    parts.push(`<p><b>Colores:</b> ${escapeHtml(item.colors.join(", "))}</p>`);
+  }
+  return parts.join("");
+}
+
+function productOptionsText(item = {}) {
   return [
-    sizes.length ? `<p><b>Tallas:</b> ${escapeHtml(sizes.join(", "))}</p>` : "",
-    colors.length ? `<p><b>Colores:</b> ${escapeHtml(colors.join(", "))}</p>` : "",
-  ].join("");
-}
-
-function attributesText(item = {}) {
-  const { sizes, colors } = getProductAttributes(item);
-  return [
-    sizes.length ? `Tallas: ${sizes.join(", ")}` : "",
-    colors.length ? `Colores: ${colors.join(", ")}` : "",
+    Array.isArray(item.sizes) && item.sizes.length ? `Tallas: ${item.sizes.join(", ")}` : "",
+    Array.isArray(item.colors) && item.colors.length ? `Colores: ${item.colors.join(", ")}` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -95,7 +90,10 @@ function normalizeProducts(product = {}, products = []) {
       saleNotificationEmail: clean(item.saleNotificationEmail),
       notificationEmail: clean(item.notificationEmail),
       ownerNotificationEmail: clean(item.ownerNotificationEmail),
-      ...getProductAttributes(item),
+      sizes: getProductSizes(item),
+      tallas: getProductSizes(item),
+      colors: getProductColors(item),
+      colores: getProductColors(item),
     }))
     .filter((item) => item.id && item.name);
 }
@@ -109,7 +107,7 @@ function productsHtml(orderProducts = []) {
           <p><b>ID:</b> ${escapeHtml(item.id)}</p>
           <p><b>Nombre:</b> ${escapeHtml(item.name)}</p>
           <p><b>Precio:</b> $${money(item.price)}</p>
-          ${attributesHtml(item)}
+          ${productOptionsHtml(item)}
         </div>
       `
     )
@@ -118,19 +116,13 @@ function productsHtml(orderProducts = []) {
 
 function productsText(orderProducts = []) {
   return orderProducts
-    .map((item, index) =>
-      [
-        `Producto ${index + 1}`,
-        `ID: ${item.id}`,
-        `Nombre: ${item.name}`,
-        `Precio: $${money(item.price)}`,
-        attributesText(item),
-      ]
-        .filter(Boolean)
-        .join("\n")
-    )
+    .map((item, index) => {
+      const options = productOptionsText(item);
+      return `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nPrecio: $${money(item.price)}${options ? `\n${options}` : ""}`;
+    })
     .join("\n\n");
 }
+
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -247,7 +239,6 @@ module.exports = async function handler(req, res) {
         sellerName: item.ownerName,
         productName: item.name,
         productId: item.id,
-        ...getProductAttributes(item),
       }))
       .filter((target) => target.to);
 
@@ -258,7 +249,6 @@ module.exports = async function handler(req, res) {
           sellerName: clean(target.sellerName),
           productName: clean(target.productName),
           productId: clean(target.productId),
-          ...getProductAttributes(target),
         }))
       : [];
 
@@ -278,7 +268,6 @@ module.exports = async function handler(req, res) {
             sellerName: clean(saleNotification.sellerName),
             productName: clean(saleNotification.productName || product.name),
             productId: clean(saleNotification.productId || product.id),
-            ...getProductAttributes({ ...product, ...saleNotification }),
           },
         ]
       : [];
@@ -365,7 +354,6 @@ module.exports = async function handler(req, res) {
     });
   }
 };
-
 
 
 
