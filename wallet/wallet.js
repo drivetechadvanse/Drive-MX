@@ -7,11 +7,9 @@
   const WALLET_COMMISSIONS_COLLECTION = 'wallet_commissions';
   const MOVEMENTS_COLLECTION = 'movements';
   const SETTINGS_DOC_ID = 'config';
-  const DEFAULT_MIN_WALLET_RECHARGE = 500;
-  const LEGACY_ACTIVATION_DONE_KEY = `first${'Recharge'}Completed`;
-  const LEGACY_ACTIVATION_AT_KEY = `first${'Recharge'}At`;
+  const DEFAULT_MINIMUM_WALLET_RECHARGE = 500;
   const CURRENCY = 'MXN';
-  const PLATFORM_LEGEND = 'Las comisiones por uso de la plataforma y servicios serán descontadas automáticamente de tu saldo disponible. La recarga mínima de cartera se configura desde Panel de Control.';
+  const PLATFORM_LEGEND = 'Las comisiones por uso de la plataforma y servicios serán descontadas automáticamente de tu saldo disponible.';
   const INSUFFICIENT_MESSAGE = 'Tu saldo es insuficiente para continuar utilizando la plataforma. Realiza una nueva recarga para seguir publicando y vendiendo.';
 
   const clean = (value) => String(value ?? '').trim();
@@ -25,20 +23,17 @@
     return `$${roundMoney(value).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${CURRENCY}`;
   }
 
-  function normalizeMinimumRecharge(value) {
-    const amount = parseAmount(value);
-    if (!Number.isFinite(amount) || amount <= 0) return DEFAULT_MIN_WALLET_RECHARGE;
-    return roundMoney(amount);
-  }
-
   function getMinimumWalletRecharge(settings = {}) {
-    if (typeof settings === 'number' || typeof settings === 'string') return normalizeMinimumRecharge(settings);
-    const legacyMinimumKey = `minimum${'First'}Recharge`;
-    return normalizeMinimumRecharge(settings.minimumWalletRecharge ?? settings.minimumRecharge ?? settings[legacyMinimumKey] ?? DEFAULT_MIN_WALLET_RECHARGE);
+    const raw = settings.minimumWalletRecharge ?? settings.minimumRechargeAmount ?? settings.minimumFirstRecharge ?? DEFAULT_MINIMUM_WALLET_RECHARGE;
+    const amount = parseAmount(raw);
+    if (!Number.isFinite(amount) || amount < 0) return DEFAULT_MINIMUM_WALLET_RECHARGE;
+    return amount;
   }
 
   function getPlatformLegend(settings = {}) {
-    return `Las comisiones por uso de la plataforma y servicios serán descontadas automáticamente de tu saldo disponible. Recarga mínima de cartera: ${formatMoney(getMinimumWalletRecharge(settings))}.`;
+    const minimum = getMinimumWalletRecharge(settings);
+    const suffix = minimum > 0 ? ` Recarga mínima de cartera: ${formatMoney(minimum)}.` : '';
+    return `${PLATFORM_LEGEND}${suffix}`;
   }
 
   function normalizePercent(value) {
@@ -68,17 +63,16 @@
     return clean(user.phone || user.userPhone || user.ownerPhone || user.sellerPhone || '');
   }
 
-  function getWalletStatus(wallet = {}, settings = {}) {
-    if (!isWalletActivated(wallet, settings)) return 'Pendiente de activación';
+  function getWalletStatus(wallet = {}) {
+    if (!isWalletActivated(wallet)) return 'Pendiente de activación';
     return Number(wallet.balance || 0) > 0 ? 'Activa' : 'Sin saldo';
   }
 
-  function normalizeWallet(wallet = null, user = {}, settings = {}) {
+  function normalizeWallet(wallet = null, user = {}) {
     const walletId = getUserWalletId(wallet || {}) || getUserWalletId(user || {});
     const rechargeCount = Number(wallet?.rechargeCount || 0);
     const totalRecharged = roundMoney(wallet?.totalRecharged || 0);
-    const minimumRecharge = getMinimumWalletRecharge(settings);
-    const activated = Boolean(wallet?.activated === true || wallet?.[LEGACY_ACTIVATION_DONE_KEY] === true || rechargeCount > 0 || totalRecharged >= minimumRecharge);
+    const activated = Boolean(wallet?.activated === true || wallet?.firstRechargeCompleted === true || rechargeCount > 0 || totalRecharged > 0);
     const normalized = {
       id: wallet?.id || walletId,
       uid: wallet?.uid || wallet?.userId || getUserWalletId(user || {}) || walletId,
@@ -89,7 +83,8 @@
       currency: wallet?.currency || CURRENCY,
       balance: roundMoney(wallet?.balance || 0),
       activated,
-      activatedAt: wallet?.activatedAt || wallet?.[LEGACY_ACTIVATION_AT_KEY] || null,
+      firstRechargeCompleted: Boolean(wallet?.firstRechargeCompleted === true || activated),
+      firstRechargeAt: wallet?.firstRechargeAt || null,
       rechargeCount,
       totalRecharged,
       totalCommissions: roundMoney(wallet?.totalCommissions || 0),
@@ -99,14 +94,15 @@
       updatedAt: wallet?.updatedAt || now(),
       status: wallet?.status || ''
     };
-    normalized.status = wallet?.status || getWalletStatus(normalized, settings);
+    normalized.status = wallet?.status || getWalletStatus(normalized);
     return normalized;
   }
 
   function defaultSettings() {
     return {
       globalCommissionPercent: 0,
-      minimumWalletRecharge: DEFAULT_MIN_WALLET_RECHARGE,
+      minimumWalletRecharge: DEFAULT_MINIMUM_WALLET_RECHARGE,
+      minimumFirstRecharge: DEFAULT_MINIMUM_WALLET_RECHARGE,
       currency: CURRENCY,
       updatedAt: null,
       updatedBy: ''
@@ -120,6 +116,7 @@
       ...settings,
       globalCommissionPercent: normalizePercent(settings.globalCommissionPercent ?? settings.commissionPercent ?? 0),
       minimumWalletRecharge,
+      minimumFirstRecharge: minimumWalletRecharge,
       currency: settings.currency || CURRENCY
     };
   }
@@ -166,9 +163,8 @@
     return found ? normalizeWallet(found, user) : normalizeWallet(null, user);
   }
 
-  function isWalletActivated(wallet = {}, settings = {}) {
-    const minimumRecharge = getMinimumWalletRecharge(settings);
-    return Boolean(wallet?.activated === true || wallet?.[LEGACY_ACTIVATION_DONE_KEY] === true || Number(wallet?.rechargeCount || 0) > 0 || Number(wallet?.totalRecharged || 0) >= minimumRecharge);
+  function isWalletActivated(wallet = {}) {
+    return Boolean(wallet?.activated === true || wallet?.firstRechargeCompleted === true || Number(wallet?.rechargeCount || 0) > 0 || Number(wallet?.totalRecharged || 0) > 0);
   }
 
   function getProductSellerId(product = {}) {
@@ -183,21 +179,21 @@
 
   function validateRechargeAmount(wallet = {}, amountValue = 0, settings = {}) {
     const amount = parseAmount(amountValue);
+    const minimum = getMinimumWalletRecharge(settings);
     if (!Number.isFinite(amount) || amount <= 0) {
-      return { ok: false, amount, message: 'Ingresa un monto válido para recargar.' };
+      return { ok: false, amount, minimum, message: 'Ingresa un monto válido para recargar.' };
     }
-    const minimumRecharge = getMinimumWalletRecharge(settings);
-    if (amount < minimumRecharge) {
-      return { ok: false, amount, message: `La recarga mínima de cartera es ${formatMoney(minimumRecharge)}.` };
+    if (minimum > 0 && amount < minimum) {
+      return { ok: false, amount, minimum, message: `La recarga mínima de cartera es de ${formatMoney(minimum)}.` };
     }
-    return { ok: true, amount, message: '' };
+    return { ok: true, amount, minimum, message: '' };
   }
 
-  function validatePublication({ wallet, productPrice = 0, commissionPercent = 0, willBeActive = true, settings = {} } = {}) {
+  function validatePublication({ wallet, productPrice = 0, commissionPercent = 0, willBeActive = true } = {}) {
     if (!willBeActive) return { ok: true, commission: 0, message: '' };
-    const normalizedWallet = normalizeWallet(wallet || {}, {}, settings);
+    const normalizedWallet = normalizeWallet(wallet || {});
     const commission = calculateCommission(productPrice, commissionPercent);
-    if (!isWalletActivated(normalizedWallet, settings)) {
+    if (!isWalletActivated(normalizedWallet)) {
       return { ok: false, commission, message: INSUFFICIENT_MESSAGE };
     }
     if (commission > 0 && roundMoney(normalizedWallet.balance) < commission) {
@@ -206,7 +202,7 @@
     return { ok: true, commission, message: '' };
   }
 
-  function validateProductsForSale({ products = [], wallets = [], commissionPercent = 0, settings = {} } = {}) {
+  function validateProductsForSale({ products = [], wallets = [], commissionPercent = 0 } = {}) {
     const groupedBySeller = new Map();
     const productList = Array.isArray(products) ? products.filter(Boolean) : [];
 
@@ -224,9 +220,9 @@
 
     const blockers = [];
     groupedBySeller.forEach((group) => {
-      const wallet = normalizeWallet(getWalletById(wallets, group.walletId) || { id: group.walletId, uid: group.walletId, userId: group.walletId }, {}, settings);
+      const wallet = normalizeWallet(getWalletById(wallets, group.walletId) || { id: group.walletId, uid: group.walletId, userId: group.walletId });
       const commission = calculateCommission(group.total, commissionPercent);
-      if (!isWalletActivated(wallet, settings)) {
+      if (!isWalletActivated(wallet)) {
         blockers.push({ ...group, wallet, commission, reason: 'inactive' });
         return;
       }
@@ -259,11 +255,12 @@
       await fbase.setDoc(ref, next, { merge: true });
       return next;
     }
-    const wallet = normalizeWallet({ id: walletId, uid: walletId, userId: walletId, activated: false, createdAt: now(), updatedAt: now(), createdBy }, user);
+    const wallet = normalizeWallet({ id: walletId, uid: walletId, userId: walletId, activated: false, firstRechargeCompleted: false, createdAt: now(), updatedAt: now(), createdBy }, user);
     wallet.balance = 0;
     wallet.totalRecharged = 0;
     wallet.rechargeCount = 0;
     wallet.activated = false;
+    wallet.firstRechargeCompleted = false;
     wallet.status = 'Pendiente de activación';
     await fbase.setDoc(ref, wallet);
     return wallet;
@@ -296,7 +293,8 @@
       userPhone: getUserPhone(user) || current.userPhone,
       balance: balanceAfter,
       activated: true,
-      activatedAt: current.activatedAt || createdAt,
+      firstRechargeCompleted: true,
+      firstRechargeAt: current.firstRechargeAt || createdAt,
       rechargeCount: Number(current.rechargeCount || 0) + 1,
       totalRecharged: roundMoney(Number(current.totalRecharged || 0) + amount),
       lastRechargeAt: createdAt,
@@ -318,6 +316,7 @@
       balanceBefore,
       balanceAfter,
       currency: CURRENCY,
+      minimumWalletRecharge: validation.minimum,
       paypalOrderId: clean(paypalOrderId),
       paypalCaptureId: clean(paypalCaptureId),
       createdAt,
@@ -461,7 +460,7 @@
     return fbase.onSnapshot(settingsDocRef(fbase, appId), (snapshot) => {
       onChange(snapshot.exists() ? normalizeSettings(snapshot.data()) : defaultSettings());
     }, (error) => {
-      console.error('Firestore configuración de comisiones:', error);
+      console.error('Firestore configuración global de cartera:', error);
       onChange(defaultSettings());
     });
   }
@@ -554,7 +553,7 @@
     WALLET_COMMISSIONS_COLLECTION,
     MOVEMENTS_COLLECTION,
     SETTINGS_DOC_ID,
-    DEFAULT_MIN_WALLET_RECHARGE,
+    DEFAULT_MINIMUM_WALLET_RECHARGE,
     CURRENCY,
     PLATFORM_LEGEND,
     INSUFFICIENT_MESSAGE,
@@ -564,7 +563,6 @@
     parseAmount,
     safeDocId,
     formatMoney,
-    normalizeMinimumRecharge,
     getMinimumWalletRecharge,
     getPlatformLegend,
     normalizePercent,
@@ -602,9 +600,9 @@
 
     function UserWalletCard(props = {}) {
       const settings = normalizeSettings(props.settings || {});
-      const minimumRecharge = getMinimumWalletRecharge(settings);
-      const wallet = normalizeWallet(props.wallet || {}, props.user || {}, settings);
-      const activated = isWalletActivated(wallet, settings);
+      const wallet = normalizeWallet(props.wallet || {}, props.user || {});
+      const activated = isWalletActivated(wallet);
+      const minimumWalletRecharge = getMinimumWalletRecharge(settings);
       const rechargeValidation = validateRechargeAmount(wallet, props.rechargeAmount || 0, settings);
       const paymentConfigured = Boolean(props.paymentConfigured);
       const canRenderPaypal = paymentConfigured && rechargeValidation.ok && !props.rechargeProcessing;
@@ -615,7 +613,7 @@
             h('div', null,
               h('p', { className: 'text-[10px] font-black uppercase tracking-widest text-red-100 mb-1' }, 'Cartera del usuario'),
               h('h2', { className: 'text-3xl font-black tracking-tight' }, formatMoney(wallet.balance)),
-              h('p', { className: 'text-[9px] font-bold uppercase text-red-100 mt-2' }, activated ? 'Saldo disponible' : 'Pendiente de activación')
+              h('p', { className: 'text-[9px] font-bold uppercase text-red-100 mt-2' }, activated ? 'Saldo disponible' : 'Pendiente de recarga')
             ),
             h('button', {
               type: 'button',
@@ -628,7 +626,7 @@
           h('div', { className: 'grid sm:grid-cols-3 gap-3' },
             h('div', { className: 'rounded-2xl bg-slate-50 p-4' },
               h(SmallLabel, null, 'Estado'),
-              h('p', { className: `text-[11px] font-black uppercase ${activated ? 'text-green-600' : 'text-yellow-700'}` }, getWalletStatus(wallet, settings))
+              h('p', { className: `text-[11px] font-black uppercase ${activated ? 'text-green-600' : 'text-yellow-700'}` }, getWalletStatus(wallet))
             ),
             h('div', { className: 'rounded-2xl bg-slate-50 p-4' },
               h(SmallLabel, null, 'Total recargado'),
@@ -647,10 +645,10 @@
                 h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, 'Monto de recarga'),
                 h('input', {
                   type: 'number',
-                  min: String(minimumRecharge),
+                  min: minimumWalletRecharge > 0 ? String(minimumWalletRecharge) : '0.01',
                   step: '0.01',
                   className: 'input-field',
-                  placeholder: `Mínimo ${formatMoney(minimumRecharge)}`,
+                  placeholder: minimumWalletRecharge > 0 ? `Mínimo ${formatMoney(minimumWalletRecharge)}` : 'Ej. 100',
                   value: props.rechargeAmount || '',
                   onChange: (event) => props.onRechargeAmountChange && props.onRechargeAmountChange(event.target.value)
                 })
@@ -665,7 +663,7 @@
             props.rechargeAmount && !rechargeValidation.ok ? h('p', { className: 'text-[10px] font-black text-red-500 uppercase' }, rechargeValidation.message) : null,
             props.rechargeProcessing ? h('p', { className: 'text-[10px] font-black text-slate-400 uppercase' }, 'Procesando recarga PayPal...') : null,
             h('div', { id: props.paypalContainerId || 'wallet-paypal-recharge-buttons', className: canRenderPaypal ? '' : 'pointer-events-none opacity-40' }),
-            canRenderPaypal ? null : h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed' }, activated ? 'Ingresa un monto válido para mostrar el botón de PayPal.' : `Ingresa una recarga mínima de ${formatMoney(minimumRecharge)} para activar la cartera.`)
+            canRenderPaypal ? null : h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed' }, minimumWalletRecharge > 0 ? `Ingresa un monto válido para mostrar el botón de PayPal. Recarga mínima de cartera: ${formatMoney(minimumWalletRecharge)}.` : 'Ingresa un monto válido para mostrar el botón de PayPal.')
           ) : null
         )
       );
@@ -710,10 +708,10 @@
       const settings = normalizeSettings(props.settings || {});
       return h('div', { className: 'card-glass overflow-hidden' },
         h('div', { className: 'bg-slate-50 border-b border-slate-100 px-6 py-4' },
-          h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400' }, 'Configuración de Comisiones y Recarga mínima de cartera'),
-          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Porcentaje global y recarga mínima aplicados automáticamente en toda la plataforma')
+          h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400' }, 'Configuración global de cartera'),
+          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Comisión global y recarga mínima de cartera aplicadas automáticamente a toda la plataforma')
         ),
-        h('form', { onSubmit: props.onSubmit, className: 'p-6 grid md:grid-cols-[1fr_1fr_auto] gap-3 items-end' },
+        h('form', { onSubmit: props.onSubmit, className: 'p-6 grid md:grid-cols-2 gap-3 items-end' },
           h('div', null,
             h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, 'Porcentaje de comisión global'),
             h('input', {
@@ -733,7 +731,7 @@
             h('input', {
               required: true,
               type: 'number',
-              min: '1',
+              min: '0',
               step: '0.01',
               className: 'input-field',
               placeholder: 'Ej. 500',
@@ -741,18 +739,18 @@
               onChange: (event) => props.onMinimumRechargeChange && props.onMinimumRechargeChange(event.target.value)
             })
           ),
-          h('button', { disabled: props.saving, type: 'submit', className: 'btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed' }, props.saving ? 'Guardando...' : 'Guardar configuración')
+          h('button', { disabled: props.saving, type: 'submit', className: 'md:col-span-2 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed' }, props.saving ? 'Guardando...' : 'Guardar configuración global')
         )
       );
     }
 
-    function AdminWalletsPanel({ users = [], wallets = [], recharges = [], settings = {} } = {}) {
+    function AdminWalletsPanel({ users = [], wallets = [], recharges = [] } = {}) {
       const registeredUsers = (Array.isArray(users) ? users : []).filter((user) => user.role !== 'admin');
       const rechargeList = (Array.isArray(recharges) ? recharges : []).slice(0, 50);
       return h('div', { className: 'card-glass overflow-hidden' },
         h('div', { className: 'bg-slate-50 border-b border-slate-100 px-6 py-4' },
           h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400' }, 'Carteras de Usuarios'),
-          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Consulta saldos y recargas registradas por PayPal')
+          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Consulta saldos y recargas registradas por usuario y monto')
         ),
         h('div', { className: 'p-6 space-y-6' },
           h('div', { className: 'grid sm:grid-cols-2 xl:grid-cols-3 gap-3' },
@@ -769,7 +767,7 @@
                   ),
                   h('div', { className: 'rounded-xl bg-slate-50 p-3' },
                     h('p', { className: 'text-[8px] font-black uppercase text-slate-300' }, 'Estado'),
-                    h('p', { className: `text-[9px] font-black uppercase ${isWalletActivated(wallet, settings) ? 'text-green-600' : 'text-yellow-700'}` }, getWalletStatus(wallet, settings))
+                    h('p', { className: `text-[9px] font-black uppercase ${isWalletActivated(wallet) ? 'text-green-600' : 'text-yellow-700'}` }, getWalletStatus(wallet))
                   )
                 )
               );
@@ -782,23 +780,19 @@
             h('table', { className: 'w-full text-left' },
               h('thead', { className: 'bg-slate-50 border-b border-slate-100' },
                 h('tr', { className: 'text-[8px] font-black uppercase text-slate-400' },
-                  h('th', { className: 'px-6 py-3' }, 'Fecha'),
                   h('th', { className: 'px-6 py-3' }, 'Usuario'),
-                  h('th', { className: 'px-6 py-3' }, 'Monto'),
-                  h('th', { className: 'px-6 py-3' }, 'PayPal')
+                  h('th', { className: 'px-6 py-3' }, 'Monto')
                 )
               ),
               h('tbody', { className: 'divide-y divide-slate-50' },
                 rechargeList.map((item) => h('tr', { key: item.id || item.rechargeId, className: 'text-[10px] font-bold text-slate-600' },
-                  h('td', { className: 'px-6 py-4' }, item.createdAt ? new Date(item.createdAt).toLocaleString('es-MX') : '-'),
                   h('td', { className: 'px-6 py-4' },
                     h('p', { className: 'font-black text-slate-800' }, item.userName || item.userEmail || item.userId || '-'),
                     h('p', { className: 'font-mono text-[8px] text-slate-400 break-anywhere' }, item.userEmail || item.userId || '')
                   ),
-                  h('td', { className: 'px-6 py-4 text-green-600 font-black' }, `+${formatMoney(item.amount || 0)}`),
-                  h('td', { className: 'px-6 py-4 font-mono text-[8px] text-slate-400 break-anywhere' }, item.paypalOrderId || item.paypalCaptureId || '-')
+                  h('td', { className: 'px-6 py-4 text-green-600 font-black' }, `+${formatMoney(item.amount || 0)}`)
                 )),
-                rechargeList.length === 0 ? h('tr', null, h('td', { colSpan: 4, className: 'px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase' }, 'Aún no hay recargas registradas')) : null
+                rechargeList.length === 0 ? h('tr', null, h('td', { colSpan: 2, className: 'px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase' }, 'Aún no hay recargas registradas')) : null
               )
             )
           )
@@ -812,4 +806,5 @@
   global.DriveMxWallet = Wallet;
   global.DriveMxWalletUI = createWalletUI(global.React);
 })(window);
+
 
