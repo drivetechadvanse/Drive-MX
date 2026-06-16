@@ -24,6 +24,61 @@ function money(value) {
   return Number(value || 0).toFixed(2);
 }
 
+const PRODUCT_SIZE_OPTIONS = ["Chica", "Mediana", "Grande", "XL"];
+
+function splitAttributeValues(...values) {
+  return values
+    .flatMap((value) => {
+      if (Array.isArray(value)) return value;
+      if (value === undefined || value === null) return [];
+      return String(value).split(/[,;\n|]/);
+    })
+    .map(clean)
+    .filter(Boolean);
+}
+
+function normalizeSizes(...values) {
+  const normalized = splitAttributeValues(...values)
+    .map((size) => PRODUCT_SIZE_OPTIONS.find((option) => option.toLowerCase() === size.toLowerCase()))
+    .filter(Boolean);
+  return Array.from(new Set(normalized));
+}
+
+function normalizeColors(...values) {
+  const normalized = splitAttributeValues(...values).map((color) => color.replace(/\s+/g, " ").trim());
+  const seen = new Set();
+  return normalized.filter((color) => {
+    const key = color.toLowerCase();
+    if (!color || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function getProductAttributes(item = {}) {
+  const sizes = normalizeSizes(item.sizes, item.tallas, item.size, item.talla);
+  const colors = normalizeColors(item.colors, item.colores, item.color);
+  return { sizes, tallas: sizes, colors, colores: colors };
+}
+
+function attributesHtml(item = {}) {
+  const { sizes, colors } = getProductAttributes(item);
+  return [
+    sizes.length ? `<p><b>Tallas:</b> ${escapeHtml(sizes.join(", "))}</p>` : "",
+    colors.length ? `<p><b>Colores:</b> ${escapeHtml(colors.join(", "))}</p>` : "",
+  ].join("");
+}
+
+function attributesText(item = {}) {
+  const { sizes, colors } = getProductAttributes(item);
+  return [
+    sizes.length ? `Tallas: ${sizes.join(", ")}` : "",
+    colors.length ? `Colores: ${colors.join(", ")}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function normalizeProducts(product = {}, products = []) {
   const source = Array.isArray(products) && products.length > 0 ? products : [product];
   return source
@@ -40,6 +95,7 @@ function normalizeProducts(product = {}, products = []) {
       saleNotificationEmail: clean(item.saleNotificationEmail),
       notificationEmail: clean(item.notificationEmail),
       ownerNotificationEmail: clean(item.ownerNotificationEmail),
+      ...getProductAttributes(item),
     }))
     .filter((item) => item.id && item.name);
 }
@@ -53,6 +109,7 @@ function productsHtml(orderProducts = []) {
           <p><b>ID:</b> ${escapeHtml(item.id)}</p>
           <p><b>Nombre:</b> ${escapeHtml(item.name)}</p>
           <p><b>Precio:</b> $${money(item.price)}</p>
+          ${attributesHtml(item)}
         </div>
       `
     )
@@ -61,13 +118,19 @@ function productsHtml(orderProducts = []) {
 
 function productsText(orderProducts = []) {
   return orderProducts
-    .map(
-      (item, index) =>
-        `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nPrecio: $${money(item.price)}`
+    .map((item, index) =>
+      [
+        `Producto ${index + 1}`,
+        `ID: ${item.id}`,
+        `Nombre: ${item.name}`,
+        `Precio: $${money(item.price)}`,
+        attributesText(item),
+      ]
+        .filter(Boolean)
+        .join("\n")
     )
     .join("\n\n");
 }
-
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -184,6 +247,7 @@ module.exports = async function handler(req, res) {
         sellerName: item.ownerName,
         productName: item.name,
         productId: item.id,
+        ...getProductAttributes(item),
       }))
       .filter((target) => target.to);
 
@@ -194,6 +258,7 @@ module.exports = async function handler(req, res) {
           sellerName: clean(target.sellerName),
           productName: clean(target.productName),
           productId: clean(target.productId),
+          ...getProductAttributes(target),
         }))
       : [];
 
@@ -213,6 +278,7 @@ module.exports = async function handler(req, res) {
             sellerName: clean(saleNotification.sellerName),
             productName: clean(saleNotification.productName || product.name),
             productId: clean(saleNotification.productId || product.id),
+            ...getProductAttributes({ ...product, ...saleNotification }),
           },
         ]
       : [];
@@ -299,6 +365,7 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
 
 
 
