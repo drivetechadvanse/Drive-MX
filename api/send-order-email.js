@@ -24,23 +24,45 @@ function money(value) {
   return Number(value || 0).toFixed(2);
 }
 
+function normalizeList(...values) {
+  const source = values.flatMap((value) => (Array.isArray(value) ? value : value ? String(value).split(',') : []));
+  const seen = new Set();
+  return source
+    .map((item) => clean(item))
+    .filter(Boolean)
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
 function normalizeProducts(product = {}, products = []) {
   const source = Array.isArray(products) && products.length > 0 ? products : [product];
   return source
     .filter(Boolean)
-    .map((item) => ({
-      id: clean(item.id),
-      name: clean(item.name),
-      price: Number(item.price || 0),
-      ownerId: clean(item.ownerId),
-      ownerName: clean(item.ownerName),
-      ownerEmail: clean(item.ownerEmail),
-      ownerPhone: clean(item.ownerPhone),
-      sellerNotificationEmail: clean(item.sellerNotificationEmail),
-      saleNotificationEmail: clean(item.saleNotificationEmail),
-      notificationEmail: clean(item.notificationEmail),
-      ownerNotificationEmail: clean(item.ownerNotificationEmail),
-    }))
+    .map((item) => {
+      const sizes = normalizeList(item.sizes, item.tallas);
+      const colors = normalizeList(item.colors, item.colores, item.color);
+      return {
+        id: clean(item.id),
+        name: clean(item.name),
+        price: Number(item.price || 0),
+        sizes,
+        tallas: sizes,
+        colors,
+        colores: colors,
+        ownerId: clean(item.ownerId),
+        ownerName: clean(item.ownerName),
+        ownerEmail: clean(item.ownerEmail),
+        ownerPhone: clean(item.ownerPhone),
+        sellerNotificationEmail: clean(item.sellerNotificationEmail),
+        saleNotificationEmail: clean(item.saleNotificationEmail),
+        notificationEmail: clean(item.notificationEmail),
+        ownerNotificationEmail: clean(item.ownerNotificationEmail),
+      };
+    })
     .filter((item) => item.id && item.name);
 }
 
@@ -53,6 +75,8 @@ function productsHtml(orderProducts = []) {
           <p><b>ID:</b> ${escapeHtml(item.id)}</p>
           <p><b>Nombre:</b> ${escapeHtml(item.name)}</p>
           <p><b>Precio:</b> $${money(item.price)}</p>
+          ${item.sizes?.length ? `<p><b>Tallas:</b> ${escapeHtml(item.sizes.join(', '))}</p>` : ''}
+          ${item.colors?.length ? `<p><b>Colores:</b> ${escapeHtml(item.colors.join(', '))}</p>` : ''}
         </div>
       `
     )
@@ -63,7 +87,7 @@ function productsText(orderProducts = []) {
   return orderProducts
     .map(
       (item, index) =>
-        `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nPrecio: $${money(item.price)}`
+        `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nPrecio: $${money(item.price)}${item.sizes?.length ? `\nTallas: ${item.sizes.join(', ')}` : ''}${item.colors?.length ? `\nColores: ${item.colors.join(', ')}` : ''}`
     )
     .join("\n\n");
 }
@@ -299,3 +323,4 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
