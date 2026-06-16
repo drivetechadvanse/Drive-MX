@@ -730,33 +730,51 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`;
                     Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons');
                     return;
                 }
-                const currentWallet = Wallet.findWalletForUser(wallets, sessionUser);
+                const currentWallet = Wallet.findWalletForUser(wallets, sessionUser, walletSettings);
                 const validation = Wallet.validateRechargeAmount(currentWallet, walletRechargeAmount, walletSettings);
-                if (!paymentSettings.paypalClientId || !validation.ok || walletRechargeProcessing) {
+                if (!paymentSettings.paypalClientId || !validation.ok) {
                     Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons');
                     return;
                 }
+                if (walletRechargeProcessing) {
+                    return;
+                }
                 let cancelled = false;
+                let paypalApprovalInProgress = false;
                 Wallet.renderPayPalRechargeButtons({
                     clientId: paymentSettings.paypalClientId,
                     containerId: 'wallet-paypal-recharge-buttons',
                     amount: validation.amount,
                     description: 'Recarga de saldo Drive MX',
-                    onStart: () => setWalletRechargeProcessing(true),
-                    onApprove: async ({ data, capture, amount }) => {
-                        if (cancelled) return;
+                    onStart: () => {
+                        paypalApprovalInProgress = true;
+                        setWalletRechargeProcessing(true);
+                    },
+                    onApprove: async ({ data, capture, amount, paypalCaptureId }) => {
+                        paypalApprovalInProgress = true;
                         try {
-                            await Wallet.recordRecharge({
+                            const paypalOrderId = data?.orderID || capture?.id || '';
+                            const cleanCaptureId = paypalCaptureId || (Wallet.getPayPalCaptureId ? Wallet.getPayPalCaptureId(capture) : '') || capture?.id || '';
+                            const result = await Wallet.recordRecharge({
                                 fbase,
                                 appId,
                                 user: sessionUser,
                                 wallet: currentWallet,
                                 amount,
-                                paypalOrderId: data?.orderID || capture?.id || '',
-                                paypalCaptureId: capture?.id || '',
+                                paypalOrderId,
+                                paypalCaptureId: cleanCaptureId,
                                 actor: sessionUser?.email || '',
                                 settings: walletSettings
                             });
+                            if (result?.wallet) {
+                                setWallets(prev => {
+                                    const next = Array.isArray(prev) ? prev.filter(item => Wallet.getUserWalletId(item) !== Wallet.getUserWalletId(result.wallet)) : [];
+                                    return [...next, result.wallet];
+                                });
+                            }
+                            if (result?.movement) {
+                                setWalletMovements(prev => [result.movement, ...(Array.isArray(prev) ? prev.filter(item => item.id !== result.movement.id) : [])]);
+                            }
                             alert('Recarga PayPal confirmada. El saldo fue abonado a tu cartera.');
                             setWalletRechargeAmount('');
                             setShowWalletRecharge(false);
@@ -777,8 +795,13 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`;
                         alert(err?.message || 'No se pudo completar la recarga con PayPal.');
                     }
                 });
-                return () => { cancelled = true; Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons'); };
-            }, [view, showWalletRecharge, walletRechargeAmount, walletRechargeProcessing, paymentSettings.paypalClientId, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role, wallets, walletSettings.minimumWalletRecharge]);
+                return () => {
+                    if (!paypalApprovalInProgress) {
+                        cancelled = true;
+                        Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons');
+                    }
+                };
+            }, [view, showWalletRecharge, walletRechargeAmount, paymentSettings.paypalClientId, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role, wallets, walletSettings.minimumWalletRecharge]);
 
             useEffect(() => {
                 if (!fbUser || !sessionUser || sessionUser.role === 'admin') {
@@ -1619,9 +1642,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`;
                 .sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0));
             const walletCommissionPercent = Wallet.normalizePercent(walletSettings.globalCommissionPercent);
             const currentUserWallet = sessionUser && sessionUser.role !== 'admin'
-                ? Wallet.findWalletForUser(wallets, sessionUser)
-                : Wallet.normalizeWallet(null, sessionUser || {});
-            const currentUserWalletBlockedMessage = sessionUser && sessionUser.role !== 'admin' && !Wallet.isWalletActivated(currentUserWallet)
+                ? Wallet.findWalletForUser(wallets, sessionUser, walletSettings)
+                : Wallet.normalizeWallet(null, sessionUser || {}, walletSettings);
+            const currentUserWalletBlockedMessage = sessionUser && sessionUser.role !== 'admin' && !Wallet.isWalletActivated(currentUserWallet, walletSettings)
                 ? Wallet.INSUFFICIENT_MESSAGE
                 : '';
             const activeProducts = products.filter(p => p.active !== false);
@@ -3963,6 +3986,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`;
     </script>
 </body>
 </html>
+
 
 
 
