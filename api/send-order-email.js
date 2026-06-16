@@ -24,56 +24,6 @@ function money(value) {
   return Number(value || 0).toFixed(2);
 }
 
-function normalizeList(value) {
-  const raw = Array.isArray(value) ? value : clean(value).split(/[\n,;|]+/);
-  const seen = new Set();
-  return raw
-    .map((item) => clean(item))
-    .filter(Boolean)
-    .filter((item) => {
-      const key = item.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-}
-
-function getProductSizes(item = {}) {
-  const allowed = ["Chica", "Mediana", "Grande", "XL"];
-  const requested = normalizeList(
-    item.sizes ?? item.tallas ?? item.productSizes ?? item.productTallas ?? item.size ?? item.talla ?? []
-  );
-  return requested
-    .map((size) => allowed.find((option) => option.toLowerCase() === size.toLowerCase()) || "")
-    .filter(Boolean);
-}
-
-function getProductColors(item = {}) {
-  return normalizeList(
-    item.colors ?? item.colores ?? item.productColors ?? item.productColores ?? item.color ?? ""
-  );
-}
-
-function productOptionsHtml(item = {}) {
-  const parts = [];
-  if (Array.isArray(item.sizes) && item.sizes.length) {
-    parts.push(`<p><b>Tallas:</b> ${escapeHtml(item.sizes.join(", "))}</p>`);
-  }
-  if (Array.isArray(item.colors) && item.colors.length) {
-    parts.push(`<p><b>Colores:</b> ${escapeHtml(item.colors.join(", "))}</p>`);
-  }
-  return parts.join("");
-}
-
-function productOptionsText(item = {}) {
-  return [
-    Array.isArray(item.sizes) && item.sizes.length ? `Tallas: ${item.sizes.join(", ")}` : "",
-    Array.isArray(item.colors) && item.colors.length ? `Colores: ${item.colors.join(", ")}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
 function normalizeProducts(product = {}, products = []) {
   const source = Array.isArray(products) && products.length > 0 ? products : [product];
   return source
@@ -90,10 +40,6 @@ function normalizeProducts(product = {}, products = []) {
       saleNotificationEmail: clean(item.saleNotificationEmail),
       notificationEmail: clean(item.notificationEmail),
       ownerNotificationEmail: clean(item.ownerNotificationEmail),
-      sizes: getProductSizes(item),
-      tallas: getProductSizes(item),
-      colors: getProductColors(item),
-      colores: getProductColors(item),
     }))
     .filter((item) => item.id && item.name);
 }
@@ -107,7 +53,6 @@ function productsHtml(orderProducts = []) {
           <p><b>ID:</b> ${escapeHtml(item.id)}</p>
           <p><b>Nombre:</b> ${escapeHtml(item.name)}</p>
           <p><b>Precio:</b> $${money(item.price)}</p>
-          ${productOptionsHtml(item)}
         </div>
       `
     )
@@ -116,10 +61,10 @@ function productsHtml(orderProducts = []) {
 
 function productsText(orderProducts = []) {
   return orderProducts
-    .map((item, index) => {
-      const options = productOptionsText(item);
-      return `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nPrecio: $${money(item.price)}${options ? `\n${options}` : ""}`;
-    })
+    .map(
+      (item, index) =>
+        `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nPrecio: $${money(item.price)}`
+    )
     .join("\n\n");
 }
 
@@ -354,10 +299,3 @@ module.exports = async function handler(req, res) {
     });
   }
 };
-
-
-
-
-
-
-
