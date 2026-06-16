@@ -30,7 +30,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
         import "./search/search.js";
         
@@ -45,7 +45,7 @@
         };
 
         window.firebaseConfig = firebaseConfig;
-        window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, getStorage, ref, uploadBytes, getDownloadURL };
+        window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getStorage, ref, uploadBytes, getDownloadURL };
     </script>
     <script src="./wallet/wallet.js"></script>
 
@@ -704,67 +704,25 @@
             }, [fbUser, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.name, sessionUser?.phone, sessionUser?.role]);
 
             useEffect(() => {
-                if (!fbUser || sessionUser?.role !== 'admin') {
+                if (!fbUser || !sessionUser) {
                     setWalletRecharges([]);
                     return;
                 }
-                return Wallet.subscribeRecharges({ fbase, appId, onChange: setWalletRecharges });
-            }, [fbUser, sessionUser?.role]);
+                if (sessionUser.role === 'admin') {
+                    return Wallet.subscribeRecharges({ fbase, appId, onChange: setWalletRecharges });
+                }
+                const userWalletId = Wallet.getUserWalletId(sessionUser);
+                if (!userWalletId) {
+                    setWalletRecharges([]);
+                    return;
+                }
+                return Wallet.subscribeRecharges({ fbase, appId, walletId: userWalletId, onChange: setWalletRecharges });
+            }, [fbUser, sessionUser?.uid, sessionUser?.id, sessionUser?.role]);
 
             useEffect(() => {
-                if (view !== 'operator' || !showWalletRecharge || !sessionUser || sessionUser.role === 'admin') {
-                    Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons');
-                    return;
-                }
-                const currentWallet = Wallet.findWalletForUser(wallets, sessionUser, walletSettings);
-                const validation = Wallet.validateRechargeAmount(currentWallet, walletRechargeAmount, walletSettings);
-                if (!paymentSettings.paypalClientId || !validation.ok || walletRechargeProcessing) {
-                    Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons');
-                    return;
-                }
-                let cancelled = false;
-                Wallet.renderPayPalRechargeButtons({
-                    clientId: paymentSettings.paypalClientId,
-                    containerId: 'wallet-paypal-recharge-buttons',
-                    amount: validation.amount,
-                    description: 'Recarga de saldo Drive MX',
-                    onStart: () => setWalletRechargeProcessing(true),
-                    onApprove: async ({ data, capture, amount }) => {
-                        if (cancelled) return;
-                        try {
-                            await Wallet.recordRecharge({
-                                fbase,
-                                appId,
-                                user: sessionUser,
-                                wallet: currentWallet,
-                                amount,
-                                paypalOrderId: data?.orderID || capture?.id || '',
-                                paypalCaptureId: capture?.id || '',
-                                actor: sessionUser?.email || '',
-                                settings: walletSettings
-                            });
-                            alert('Recarga PayPal confirmada. El saldo fue abonado a tu cartera.');
-                            setWalletRechargeAmount('');
-                            setShowWalletRecharge(false);
-                        } catch(err) {
-                            console.error('Registrar recarga de cartera:', err);
-                            alert(err.message || 'No se pudo registrar la recarga en la cartera.');
-                        } finally {
-                            setWalletRechargeProcessing(false);
-                        }
-                    },
-                    onCancel: () => {
-                        setWalletRechargeProcessing(false);
-                        alert('Recarga cancelada.');
-                    },
-                    onError: (err) => {
-                        console.error('PayPal recarga cartera:', err);
-                        setWalletRechargeProcessing(false);
-                        alert(err?.message || 'No se pudo completar la recarga con PayPal.');
-                    }
-                });
-                return () => { cancelled = true; Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons'); };
-            }, [view, showWalletRecharge, walletRechargeAmount, walletRechargeProcessing, paymentSettings.paypalClientId, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role, wallets, walletSettings.minimumWalletRecharge, walletSettings.minimumFirstRecharge]);
+                if (!showWalletRecharge) setWalletRechargeProcessing(false);
+            }, [showWalletRecharge]);
+
 
             useEffect(() => {
                 if (!fbUser || !sessionUser || sessionUser.role === 'admin') {
@@ -1552,6 +1510,13 @@
             const currentUserWalletBlockedMessage = sessionUser && sessionUser.role !== 'admin' && !Wallet.isWalletActivated(currentUserWallet, walletSettings)
                 ? Wallet.INSUFFICIENT_MESSAGE
                 : '';
+            const currentUserWalletId = sessionUser && sessionUser.role !== 'admin' ? Wallet.getUserWalletId(sessionUser) : '';
+            const currentUserWalletRecharges = currentUserWalletId
+                ? walletRecharges
+                    .filter(item => Wallet.getUserWalletId(item.walletId || item.userId || '') === currentUserWalletId)
+                    .sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0))
+                    .slice(0, 5)
+                : [];
             const activeProducts = products.filter(p => p.active !== false);
             const findProductById = (productId) => products.find(p => String(p.id) === String(productId));
             const selectedProduct = findProductById(selectedProductId);
@@ -1623,6 +1588,129 @@
                     alert('No se pudo guardar la configuración de cartera.');
                 } finally {
                     setWalletSettingsSaving(false);
+                }
+            };
+
+
+            const getWalletTransferPaymentSettings = () => ({
+                bankAccount: paymentSettings.bankAccount.trim(),
+                bankLegend: Wallet.BANK_TRANSFER_LEGEND
+            });
+
+            const registerWalletRechargeTransfer = async () => {
+                if (!sessionUser || sessionUser.role === 'admin') return;
+                if (!paymentSettings.bankAccount.trim()) {
+                    alert('Falta configurar la cuenta bancaria para transferencias en el Panel de Control.');
+                    return;
+                }
+                const currentWallet = Wallet.findWalletForUser(wallets, sessionUser, walletSettings);
+                const validation = Wallet.validateRechargeAmount(currentWallet, walletRechargeAmount, walletSettings);
+                if (!validation.ok) {
+                    alert(validation.message);
+                    return;
+                }
+                setWalletRechargeProcessing(true);
+                try {
+                    const recharge = await Wallet.requestRechargeTransfer({
+                        fbase,
+                        appId,
+                        user: sessionUser,
+                        wallet: currentWallet,
+                        amount: validation.amount,
+                        paymentSettings: getWalletTransferPaymentSettings(),
+                        actor: sessionUser?.email || '',
+                        settings: walletSettings,
+                        source: 'user_wallet'
+                    });
+                    setWalletRecharges(prev => [{ id: recharge.id || recharge.rechargeId, ...recharge }, ...prev.filter(item => (item.id || item.rechargeId) !== (recharge.id || recharge.rechargeId))]);
+                    alert('Transferencia registrada como Pendiente. El saldo se abonará cuando el administrador confirme la transferencia.');
+                    setWalletRechargeAmount('');
+                    setShowWalletRecharge(false);
+                } catch(err) {
+                    console.error('Registrar recarga por transferencia:', err);
+                    alert(err.message || 'No se pudo registrar la recarga por transferencia.');
+                } finally {
+                    setWalletRechargeProcessing(false);
+                }
+            };
+
+            const createAdminPendingWalletRecharge = async (targetUser, amount) => {
+                if (sessionUser?.role !== 'admin') return null;
+                if (!targetUser) {
+                    alert('Selecciona un usuario registrado para la recarga.');
+                    return null;
+                }
+                if (!paymentSettings.bankAccount.trim()) {
+                    alert('Configura primero la cuenta bancaria en Configuración de Pagos.');
+                    return null;
+                }
+                const targetWallet = Wallet.findWalletForUser(wallets, targetUser, walletSettings);
+                const validation = Wallet.validateRechargeAmount(targetWallet, amount, walletSettings);
+                if (!validation.ok) {
+                    alert(validation.message);
+                    throw new Error(validation.message);
+                }
+                setWalletRechargeProcessing(true);
+                try {
+                    const recharge = await Wallet.requestRechargeTransfer({
+                        fbase,
+                        appId,
+                        user: targetUser,
+                        wallet: targetWallet,
+                        amount: validation.amount,
+                        paymentSettings: getWalletTransferPaymentSettings(),
+                        actor: sessionUser?.email || ADMIN_EMAIL,
+                        settings: walletSettings,
+                        source: 'admin_manual'
+                    });
+                    setWalletRecharges(prev => [{ id: recharge.id || recharge.rechargeId, ...recharge }, ...prev.filter(item => (item.id || item.rechargeId) !== (recharge.id || recharge.rechargeId))]);
+                    alert('Recarga pendiente registrada. Confirma la transferencia para abonar el saldo acumulable.');
+                    return recharge;
+                } catch(err) {
+                    console.error('Registrar recarga manual pendiente:', err);
+                    alert(err.message || 'No se pudo registrar la recarga manual.');
+                    throw err;
+                } finally {
+                    setWalletRechargeProcessing(false);
+                }
+            };
+
+            const approveWalletRechargeTransfer = async (recharge) => {
+                if (sessionUser?.role !== 'admin') return;
+                const rechargeId = recharge?.id || recharge?.rechargeId;
+                if (!rechargeId || recharge.status !== Wallet.RECHARGE_STATUS_PENDING) return;
+                if (!confirm('¿Confirmar esta transferencia y abonar el saldo a la cartera del usuario?')) return;
+                setWalletRechargeProcessing(true);
+                try {
+                    const result = await Wallet.approveRechargeTransfer({
+                        fbase,
+                        appId,
+                        recharge,
+                        actor: sessionUser?.email || ADMIN_EMAIL,
+                        settings: walletSettings
+                    });
+                    setWalletRecharges(prev => prev.map(item => ((item.id || item.rechargeId) === rechargeId ? { ...item, ...result.recharge } : item)));
+                    alert('Transferencia confirmada. El saldo fue abonado de forma acumulable a la cartera del usuario.');
+                } catch(err) {
+                    console.error('Confirmar recarga por transferencia:', err);
+                    alert(err.message || 'No se pudo confirmar la recarga.');
+                } finally {
+                    setWalletRechargeProcessing(false);
+                }
+            };
+
+            const deleteWalletRecharge = async (recharge) => {
+                if (sessionUser?.role !== 'admin') return;
+                const rechargeId = recharge?.id || recharge?.rechargeId;
+                if (!rechargeId) return;
+                if (!confirm('¿Eliminar este registro de recarga de cartera?')) return;
+                setWalletRecharges(prev => prev.filter(item => (item.id || item.rechargeId) !== rechargeId));
+                try {
+                    const db = fbase.getFirestore();
+                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'wallet_recharges', rechargeId));
+                } catch(err) {
+                    console.error('Eliminar recarga de cartera:', err);
+                    alert('No se pudo eliminar la recarga en Firestore.');
                 }
             };
 
@@ -3434,7 +3522,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         <div className="card-glass overflow-hidden">
                                             <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
                                                 <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Configuración de Pagos</h2>
-                                                <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Cuenta Banco Azteca y claves de PayPal para copiar y pegar</p>
+                                                <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Cuenta Banco Azteca para transferencias y claves de PayPal para compras</p>
                                             </div>
                                             <form onSubmit={savePaymentSettings} className="p-6 grid md:grid-cols-3 gap-3">
                                                 <div>
@@ -3468,6 +3556,12 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             wallets={wallets}
                                             recharges={walletRecharges}
                                             settings={walletSettings}
+                                            paymentAccount={paymentSettings.bankAccount}
+                                            paymentConfigured={Boolean(paymentSettings.bankAccount)}
+                                            processing={walletRechargeProcessing}
+                                            onCreatePendingRecharge={createAdminPendingWalletRecharge}
+                                            onApproveRecharge={approveWalletRechargeTransfer}
+                                            onDeleteRecharge={deleteWalletRecharge}
                                         />
 
                                         <div className="card-glass overflow-hidden">
@@ -3870,11 +3964,15 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     onRechargeAmountChange={setWalletRechargeAmount}
                                     showRecharge={showWalletRecharge}
                                     onToggleRecharge={() => { if (!ensureAccountAllowed()) return; setShowWalletRecharge(prev => !prev); }}
-                                    onCloseRecharge={() => { setShowWalletRecharge(false); setWalletRechargeAmount(''); Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons'); }}
-                                    paymentConfigured={Boolean(paymentSettings.paypalClientId)}
+                                    onCloseRecharge={() => { setShowWalletRecharge(false); setWalletRechargeAmount(''); }}
+                                    paymentConfigured={Boolean(paymentSettings.bankAccount)}
+                                    paymentAccount={paymentSettings.bankAccount}
+                                    paymentSettings={getWalletTransferPaymentSettings()}
+                                    bankLegend={Wallet.BANK_TRANSFER_LEGEND}
                                     settings={walletSettings}
-                                    paypalContainerId="wallet-paypal-recharge-buttons"
                                     rechargeProcessing={walletRechargeProcessing}
+                                    onSubmitRechargeTransfer={registerWalletRechargeTransfer}
+                                    recharges={currentUserWalletRecharges}
                                     blockedMessage={currentUserWalletBlockedMessage}
                                 />
 
@@ -3966,6 +4064,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
