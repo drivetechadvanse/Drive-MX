@@ -81,7 +81,6 @@
         const STAFF_USERS_LOCAL_KEY = 'driveMxOperators';
         const ADMIN_PRODUCTS_LOCAL_KEY = 'driveMxAdminProducts';
         const CART_MAX_ITEMS = 2;
-        const PRODUCT_SIZE_OPTIONS = ['Chica', 'Mediana', 'Grande', 'XL'];
         const REGISTERED_USERS_PAGE_SIZE = 20;
         const CART_TTL_MS = 30 * 60 * 1000;
         const CART_LOCAL_PREFIX = 'driveMxVisitorCart';
@@ -113,10 +112,6 @@
             ownerName: item.ownerName || '',
             ownerEmail: item.ownerEmail || '',
             ownerPhone: item.ownerPhone || '',
-            sizes: normalizeProductSizes(item),
-            tallas: normalizeProductSizes(item),
-            colors: normalizeProductColors(item),
-            colores: normalizeProductColors(item),
             sellerNotificationEmail: item.sellerNotificationEmail || item.saleNotificationEmail || '',
             saleNotificationEmail: item.saleNotificationEmail || item.sellerNotificationEmail || '',
             addedAt: Number(item.addedAt || Date.now())
@@ -172,38 +167,6 @@
             return legacyImage ? [legacyImage] : [];
         };
 
-        const normalizeArrayField = (value) => {
-            const raw = Array.isArray(value) ? value : String(value || '').split(/[\n,;|]+/);
-            const seen = new Set();
-            return raw.map(item => String(item || '').trim()).filter(Boolean).filter(item => {
-                const key = item.toLowerCase();
-                if (seen.has(key)) return false;
-                seen.add(key);
-                return true;
-            });
-        };
-
-        const normalizeProductSizes = (product = {}) => {
-            const rawSizes = product.sizes ?? product.tallas ?? product.productSizes ?? product.productTallas ?? product.size ?? product.talla ?? [];
-            const requestedSizes = normalizeArrayField(rawSizes);
-            return requestedSizes.map(size => PRODUCT_SIZE_OPTIONS.find(option => option.toLowerCase() === String(size).toLowerCase()) || '').filter(Boolean);
-        };
-
-        const normalizeProductColors = (product = {}) => normalizeArrayField(product.colors ?? product.colores ?? product.productColors ?? product.productColores ?? product.color ?? '');
-
-        const createEmptyProductForm = () => ({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], tallas: [], colors: [], colores: [], colorDraft: '', images: [], image: '', imageUrl: '', active: true });
-
-        const hasProductOptions = (product = {}) => normalizeProductSizes(product).length > 0 || normalizeProductColors(product).length > 0;
-
-        const formatProductOptionsText = (product = {}) => {
-            const sizes = normalizeProductSizes(product);
-            const colors = normalizeProductColors(product);
-            return [
-                sizes.length ? `Tallas: ${sizes.join(', ')}` : '',
-                colors.length ? `Colores: ${colors.join(', ')}` : ''
-            ].filter(Boolean).join(' | ');
-        };
-
         const DRIVE_MX_HISTORY_KEY = 'driveMxBackNavigation';
         const VALID_APP_VIEWS = new Set(['home', 'product-detail', 'delivery-data', 'payment-method', 'login', 'admin', 'admin-tracking', 'support', 'admin-support', 'operator']);
         const normalizeNavigationSnapshot = (snapshot = {}) => ({
@@ -257,7 +220,7 @@
             const [userForm, setUserForm] = useState({ email: '', p: '', n: '', phone: '' });
             const [editingRegisteredUserId, setEditingRegisteredUserId] = useState(null);
             const [registeredUsersPage, setRegisteredUsersPage] = useState(1);
-            const [productForm, setProductForm] = useState(() => createEmptyProductForm());
+            const [productForm, setProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true });
             const [productImageFiles, setProductImageFiles] = useState([]);
             const [productUploading, setProductUploading] = useState(false);
             const [editingProductId, setEditingProductId] = useState(null);
@@ -289,7 +252,7 @@
             const [assignmentsUnlocking, setAssignmentsUnlocking] = useState(false);
             const [saleNotificationEmail, setSaleNotificationEmail] = useState('');
             const [saleNotificationSaving, setSaleNotificationSaving] = useState(false);
-            const [userProductForm, setUserProductForm] = useState(() => createEmptyProductForm());
+            const [userProductForm, setUserProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true });
             const [userProductImageFiles, setUserProductImageFiles] = useState([]);
             const [userProductUploading, setUserProductUploading] = useState(false);
             const [editingUserProductId, setEditingUserProductId] = useState(null);
@@ -702,7 +665,7 @@
                     return;
                 }
                 const currentWallet = Wallet.findWalletForUser(wallets, sessionUser);
-                const validation = Wallet.validateRechargeAmount(currentWallet, walletRechargeAmount, walletSettings);
+                const validation = Wallet.validateRechargeAmount(currentWallet, walletRechargeAmount);
                 if (!paymentSettings.paypalClientId || !validation.ok || walletRechargeProcessing) {
                     Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons');
                     return;
@@ -725,8 +688,7 @@
                                 amount,
                                 paypalOrderId: data?.orderID || capture?.id || '',
                                 paypalCaptureId: capture?.id || '',
-                                actor: sessionUser?.email || '',
-                                settings: walletSettings
+                                actor: sessionUser?.email || ''
                             });
                             alert('Recarga PayPal confirmada. El saldo fue abonado a tu cartera.');
                             setWalletRechargeAmount('');
@@ -749,7 +711,7 @@
                     }
                 });
                 return () => { cancelled = true; Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons'); };
-            }, [view, showWalletRecharge, walletRechargeAmount, walletRechargeProcessing, paymentSettings.paypalClientId, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role, wallets, walletSettings]);
+            }, [view, showWalletRecharge, walletRechargeAmount, walletRechargeProcessing, paymentSettings.paypalClientId, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role, wallets]);
 
             useEffect(() => {
                 if (!fbUser || !sessionUser || sessionUser.role === 'admin') {
@@ -1138,7 +1100,7 @@
             };
 
             const resetProductForm = () => {
-                setProductForm(createEmptyProductForm());
+                setProductForm({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true });
                 productImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
                 setProductImageFiles([]);
                 setProductUploading(false);
@@ -1146,7 +1108,7 @@
             };
 
             const resetUserProductForm = () => {
-                setUserProductForm(createEmptyProductForm());
+                setUserProductForm({ id: '', name: '', price: '', stock: '', description: '', specifications: '', images: [], image: '', imageUrl: '', active: true });
                 userProductImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
                 setUserProductImageFiles([]);
                 setUserProductUploading(false);
@@ -1246,10 +1208,6 @@
                         stock: Number(productForm.stock || 0),
                         description: productForm.description.trim(),
                         specifications: productForm.specifications.trim(),
-                        sizes: normalizeProductSizes(productForm),
-                        tallas: normalizeProductSizes(productForm),
-                        colors: normalizeProductColors(productForm),
-                        colores: normalizeProductColors(productForm),
                         images,
                         image: mainImage,
                         imageUrl: mainImage,
@@ -1290,11 +1248,6 @@
                     stock: product.stock ?? '',
                     description: product.description || '',
                     specifications: product.specifications || '',
-                    sizes: normalizeProductSizes(product),
-                    tallas: normalizeProductSizes(product),
-                    colors: normalizeProductColors(product),
-                    colores: normalizeProductColors(product),
-                    colorDraft: '',
                     images,
                     image: images[0] || '',
                     imageUrl: images[0] || '',
@@ -1428,10 +1381,6 @@
                         stock: Number(userProductForm.stock || 0),
                         description: userProductForm.description.trim(),
                         specifications: userProductForm.specifications.trim(),
-                        sizes: normalizeProductSizes(userProductForm),
-                        tallas: normalizeProductSizes(userProductForm),
-                        colors: normalizeProductColors(userProductForm),
-                        colores: normalizeProductColors(userProductForm),
                         images,
                         image: mainImage,
                         imageUrl: mainImage,
@@ -1474,11 +1423,6 @@
                     stock: product.stock ?? '',
                     description: product.description || '',
                     specifications: product.specifications || '',
-                    sizes: normalizeProductSizes(product),
-                    tallas: normalizeProductSizes(product),
-                    colors: normalizeProductColors(product),
-                    colores: normalizeProductColors(product),
-                    colorDraft: '',
                     images,
                     image: images[0] || '',
                     imageUrl: images[0] || '',
@@ -1582,13 +1526,8 @@
             const saveWalletCommissionSettings = async (e) => {
                 e.preventDefault();
                 const percent = Number(walletSettings.globalCommissionPercent || 0);
-                const minimumWalletRecharge = Wallet.parseAmount(walletSettings.minimumWalletRecharge ?? walletSettings.minimumFirstRecharge ?? 0);
                 if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
                     alert('Ingresa un porcentaje de comisión global entre 0 y 100.');
-                    return;
-                }
-                if (!Number.isFinite(minimumWalletRecharge) || minimumWalletRecharge < 0) {
-                    alert('Ingresa una recarga mínima de cartera válida.');
                     return;
                 }
                 setWalletSettingsSaving(true);
@@ -1596,14 +1535,14 @@
                     const next = await Wallet.saveSettings({
                         fbase,
                         appId,
-                        settings: { ...walletSettings, globalCommissionPercent: percent, minimumWalletRecharge, minimumFirstRecharge: minimumWalletRecharge },
+                        settings: { ...walletSettings, globalCommissionPercent: percent },
                         actor: sessionUser?.email || ADMIN_EMAIL
                     });
                     setWalletSettings(next);
-                    alert('Configuración global de cartera guardada correctamente.');
+                    alert('Configuración de comisiones guardada correctamente.');
                 } catch(err) {
-                    console.error('Guardar configuración global de cartera:', err);
-                    alert('No se pudo guardar la configuración global de cartera.');
+                    console.error('Guardar configuración de comisiones:', err);
+                    alert('No se pudo guardar la configuración de comisiones.');
                 } finally {
                     setWalletSettingsSaving(false);
                 }
@@ -1627,10 +1566,6 @@
                     ownerName: seller.name || product.ownerName || '',
                     ownerEmail: seller.email || product.ownerEmail || '',
                     ownerPhone: seller.phone || product.ownerPhone || '',
-                    sizes: normalizeProductSizes(product),
-                    tallas: normalizeProductSizes(product),
-                    colors: normalizeProductColors(product),
-                    colores: normalizeProductColors(product),
                     sellerNotificationEmail: seller.saleNotificationEmail || product.sellerNotificationEmail || product.saleNotificationEmail || '',
                     saleNotificationEmail: seller.saleNotificationEmail || product.saleNotificationEmail || product.sellerNotificationEmail || '',
                     addedAt: Date.now()
@@ -2178,10 +2113,6 @@
                         id: product?.id || '',
                         name: product?.name || '',
                         price: Number(product?.price || 0),
-                        sizes: normalizeProductSizes(product || {}),
-                        tallas: normalizeProductSizes(product || {}),
-                        colors: normalizeProductColors(product || {}),
-                        colores: normalizeProductColors(product || {}),
                         ownerId: seller.id,
                         ownerName: seller.name,
                         ownerEmail: seller.email,
@@ -2237,10 +2168,6 @@
                         id: payloadProduct.id || sourceProduct.id || '',
                         name: payloadProduct.name || sourceProduct.name || '',
                         price: Number(payloadProduct.price ?? sourceProduct.price ?? 0),
-                        sizes: normalizeProductSizes({ ...sourceProduct, ...payloadProduct }),
-                        tallas: normalizeProductSizes({ ...sourceProduct, ...payloadProduct }),
-                        colors: normalizeProductColors({ ...sourceProduct, ...payloadProduct }),
-                        colores: normalizeProductColors({ ...sourceProduct, ...payloadProduct }),
                         ownerId: seller.id || payloadProduct.ownerId || '',
                         ownerName: seller.name || payloadProduct.ownerName || '',
                         ownerEmail: seller.email || payloadProduct.ownerEmail || '',
@@ -2257,16 +2184,13 @@
 
 Producto: ${product.name || ''}
 ID: ${product.id || ''}
-Precio: $${Number(product.price || 0).toFixed(2)}${formatProductOptionsText(product) ? `
-${formatProductOptionsText(product)}` : ''}
+Precio: $${Number(product.price || 0).toFixed(2)}
 
 Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         sellerName: product.ownerName || '',
                         productName: product.name || '',
                         productId: product.id || '',
-                        productPrice: Number(product.price || 0),
-                        productSizes: normalizeProductSizes(product),
-                        productColors: normalizeProductColors(product)
+                        productPrice: Number(product.price || 0)
                     }));
                 const enrichedTotal = enrichedProducts.reduce((total, product) => total + Number(product.price || 0), 0);
                 return {
@@ -2300,9 +2224,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         productId: payloadProduct.id || sourceProduct.id || '',
                         productName: payloadProduct.name || sourceProduct.name || '',
                         productCost: Number(payloadProduct.price || sourceProduct.price || 0),
-                        productSizes: normalizeProductSizes({ ...sourceProduct, ...payloadProduct }),
-                        productColors: normalizeProductColors({ ...sourceProduct, ...payloadProduct }),
-                        productOptions: formatProductOptionsText({ ...sourceProduct, ...payloadProduct }),
                         sellerId: seller.id || payloadProduct.ownerId || '',
                         sellerName: seller.name || payloadProduct.ownerName || 'Admin Central',
                         sellerEmail: seller.email || payloadProduct.ownerEmail || ADMIN_EMAIL,
@@ -2369,7 +2290,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         transferId: id,
                         paymentMethod: 'Transferencia bancaria',
                         bankAccount: paymentSettings.bankAccount.trim(),
-                        bankLegend: 'Pagar con Banco Azteca, el nombre del titular debe coincidir con el nombre registrado en el pedido.',
+                        bankLegend: 'Banco Azteca, el nombre del titular debe coincidir con el nombre registrado en el pedido.',
                         holderName: payload.delivery.fullName,
                         status: 'Pendiente',
                         order: payload,
@@ -2593,9 +2514,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
 
             const TrackingStatusCard = ({ pkg }) => {
                 const activeIndex = getTrackingStepIndex(pkg);
-                const trackingProducts = Array.isArray(pkg?.products) && pkg.products.length > 0 ? pkg.products : (findProductByTracking(pkg) ? [findProductByTracking(pkg)] : []);
 
-                return (
+            return (
                     <div className="card-glass p-6 max-w-3xl mx-auto animate-slide space-y-5">
                         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                             <div>
@@ -2608,18 +2528,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                             <div><p className="text-[8px] font-black text-slate-400 uppercase">Origen</p><p className="text-sm font-black text-slate-900 uppercase">{pkg.o || 'Origen pendiente'}</p></div>
                             <div><p className="text-[8px] font-black text-slate-400 uppercase">Destino</p><p className="text-sm font-black text-slate-900 uppercase">{pkg.d || 'Destino pendiente'}</p></div>
                         </div>
-                        {trackingProducts.length > 0 && (
-                            <div className="bg-white border border-slate-100 rounded-2xl p-4 space-y-2">
-                                <p className="text-[8px] font-black text-slate-400 uppercase">Producto relacionado</p>
-                                {trackingProducts.map((product, index) => (
-                                    <div key={`${pkg.id || pkg.trackingNumber}_${product.id || index}`} className={index > 0 ? 'pt-2 mt-2 border-t border-slate-100' : ''}>
-                                        <p className="text-sm font-black text-slate-900">{product.name || product.id || 'Producto'}</p>
-                                        <p className="text-[8px] font-mono font-bold text-slate-400">ID: {product.id || '-'}</p>
-                                        <ProductOptionsInfo product={product} compact />
-                                    </div>
-                                ))}
-                            </div>
-                        )}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                             {STEPS.map((step, i) => (
                                 <div key={step} className={`p-3 rounded-xl border-2 text-center ${i <= activeIndex ? 'bg-red-500 border-red-500 text-white' : 'bg-white border-slate-100 text-slate-300'}`}>
@@ -2781,102 +2689,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             };
 
 
-            const toggleProductFormSize = (setForm, size) => {
-                setForm(prev => {
-                    const current = normalizeProductSizes(prev);
-                    const next = current.includes(size) ? current.filter(item => item !== size) : [...current, size];
-                    return { ...prev, sizes: next, tallas: next };
-                });
-            };
-
-            const updateProductFormColorDraft = (setForm, value) => {
-                setForm(prev => ({ ...prev, colorDraft: value }));
-            };
-
-            const addProductFormColor = (setForm) => {
-                setForm(prev => {
-                    const color = String(prev.colorDraft || '').trim();
-                    if (!color) return prev;
-                    const current = normalizeProductColors(prev);
-                    const exists = current.some(item => item.toLowerCase() === color.toLowerCase());
-                    const next = exists ? current : [...current, color];
-                    return { ...prev, colors: next, colores: next, colorDraft: '' };
-                });
-            };
-
-            const removeProductFormColor = (setForm, index) => {
-                setForm(prev => {
-                    const next = normalizeProductColors(prev).filter((_, itemIndex) => itemIndex !== index);
-                    return { ...prev, colors: next, colores: next };
-                });
-            };
-
-            const renderProductOptionsFields = (form, setForm) => {
-                const selectedSizes = normalizeProductSizes(form);
-                const colors = normalizeProductColors(form);
-                return (
-                    <>
-                        <div className="md:col-span-5 rounded-2xl bg-slate-50 border border-slate-100 p-4 space-y-3">
-                            <div>
-                                <p className="text-[10px] font-black uppercase text-slate-600">Tallas</p>
-                                <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">Campo opcional · puedes seleccionar una o varias tallas</p>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                                {PRODUCT_SIZE_OPTIONS.map(size => (
-                                    <label key={size} className={`px-3 py-2 rounded-xl border-2 text-[9px] font-black uppercase cursor-pointer transition-all ${selectedSizes.includes(size) ? 'bg-red-500 border-red-500 text-white' : 'bg-white border-slate-100 text-slate-500 hover:border-red-200'}`}>
-                                        <input type="checkbox" className="hidden" checked={selectedSizes.includes(size)} onChange={() => toggleProductFormSize(setForm, size)} />
-                                        {size}
-                                    </label>
-                                ))}
-                            </div>
-                        </div>
-
-                        <div className="md:col-span-5 rounded-2xl bg-slate-50 border border-slate-100 p-4 space-y-3">
-                            <div>
-                                <p className="text-[10px] font-black uppercase text-slate-600">Colores</p>
-                                <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">Campo opcional · captura manualmente y usa + para agregar colores ilimitados</p>
-                            </div>
-                            <div className="flex gap-2">
-                                <input type="text" className="input-field" placeholder="Ej. Rojo, Azul marino, Negro" value={form.colorDraft || ''} onChange={e => updateProductFormColorDraft(setForm, e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addProductFormColor(setForm); } }} />
-                                <button type="button" onClick={() => addProductFormColor(setForm)} className="w-12 h-12 rounded-xl bg-red-500 text-white text-xl font-black hover:bg-red-600 transition-all shrink-0" aria-label="Agregar color">+</button>
-                            </div>
-                            {colors.length > 0 && (
-                                <div className="flex flex-wrap gap-2">
-                                    {colors.map((color, index) => (
-                                        <span key={`${color}_${index}`} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-white border border-slate-100 text-[9px] font-black uppercase text-slate-600">
-                                            {color}
-                                            <button type="button" onClick={() => removeProductFormColor(setForm, index)} className="text-slate-300 hover:text-red-500 font-black" aria-label={`Eliminar color ${color}`}>×</button>
-                                        </span>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    </>
-                );
-            };
-
-            const ProductOptionsInfo = ({ product, compact = false }) => {
-                const sizes = normalizeProductSizes(product);
-                const colors = normalizeProductColors(product);
-                if (sizes.length === 0 && colors.length === 0) return null;
-                return (
-                    <div className={compact ? "mt-1 space-y-1 text-[8px] font-black uppercase text-slate-400" : "rounded-2xl bg-slate-50 p-4 space-y-3"}>
-                        {!compact && <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Detalles del Producto</h2>}
-                        {sizes.length > 0 && (
-                            <div className={compact ? "" : "space-y-2"}>
-                                <p className={compact ? "" : "text-[9px] font-black uppercase text-slate-400"}>Tallas: {sizes.join(', ')}</p>
-                            </div>
-                        )}
-                        {colors.length > 0 && (
-                            <div className={compact ? "" : "space-y-2"}>
-                                <p className={compact ? "" : "text-[9px] font-black uppercase text-slate-400"}>Colores: {colors.join(', ')}</p>
-                            </div>
-                        )}
-                    </div>
-                );
-            };
-
-
                 const renderUserProductsPanel = () => (
                 <>
                     <div className="card-glass overflow-hidden">
@@ -2910,7 +2722,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 <tbody className="divide-y divide-slate-50">
                                     {currentUserSales.map(sale => (
                                         <tr key={sale.id || sale.saleId} className="text-[10px] font-bold text-slate-600">
-                                            <td className="px-6 py-4"><p className="font-black text-slate-800">{sale.productName || sale.name || sale.productId || '-'}</p><ProductOptionsInfo product={sale} compact /></td>
+                                            <td className="px-6 py-4 font-black text-slate-800">{sale.productName || sale.name || sale.productId || '-'}</td>
                                             <td className="px-6 py-4 text-red-600 font-black">${Number(sale.productCost || sale.productPrice || sale.price || 0).toFixed(2)}</td>
                                             <td className="px-6 py-4">{(sale.soldAt || sale.createdAt) ? new Date(sale.soldAt || sale.createdAt).toLocaleString('es-MX') : '-'}</td>
                                         </tr>
@@ -2974,7 +2786,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     <input type="checkbox" checked={userProductForm.active} onChange={e => setUserProductForm({...userProductForm, active: e.target.checked})} />
                                     Activo
                                 </label>
-                                {renderProductOptionsFields(userProductForm, setUserProductForm)}
                                 <textarea className="input-field md:col-span-5 min-h-[90px] resize-y" placeholder="DESCRIPCIÓN" value={userProductForm.description} onChange={e => setUserProductForm({...userProductForm, description: e.target.value})}></textarea>
                                 <textarea className="input-field md:col-span-5 min-h-[90px] resize-y" placeholder="ESPECIFICACIONES" value={userProductForm.specifications} onChange={e => setUserProductForm({...userProductForm, specifications: e.target.value})}></textarea>
                                 <button disabled={userProductUploading} type="submit" className="md:col-span-5 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{userProductUploading ? 'Guardando...' : (editingUserProductId ? 'Guardar Cambios' : 'Agregar Producto')}</button>
@@ -3000,7 +2811,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                     {getProductGallery(product)[0] ? <img src={getProductGallery(product)[0]} alt={product.name} className="w-full h-full object-cover" /> : null}
                                                 </div>
                                             </td>
-                                            <td className="px-6 py-4"><p className="font-black text-slate-800">{product.name}</p><p className="font-mono text-[8px] text-slate-400">{product.id}</p><ProductOptionsInfo product={product} compact /></td>
+                                            <td className="px-6 py-4"><p className="font-black text-slate-800">{product.name}</p><p className="font-mono text-[8px] text-slate-400">{product.id}</p></td>
                                             <td className="px-6 py-4 text-red-600 font-black">${Number(product.price || 0).toFixed(2)}</td>
                                             <td className="px-6 py-4">{Number(product.stock || 0)}</td>
                                             <td className="px-6 py-4"><span className={`px-2 py-1 rounded-full text-[8px] uppercase ${product.active !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400'}`}>{product.active !== false ? 'Activo' : 'Inactivo'}</span></td>
@@ -3076,7 +2887,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                     <div className="min-w-0">
                                                         <p className="text-sm font-black text-slate-900 truncate">{product.name}</p>
                                                         <p className="text-[9px] font-bold text-slate-400 uppercase">ID: {product.id}</p>
-                                                        <ProductOptionsInfo product={product} compact />
                                                     </div>
                                                     <div className="text-right shrink-0">
                                                         <p className="text-sm font-black text-red-500">${Number(product.price || 0).toFixed(2)}</p>
@@ -3157,7 +2967,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                                     <p className="text-xl font-black text-red-500">${Number(product.price || 0).toFixed(2)}</p>
                                                                     <span className="px-3 py-1 bg-slate-50 rounded-full text-[9px] font-black text-slate-500 uppercase">Stock: {Number(product.stock || 0)}</span>
                                                                 </div>
-                                                                <ProductOptionsInfo product={product} compact />
                                                             </div>
                                                         </article>
                                                     ))}
@@ -3220,8 +3029,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             <p className="text-sm font-semibold text-slate-600 leading-relaxed whitespace-pre-line">{selectedProduct.specifications || 'Sin especificaciones registradas.'}</p>
                                         </div>
 
-                                        <ProductOptionsInfo product={selectedProduct} />
-
                                         <div className="flex flex-col sm:flex-row gap-3">
                                             <button type="button" onClick={() => startSingleProductCheckout(selectedProduct)} className="btn-primary w-full sm:w-auto h-12">Comprar</button>
                                             <button type="button" onClick={() => addProductToCart(selectedProduct)} className="w-full sm:w-auto h-12 px-6 rounded-xl border-2 border-red-100 bg-red-50 text-red-600 text-[10px] font-black uppercase tracking-widest hover:bg-red-500 hover:text-white transition-all">{isProductInCart(selectedProduct.id) ? 'En el carrito' : 'Agregar al carrito'}</button>
@@ -3254,9 +3061,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                 <p className="text-[9px] font-black text-red-500 uppercase">{checkoutProducts.length}/{CART_MAX_ITEMS} productos</p>
                                             </div>
                                             {checkoutProducts.map(product => (
-                                                <div key={product.id} className="flex items-start justify-between gap-3 text-sm font-bold">
-                                                    <div className="text-slate-700 min-w-0"><p>{product.name}</p><ProductOptionsInfo product={product} compact /></div>
-                                                    <span className="text-red-500 font-black shrink-0">${Number(product.price || 0).toFixed(2)}</span>
+                                                <div key={product.id} className="flex items-center justify-between gap-3 text-sm font-bold">
+                                                    <span className="text-slate-700">{product.name}</span>
+                                                    <span className="text-red-500 font-black">${Number(product.price || 0).toFixed(2)}</span>
                                                 </div>
                                             ))}
                                             <div className="border-t border-slate-200 pt-3 flex items-center justify-between">
@@ -3321,9 +3128,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         <div className="bg-slate-50 rounded-2xl p-4 space-y-3">
                                             <p className="text-[9px] font-black text-slate-400 uppercase">Resumen de compra</p>
                                             {checkoutProducts.map(product => (
-                                                <div key={product.id} className="flex items-start justify-between gap-3 text-sm font-bold">
-                                                    <div className="text-slate-700 min-w-0"><p>{product.name}</p><ProductOptionsInfo product={product} compact /></div>
-                                                    <span className="text-red-500 font-black shrink-0">${Number(product.price || 0).toFixed(2)}</span>
+                                                <div key={product.id} className="flex items-center justify-between gap-3 text-sm font-bold">
+                                                    <span className="text-slate-700">{product.name}</span>
+                                                    <span className="text-red-500 font-black">${Number(product.price || 0).toFixed(2)}</span>
                                                 </div>
                                             ))}
                                         </div>
@@ -3348,7 +3155,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             <div className="bg-slate-50 rounded-2xl p-5 space-y-3">
                                                 <p className="text-[9px] font-black text-slate-400 uppercase">Cuenta bancaria Banco Azteca</p>
                                                 <p className="text-2xl font-black text-slate-900 break-all">{paymentSettings.bankAccount || 'Cuenta no configurada'}</p>
-                                                <p className="text-[10px] font-bold text-slate-500 uppercase leading-relaxed">Pagar con Banco Azteca, el nombre del titular debe coincidir con el nombre registrado en el pedido.</p>
+                                                <p className="text-[10px] font-bold text-slate-500 uppercase leading-relaxed">Banco Azteca, el nombre del titular debe coincidir con el nombre registrado en el pedido.</p>
                                             </div>
                                         )}
 
@@ -3421,7 +3228,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                     {pkgs.map(p => (
                                                         <tr key={p.id} className="text-[10px] font-bold text-slate-600">
                                                             <td className="px-6 py-4 text-red-600 font-black">#{p.id}</td>
-                                                            <td className="px-6 py-4">{p.o} → {p.d}<br/><span className="text-[8px] text-slate-400 uppercase">{findProductByTracking(p)?.name || p.productId || 'Sin producto'}</span><ProductOptionsInfo product={findProductByTracking(p)} compact /></td>
+                                                            <td className="px-6 py-4">{p.o} → {p.d}<br/><span className="text-[8px] text-slate-400 uppercase">{findProductByTracking(p)?.name || p.productId || 'Sin producto'}</span></td>
                                                             <td className="px-6 py-4"><span className="px-2 py-1 bg-slate-100 rounded-full text-[8px] uppercase">{p.status}</span></td>
                                                             <td className="px-6 py-4 text-right"><button onClick={() => deletePkg(p.id)} className="text-slate-300 hover:text-red-500"><Icons.Trash /></button></td>
                                                         </tr>
@@ -3478,9 +3285,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         <WalletUI.AdminCommissionSettings
                                             settings={walletSettings}
                                             value={walletSettings.globalCommissionPercent}
-                                            minimumRechargeValue={walletSettings.minimumWalletRecharge ?? walletSettings.minimumFirstRecharge ?? ''}
                                             onChange={(value) => setWalletSettings(prev => ({ ...prev, globalCommissionPercent: value }))}
-                                            onMinimumRechargeChange={(value) => setWalletSettings(prev => ({ ...prev, minimumWalletRecharge: value, minimumFirstRecharge: value }))}
                                             onSubmit={saveWalletCommissionSettings}
                                             saving={walletSettingsSaving}
                                         />
@@ -3519,7 +3324,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                                         <div key={`${t.id || t.transferId}_${product.id || index}`} className={index > 0 ? 'mt-2 pt-2 border-t border-slate-100' : ''}>
                                                                             <p className="font-black">{product.name}</p>
                                                                             <p className="text-slate-400 font-mono">ID: {product.id}</p>
-                                                                            <ProductOptionsInfo product={product} compact />
                                                                             <p className="text-red-600 font-black">${Number(product.price || 0).toFixed(2)}</p>
                                                                         </div>
                                                                     ))}
@@ -3573,7 +3377,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                     <tbody className="divide-y divide-slate-50">
                                                         {completedSales.map(sale => (
                                                             <tr key={sale.id || sale.saleId} className="text-[10px] font-bold text-slate-600 align-top">
-                                                                <td className="px-6 py-4"><p className="font-black text-slate-800">{sale.sellerName || '-'}</p><p className="text-[8px] text-slate-400 uppercase">{sale.productName || sale.productId || ''}</p><ProductOptionsInfo product={sale} compact /></td>
+                                                                <td className="px-6 py-4"><p className="font-black text-slate-800">{sale.sellerName || '-'}</p><p className="text-[8px] text-slate-400 uppercase">{sale.productName || sale.productId || ''}</p></td>
                                                                 <td className="px-6 py-4 font-mono text-slate-400">{sale.sellerEmail || '-'}</td>
                                                                 <td className="px-6 py-4 font-mono text-slate-400">{sale.sellerPhone || '-'}</td>
                                                                 <td className="px-6 py-4 text-red-600 font-black">${Number(sale.productCost || 0).toFixed(2)}</td>
@@ -3640,7 +3444,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                         <input type="checkbox" checked={productForm.active} onChange={e => setProductForm({...productForm, active: e.target.checked})} />
                                                         Activo
                                                     </label>
-                                                    {renderProductOptionsFields(productForm, setProductForm)}
                                                     <textarea className="input-field md:col-span-5 min-h-[90px] resize-y" placeholder="DESCRIPCIÓN" value={productForm.description} onChange={e => setProductForm({...productForm, description: e.target.value})}></textarea>
                                                     <textarea className="input-field md:col-span-5 min-h-[90px] resize-y" placeholder="ESPECIFICACIONES" value={productForm.specifications} onChange={e => setProductForm({...productForm, specifications: e.target.value})}></textarea>
                                                     <button disabled={productUploading} type="submit" className="md:col-span-5 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{productUploading ? 'Guardando...' : (editingProductId ? 'Guardar Cambios' : 'Agregar Producto')}</button>
@@ -3666,7 +3469,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                                         {getProductGallery(product)[0] ? <img src={getProductGallery(product)[0]} alt={product.name} className="w-full h-full object-cover" /> : null}
                                                                     </div>
                                                                 </td>
-                                                                <td className="px-6 py-4"><p className="font-black text-slate-800">{product.name}</p><p className="font-mono text-[8px] text-slate-400">{product.id}</p><ProductOptionsInfo product={product} compact /></td>
+                                                                <td className="px-6 py-4"><p className="font-black text-slate-800">{product.name}</p><p className="font-mono text-[8px] text-slate-400">{product.id}</p></td>
                                                                 <td className="px-6 py-4 text-red-600 font-black">${Number(product.price || 0).toFixed(2)}</td>
                                                                 <td className="px-6 py-4">{Number(product.stock || 0)}</td>
                                                                 <td className="px-6 py-4"><span className={`px-2 py-1 rounded-full text-[8px] uppercase ${product.active !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400'}`}>{product.active !== false ? 'Activo' : 'Inactivo'}</span></td>
@@ -3792,7 +3595,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                             <div><p className="text-[8px] font-black text-slate-400 uppercase">Nombre</p><p className="text-sm font-black text-slate-900">{product.name || 'Producto sin nombre'}</p></div>
                                                             <div><p className="text-[8px] font-black text-slate-400 uppercase">ID (Guías de envío Noo)</p><p className="text-sm font-mono font-black text-slate-700">{product.id || '-'}</p></div>
                                                         </div>
-                                                        <ProductOptionsInfo product={product} />
                                                     </div>
                                                 </div>
                                             </div>
@@ -3888,7 +3690,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 <WalletUI.UserWalletCard
                                     user={sessionUser}
                                     wallet={currentUserWallet}
-                                    settings={walletSettings}
                                     rechargeAmount={walletRechargeAmount}
                                     onRechargeAmountChange={setWalletRechargeAmount}
                                     showRecharge={showWalletRecharge}
@@ -3988,6 +3789,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
