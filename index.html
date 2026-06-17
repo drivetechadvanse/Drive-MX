@@ -774,20 +774,20 @@
 
             const getFirebaseAuthErrorMessage = (err) => {
                 const code = err?.code || '';
-                if (code === 'auth/email-already-in-use') return 'El correo ya está registrado en Firebase Authentication. Inicia sesión o usa otro correo.';
+                if (code === 'auth/email-already-in-use') return 'El correo ya está registrado. Inicia sesión o usa otro correo.';
                 if (code === 'auth/invalid-email') return 'El correo electrónico no es válido.';
                 if (code === 'auth/weak-password') return 'La contraseña debe tener mínimo 6 caracteres.';
-                if (code === 'auth/network-request-failed') return 'No se pudo conectar con Firebase Authentication. Revisa tu conexión e intenta de nuevo.';
-                if (code === 'auth/operation-not-allowed') return 'El registro con correo y contraseña no está habilitado en Firebase Authentication.';
-                return 'No se pudo crear el usuario en Firebase Authentication. Revisa los datos e intenta de nuevo.';
+                if (code === 'auth/network-request-failed') return 'No se pudo completar la operación. Revisa tu conexión e intenta de nuevo.';
+                if (code === 'auth/operation-not-allowed') return 'No se pudo crear el usuario. Contacta al administrador.';
+                return 'No se pudo crear el usuario. Revisa los datos e intenta de nuevo.';
             };
 
             const getFirestoreRegistrationErrorMessage = (err) => {
                 const code = err?.code || '';
-                if (code === 'permission-denied') return 'El usuario fue creado en Authentication, pero Firestore rechazó el guardado del perfil por permisos.';
-                if (code === 'unavailable') return 'El usuario fue creado en Authentication, pero Firestore no estuvo disponible para guardar el perfil.';
-                if (code === 'invalid-argument') return 'El usuario fue creado en Authentication, pero los datos del perfil no pasaron la validación de Firestore.';
-                return 'El usuario fue creado en Authentication, pero ocurrió un error al guardar el perfil en Firestore.';
+                if (code === 'permission-denied') return 'Usuario creado exitosamente. No se pudo completar el perfil; contacta al administrador.';
+                if (code === 'unavailable') return 'Usuario creado exitosamente. No se pudo completar el perfil en este momento; intenta nuevamente.';
+                if (code === 'invalid-argument') return 'Usuario creado exitosamente. Revisa los datos del perfil e intenta nuevamente.';
+                return 'Usuario creado exitosamente. No se pudo completar el perfil en este momento.';
             };
 
             const deletePkg = async (id) => {
@@ -874,7 +874,7 @@
                     await deleteUserCompletedSaleMirror(sale);
                 } catch(err) {
                     console.error('Firestore borrar venta realizada:', err);
-                    alert('No se pudo eliminar la venta realizada en Firestore.');
+                    alert('No se pudo eliminar la venta realizada.');
                 }
             };
             const deleteUser = async (userOrId) => {
@@ -887,7 +887,7 @@
                     return;
                 }
                 const label = targetUser.name || targetUser.email || targetId;
-                if (!confirm(`¿Eliminar Usuario ${label}? Se eliminará su cuenta de Authentication y sus datos asociados en Firestore.`)) return;
+                if (!confirm(`¿Eliminar Usuario ${label}? Se eliminará su cuenta y sus datos asociados.`)) return;
 
                 const removedUserIds = new Set([targetId, getSafeFirestoreDocId(targetId)].filter(Boolean));
                 const matchesTargetProduct = (product = {}) => isProductOwnedByUserProfile(product, targetUser);
@@ -942,7 +942,8 @@
                     alert('Usuario eliminado correctamente.');
                 } catch(err) {
                     console.error('Eliminar usuario:', err);
-                    alert(`No se pudo completar la eliminación del usuario: ${err.message || err}`);
+                    console.error('Detalle técnico de eliminación de usuario:', err);
+                    alert('No se pudo completar la eliminación del usuario.');
                 }
             };
             const findRegisteredUserProfile = (target = sessionUser) => {
@@ -1221,7 +1222,7 @@
                     resetProductForm();
                 } catch(err) {
                     console.error('Storage producto:', err);
-                    alert('No se pudo guardar el producto. Revisa Firebase Storage y vuelve a intentar.');
+                    alert('No se pudo guardar el producto. Intenta nuevamente.');
                     setProductUploading(false);
                 }
             };
@@ -1399,7 +1400,7 @@
                     alert('Publicación guardada correctamente. Se mostrará en la portada principal si está activa.');
                 } catch(err) {
                     console.error('Storage publicación usuario:', err);
-                    alert('No se pudo guardar la publicación. Revisa Firebase Storage y vuelve a intentar.');
+                    alert('No se pudo guardar la publicación. Intenta nuevamente.');
                     setUserProductUploading(false);
                 }
             };
@@ -2002,11 +2003,11 @@
                     }
 
                     closeRegisteredUserModal();
-                    alert('Usuario creado correctamente en Firebase Authentication y Firestore.');
+                    alert('Usuario creado exitosamente.');
                 } catch(err) {
                     console.error('Guardar perfil de usuario en Firestore:', err);
                     if (authUserCreated) {
-                        alert(`${getFirestoreRegistrationErrorMessage(err)} El usuario sí existe en Firebase Authentication; corrige el perfil en Firestore para que pueda acceder correctamente.`);
+                        alert(getFirestoreRegistrationErrorMessage(err));
                     } else {
                         alert('No se pudo completar el registro del usuario.');
                     }
@@ -2221,7 +2222,6 @@
                         message: `Tu producto ha sido vendido.
 
 Producto: ${product.name || ''}
-ID: ${product.id || ''}
 Precio: $${Number(product.price || 0).toFixed(2)}
 ${productOptionsLines(product).join('\n')}
 
@@ -2449,7 +2449,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     alert('Transferencia marcada como Pagado y correo enviado correctamente.');
                 } catch(err) {
                     console.error('Marcar transferencia pagada:', err);
-                    alert(err.message || 'No se pudo confirmar la transferencia.');
+                    alert('No se pudo confirmar la transferencia.');
                 } finally {
                     setOrderSending(false);
                 }
@@ -2467,7 +2467,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'bank_transfers', transferId));
                 } catch(err) {
                     console.error('Firestore borrar transferencia:', err);
-                    alert('No se pudo eliminar la transferencia en Firestore.');
+                    alert('No se pudo eliminar la transferencia.');
                 }
             };
 
@@ -3059,7 +3059,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                 <div key={product.id} className="flex items-center justify-between gap-3 bg-slate-50 rounded-2xl p-3">
                                                     <div className="min-w-0">
                                                         <p className="text-sm font-black text-slate-900 truncate">{product.name}</p>
-                                                        <p className="text-[9px] font-bold text-slate-400 uppercase">ID: {product.id}</p>
+                                                        
                                                     </div>
                                                     <div className="text-right shrink-0">
                                                         <p className="text-sm font-black text-red-500">${Number(product.price || 0).toFixed(2)}</p>
@@ -3134,7 +3134,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                             <div className="p-5 space-y-3">
                                                                 <div>
                                                                     <h3 className="text-sm font-black text-slate-900 leading-tight">{product.name}</h3>
-                                                                    <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">ID: {product.id}</p>
+                                                                    
                                                                 </div>
                                                                 <div className="flex items-center justify-between gap-3">
                                                                     <p className="text-xl font-black text-red-500">${Number(product.price || 0).toFixed(2)}</p>
@@ -3184,7 +3184,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         <div>
                                             <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-2">Detalle del producto</p>
                                             <h1 className="text-3xl sm:text-4xl font-black tracking-tight leading-tight">{selectedProduct.name}</h1>
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase mt-2">ID: {selectedProduct.id}</p>
+                                            
                                         </div>
 
                                         <div className="flex flex-wrap items-center gap-4">
@@ -3501,7 +3501,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                                         {(Array.isArray(t.order?.products) && t.order.products.length > 0 ? t.order.products : (t.order?.product ? [t.order.product] : [])).map((product, index) => (
                                                                             <div key={`${t.id || t.transferId}_${product.id || index}`} className={index > 0 ? 'mt-2 pt-2 border-t border-slate-100' : ''}>
                                                                                 <p className="font-black">{product.name}</p>
-                                                                                <p className="text-slate-400 font-mono">ID: {product.id}</p>
+                                                                                
                                                                                 <p className="text-red-600 font-black">${Number(product.price || 0).toFixed(2)}</p>
                                                                                 {productOptionsLines(product).map(line => <p key={line} className="text-slate-400 uppercase">{line}</p>)}
                                                                             </div>
@@ -3983,7 +3983,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 <form onSubmit={registerUser} className="space-y-4">
                                     <input required className="input-field" placeholder="NOMBRE COMPLETO" value={userForm.n} onChange={e => setUserForm({...userForm, n: e.target.value})} />
                                     <input required type="email" readOnly={Boolean(editingRegisteredUserId)} className={`input-field ${editingRegisteredUserId ? 'opacity-70 cursor-not-allowed' : ''}`} placeholder="CORREO ELECTRÓNICO" value={userForm.email} onChange={e => setUserForm({...userForm, email: e.target.value})} />
-                                    {editingRegisteredUserId && <p className="text-[9px] font-bold text-slate-400 uppercase leading-relaxed">El correo pertenece al acceso de Firebase Auth y no se modifica desde esta edición.</p>}
+                                    {editingRegisteredUserId && <p className="text-[9px] font-bold text-slate-400 uppercase leading-relaxed">El correo de acceso no se modifica desde esta edición.</p>}
                                     <input required type="tel" className="input-field" placeholder="NÚMERO DE TELÉFONO" value={userForm.phone} onChange={e => setUserForm({...userForm, phone: e.target.value})} />
                                     {!editingRegisteredUserId && <input required type="password" minLength="6" className="input-field" placeholder="CONTRASEÑA" value={userForm.p} onChange={e => setUserForm({...userForm, p: e.target.value})} />}
                                     <button type="submit" className="w-full btn-primary h-12">{editingRegisteredUserId ? 'Guardar Cambios' : 'Guardar Usuario'}</button>
@@ -4000,6 +4000,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
