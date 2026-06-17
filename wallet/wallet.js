@@ -7,14 +7,9 @@
   const WALLET_COMMISSIONS_COLLECTION = 'wallet_commissions';
   const MOVEMENTS_COLLECTION = 'movements';
   const SETTINGS_DOC_ID = 'config';
-  const DEFAULT_MINIMUM_WALLET_RECHARGE = 500;
-  const MIN_FIRST_RECHARGE = DEFAULT_MINIMUM_WALLET_RECHARGE;
+  const MIN_FIRST_RECHARGE = 500;
   const CURRENCY = 'MXN';
-  const PAYMENT_TRANSFER_METHOD = 'Transferencia bancaria';
-  const BANK_TRANSFER_LEGEND = 'Pagar con Banco Azteca, el nombre del titular debe coincidir con el nombre registrado en el pedido.';
-  const RECHARGE_STATUS_PENDING = 'Pendiente';
-  const RECHARGE_STATUS_COMPLETED = 'Completada';
-  const PLATFORM_LEGEND = 'Las comisiones por uso de la plataforma y servicios serán descontadas automáticamente de tu saldo disponible.';
+  const PLATFORM_LEGEND = 'Las comisiones por uso de la plataforma y servicios serán descontadas automáticamente de tu saldo disponible. Recarga mínima: $500 MXN.';
   const INSUFFICIENT_MESSAGE = 'Tu saldo es insuficiente para continuar utilizando la plataforma. Realiza una nueva recarga para seguir publicando y vendiendo.';
 
   const clean = (value) => String(value ?? '').trim();
@@ -32,17 +27,6 @@
     const percent = Number(value || 0);
     if (!Number.isFinite(percent)) return 0;
     return Math.max(0, Math.min(100, roundMoney(percent)));
-  }
-
-  function getMinimumRecharge(settings = {}) {
-    const amount = Number(
-      settings.minimumWalletRecharge ??
-      settings.minimumFirstRecharge ??
-      settings.minimumRecharge ??
-      DEFAULT_MINIMUM_WALLET_RECHARGE
-    );
-    if (!Number.isFinite(amount) || amount <= 0) return DEFAULT_MINIMUM_WALLET_RECHARGE;
-    return roundMoney(amount);
   }
 
   function calculateCommission(amount, percent) {
@@ -66,29 +50,16 @@
     return clean(user.phone || user.userPhone || user.ownerPhone || user.sellerPhone || '');
   }
 
-  function getBankAccount(settings = {}) {
-    return clean(settings.bankAccount || settings.account || settings.paymentAccount || settings.transferAccount || '');
-  }
-
-  function getBankTransferLegend(settings = {}) {
-    return clean(settings.bankLegend || settings.transferLegend || BANK_TRANSFER_LEGEND) || BANK_TRANSFER_LEGEND;
-  }
-
-  function isPendingRecharge(recharge = {}) {
-    return lower(recharge.status) === lower(RECHARGE_STATUS_PENDING);
-  }
-
   function getWalletStatus(wallet = {}) {
     if (!isWalletActivated(wallet)) return 'Pendiente de activación';
     return Number(wallet.balance || 0) > 0 ? 'Activa' : 'Sin saldo';
   }
 
-  function normalizeWallet(wallet = null, user = {}, settings = {}) {
+  function normalizeWallet(wallet = null, user = {}) {
     const walletId = getUserWalletId(wallet || {}) || getUserWalletId(user || {});
     const rechargeCount = Number(wallet?.rechargeCount || 0);
     const totalRecharged = roundMoney(wallet?.totalRecharged || 0);
-    const minimumRecharge = getMinimumRecharge(settings);
-    const activated = Boolean(wallet?.activated === true || wallet?.firstRechargeCompleted === true || rechargeCount > 0 || totalRecharged >= minimumRecharge);
+    const activated = Boolean(wallet?.activated === true || wallet?.firstRechargeCompleted === true || rechargeCount > 0 || totalRecharged >= MIN_FIRST_RECHARGE);
     const normalized = {
       id: wallet?.id || walletId,
       uid: wallet?.uid || wallet?.userId || getUserWalletId(user || {}) || walletId,
@@ -117,8 +88,7 @@
   function defaultSettings() {
     return {
       globalCommissionPercent: 0,
-      minimumWalletRecharge: DEFAULT_MINIMUM_WALLET_RECHARGE,
-      minimumFirstRecharge: DEFAULT_MINIMUM_WALLET_RECHARGE,
+      minimumFirstRecharge: MIN_FIRST_RECHARGE,
       currency: CURRENCY,
       updatedAt: null,
       updatedBy: ''
@@ -126,13 +96,11 @@
   }
 
   function normalizeSettings(settings = {}) {
-    const minimumRecharge = getMinimumRecharge(settings);
     return {
       ...defaultSettings(),
       ...settings,
       globalCommissionPercent: normalizePercent(settings.globalCommissionPercent ?? settings.commissionPercent ?? 0),
-      minimumWalletRecharge: minimumRecharge,
-      minimumFirstRecharge: minimumRecharge,
+      minimumFirstRecharge: Number(settings.minimumFirstRecharge || MIN_FIRST_RECHARGE),
       currency: settings.currency || CURRENCY
     };
   }
@@ -174,14 +142,13 @@
     }) || null;
   }
 
-  function findWalletForUser(wallets = [], user = {}, settings = {}) {
+  function findWalletForUser(wallets = [], user = {}) {
     const found = getWalletById(wallets, getUserWalletId(user));
-    return found ? normalizeWallet(found, user, settings) : normalizeWallet(null, user, settings);
+    return found ? normalizeWallet(found, user) : normalizeWallet(null, user);
   }
 
-  function isWalletActivated(wallet = {}, settings = {}) {
-    const minimumRecharge = getMinimumRecharge(settings);
-    return Boolean(wallet?.activated === true || wallet?.firstRechargeCompleted === true || Number(wallet?.rechargeCount || 0) > 0 || Number(wallet?.totalRecharged || 0) >= minimumRecharge);
+  function isWalletActivated(wallet = {}) {
+    return Boolean(wallet?.activated === true || wallet?.firstRechargeCompleted === true || Number(wallet?.rechargeCount || 0) > 0 || Number(wallet?.totalRecharged || 0) >= MIN_FIRST_RECHARGE);
   }
 
   function getProductSellerId(product = {}) {
@@ -194,23 +161,22 @@
     return Boolean(sellerId || type === 'usuario' || type === 'user' || type === 'panel_usuario' || type === 'panel-usuario');
   }
 
-  function validateRechargeAmount(wallet = {}, amountValue = 0, settings = {}) {
+  function validateRechargeAmount(wallet = {}, amountValue = 0) {
     const amount = parseAmount(amountValue);
-    const minimumRecharge = getMinimumRecharge(settings);
     if (!Number.isFinite(amount) || amount <= 0) {
       return { ok: false, amount, message: 'Ingresa un monto válido para recargar.' };
     }
-    if (amount < minimumRecharge) {
-      return { ok: false, amount, message: `La recarga mínima de cartera es ${formatMoney(minimumRecharge)}.` };
+    if (!isWalletActivated(wallet) && amount < MIN_FIRST_RECHARGE) {
+      return { ok: false, amount, message: `La primera recarga debe ser de al menos ${formatMoney(MIN_FIRST_RECHARGE)} para activar la cartera.` };
     }
     return { ok: true, amount, message: '' };
   }
 
-  function validatePublication({ wallet, productPrice = 0, commissionPercent = 0, willBeActive = true, settings = {} } = {}) {
+  function validatePublication({ wallet, productPrice = 0, commissionPercent = 0, willBeActive = true } = {}) {
     if (!willBeActive) return { ok: true, commission: 0, message: '' };
-    const normalizedWallet = normalizeWallet(wallet || {}, {}, settings);
+    const normalizedWallet = normalizeWallet(wallet || {});
     const commission = calculateCommission(productPrice, commissionPercent);
-    if (!isWalletActivated(normalizedWallet, settings)) {
+    if (!isWalletActivated(normalizedWallet)) {
       return { ok: false, commission, message: INSUFFICIENT_MESSAGE };
     }
     if (commission > 0 && roundMoney(normalizedWallet.balance) < commission) {
@@ -219,7 +185,7 @@
     return { ok: true, commission, message: '' };
   }
 
-  function validateProductsForSale({ products = [], wallets = [], commissionPercent = 0, settings = {} } = {}) {
+  function validateProductsForSale({ products = [], wallets = [], commissionPercent = 0 } = {}) {
     const groupedBySeller = new Map();
     const productList = Array.isArray(products) ? products.filter(Boolean) : [];
 
@@ -237,9 +203,9 @@
 
     const blockers = [];
     groupedBySeller.forEach((group) => {
-      const wallet = normalizeWallet(getWalletById(wallets, group.walletId) || { id: group.walletId, uid: group.walletId, userId: group.walletId }, {}, settings);
+      const wallet = normalizeWallet(getWalletById(wallets, group.walletId) || { id: group.walletId, uid: group.walletId, userId: group.walletId });
       const commission = calculateCommission(group.total, commissionPercent);
-      if (!isWalletActivated(wallet, settings)) {
+      if (!isWalletActivated(wallet)) {
         blockers.push({ ...group, wallet, commission, reason: 'inactive' });
         return;
       }
@@ -291,9 +257,9 @@
     return await ensureWalletDocument({ fbase, appId, user: { ...user, uid: walletId, id: walletId }, createdBy: 'sistema' });
   }
 
-  async function recordRecharge({ fbase, appId, user = {}, wallet = null, amount: rawAmount = 0, paypalOrderId = '', paypalCaptureId = '', transferId = '', paymentMethod = PAYMENT_TRANSFER_METHOD, actor = '', settings = {} } = {}) {
+  async function recordRecharge({ fbase, appId, user = {}, wallet = null, amount: rawAmount = 0, paypalOrderId = '', paypalCaptureId = '', actor = '' } = {}) {
     const current = await fetchWallet({ fbase, appId, user, wallet });
-    const validation = validateRechargeAmount(current, rawAmount, settings);
+    const validation = validateRechargeAmount(current, rawAmount);
     if (!validation.ok) throw new Error(validation.message);
 
     const amount = validation.amount;
@@ -301,10 +267,8 @@
     const createdAt = now();
     const balanceBefore = roundMoney(current.balance || 0);
     const balanceAfter = roundMoney(balanceBefore + amount);
-    const externalId = clean(paypalOrderId || paypalCaptureId || transferId || createdAt);
-    const movementId = safeDocId(`mov_recharge_${externalId}`);
-    const rechargeId = safeDocId(`recharge_${walletId}_${externalId}`);
-    const normalizedPaymentMethod = clean(paymentMethod) || 'Cartera';
+    const movementId = safeDocId(`mov_recharge_${paypalOrderId || paypalCaptureId || createdAt}`);
+    const rechargeId = safeDocId(`recharge_${walletId}_${paypalOrderId || paypalCaptureId || createdAt}`);
     const nextWallet = {
       ...current,
       userName: getUserName(user) || current.userName,
@@ -324,16 +288,13 @@
     const movement = {
       id: movementId,
       movementId,
-      rechargeId,
       walletId,
       userId: walletId,
       userName: nextWallet.userName,
       userEmail: nextWallet.userEmail,
       type: 'recharge',
       direction: 'credit',
-      concept: normalizedPaymentMethod === PAYMENT_TRANSFER_METHOD ? 'Recarga de saldo por transferencia bancaria' : 'Recarga de saldo de cartera',
-      paymentMethod: normalizedPaymentMethod,
-      transferId: clean(transferId),
+      concept: 'Recarga de saldo PayPal',
       amount,
       balanceBefore,
       balanceAfter,
@@ -347,174 +308,13 @@
       ...movement,
       id: rechargeId,
       rechargeId,
-      status: RECHARGE_STATUS_COMPLETED,
-      approvedAt: createdAt,
-      approvedBy: actor || getUserEmail(user),
-      updatedAt: createdAt,
-      updatedBy: actor || getUserEmail(user)
+      status: 'Completada'
     };
 
     await fbase.setDoc(walletDocRef(fbase, appId, walletId), nextWallet, { merge: true });
     await fbase.setDoc(movementDocRef(fbase, appId, walletId, movementId), movement);
     await fbase.setDoc(docRef(fbase, appId, WALLET_RECHARGES_COLLECTION, rechargeId), recharge);
     return { wallet: nextWallet, movement, recharge };
-  }
-
-  async function requestRechargeTransfer({ fbase, appId, user = {}, wallet = null, amount: rawAmount = 0, paymentSettings = {}, actor = '', settings = {}, source = 'user_wallet' } = {}) {
-    const current = await fetchWallet({ fbase, appId, user, wallet });
-    const validation = validateRechargeAmount(current, rawAmount, settings);
-    if (!validation.ok) throw new Error(validation.message);
-
-    const bankAccount = getBankAccount(paymentSettings);
-    if (!bankAccount) throw new Error('Falta configurar la cuenta bancaria para transferencias.');
-
-    const amount = validation.amount;
-    const walletId = getUserWalletId(current);
-    const createdAt = now();
-    const balanceBefore = roundMoney(current.balance || 0);
-    const balanceAfter = roundMoney(balanceBefore + amount);
-    const rechargeId = safeDocId(`wallet_transfer_${walletId}_${createdAt}`);
-    const requester = actor || getUserEmail(user) || 'usuario';
-    const recharge = {
-      id: rechargeId,
-      rechargeId,
-      movementId: '',
-      walletId,
-      userId: walletId,
-      userName: getUserName(user) || current.userName,
-      userEmail: getUserEmail(user) || current.userEmail,
-      userPhone: getUserPhone(user) || current.userPhone,
-      type: 'recharge',
-      direction: 'credit',
-      concept: 'Recarga de saldo por transferencia bancaria',
-      paymentMethod: PAYMENT_TRANSFER_METHOD,
-      bankAccount,
-      bankLegend: getBankTransferLegend(paymentSettings),
-      holderName: getUserName(user) || current.userName,
-      amount,
-      balanceBefore,
-      balanceAfter: balanceBefore,
-      requestedBalanceAfter: balanceAfter,
-      currency: CURRENCY,
-      transferId: rechargeId,
-      transferReference: rechargeId,
-      status: RECHARGE_STATUS_PENDING,
-      source: clean(source) || 'user_wallet',
-      createdAt,
-      updatedAt: createdAt,
-      createdBy: requester,
-      requestedBy: requester,
-      approvedAt: null,
-      approvedBy: '',
-      updatedBy: requester
-    };
-
-    await fbase.setDoc(docRef(fbase, appId, WALLET_RECHARGES_COLLECTION, rechargeId), recharge);
-    return recharge;
-  }
-
-  async function approveRechargeTransfer({ fbase, appId, recharge = {}, actor = '', settings = {} } = {}) {
-    let currentRecharge = recharge || {};
-    const rechargeId = clean(currentRecharge.rechargeId || currentRecharge.id || '');
-    if (!rechargeId) throw new Error('No se pudo identificar la recarga.');
-
-    if (!currentRecharge.walletId) {
-      const snap = await fbase.getDoc(docRef(fbase, appId, WALLET_RECHARGES_COLLECTION, rechargeId));
-      if (!snap.exists()) throw new Error('No se encontró la recarga solicitada.');
-      currentRecharge = { id: snap.id, ...snap.data() };
-    }
-
-    if (!isPendingRecharge(currentRecharge)) throw new Error('Esta recarga ya no está pendiente.');
-
-    const amount = roundMoney(currentRecharge.amount || 0);
-    const walletId = getUserWalletId(currentRecharge.walletId || currentRecharge.userId || '');
-    if (!walletId) throw new Error('No se pudo identificar la cartera del usuario.');
-
-    const walletUser = {
-      uid: walletId,
-      id: walletId,
-      userId: walletId,
-      name: currentRecharge.userName,
-      email: currentRecharge.userEmail,
-      phone: currentRecharge.userPhone
-    };
-    const current = await fetchWallet({ fbase, appId, user: walletUser });
-    const validation = validateRechargeAmount(current, amount, settings);
-    if (!validation.ok) throw new Error(validation.message);
-
-    const approvedAt = now();
-    const balanceBefore = roundMoney(current.balance || 0);
-    const balanceAfter = roundMoney(balanceBefore + validation.amount);
-    const movementId = safeDocId(`mov_recharge_transfer_${rechargeId}_${approvedAt}`);
-    const approver = actor || 'admin';
-    const nextWallet = {
-      ...current,
-      userName: currentRecharge.userName || current.userName,
-      userEmail: currentRecharge.userEmail || current.userEmail,
-      userPhone: currentRecharge.userPhone || current.userPhone,
-      balance: balanceAfter,
-      activated: true,
-      firstRechargeCompleted: true,
-      firstRechargeAt: current.firstRechargeAt || approvedAt,
-      rechargeCount: Number(current.rechargeCount || 0) + 1,
-      totalRecharged: roundMoney(Number(current.totalRecharged || 0) + validation.amount),
-      lastRechargeAt: approvedAt,
-      updatedAt: approvedAt,
-      updatedBy: approver,
-      status: balanceAfter > 0 ? 'Activa' : 'Sin saldo'
-    };
-    const movement = {
-      id: movementId,
-      movementId,
-      rechargeId,
-      walletId,
-      userId: walletId,
-      userName: nextWallet.userName,
-      userEmail: nextWallet.userEmail,
-      type: 'recharge',
-      direction: 'credit',
-      concept: 'Recarga de saldo por transferencia bancaria',
-      paymentMethod: PAYMENT_TRANSFER_METHOD,
-      transferId: clean(currentRecharge.transferId || rechargeId),
-      transferReference: clean(currentRecharge.transferReference || currentRecharge.transferId || rechargeId),
-      bankAccount: clean(currentRecharge.bankAccount),
-      bankLegend: getBankTransferLegend(currentRecharge),
-      amount: validation.amount,
-      balanceBefore,
-      balanceAfter,
-      currency: CURRENCY,
-      createdAt: approvedAt,
-      createdBy: approver
-    };
-    const completedRecharge = {
-      ...currentRecharge,
-      movementId,
-      walletId,
-      userId: walletId,
-      userName: nextWallet.userName,
-      userEmail: nextWallet.userEmail,
-      userPhone: nextWallet.userPhone,
-      type: 'recharge',
-      direction: 'credit',
-      concept: 'Recarga de saldo por transferencia bancaria',
-      paymentMethod: PAYMENT_TRANSFER_METHOD,
-      amount: validation.amount,
-      balanceBefore,
-      balanceAfter,
-      currency: CURRENCY,
-      status: RECHARGE_STATUS_COMPLETED,
-      approvedAt,
-      paidAt: approvedAt,
-      completedAt: approvedAt,
-      approvedBy: approver,
-      updatedAt: approvedAt,
-      updatedBy: approver
-    };
-
-    await fbase.setDoc(walletDocRef(fbase, appId, walletId), nextWallet, { merge: true });
-    await fbase.setDoc(movementDocRef(fbase, appId, walletId, movementId), movement);
-    await fbase.setDoc(docRef(fbase, appId, WALLET_RECHARGES_COLLECTION, rechargeId), completedRecharge, { merge: true });
-    return { wallet: nextWallet, movement, recharge: completedRecharge };
   }
 
   async function debitCommissionForSale({ fbase, appId, seller = {}, wallet = null, sale = {}, commissionPercent = 0, actor = '' } = {}) {
@@ -626,16 +426,11 @@
     });
   }
 
-  function subscribeRecharges({ fbase, appId, walletId = '', onChange } = {}) {
-    const baseRef = collectionRef(fbase, appId, WALLET_RECHARGES_COLLECTION);
-    const cleanWalletId = getUserWalletId(walletId);
-    const ref = cleanWalletId && fbase.query && fbase.where
-      ? fbase.query(baseRef, fbase.where('walletId', '==', cleanWalletId))
-      : baseRef;
-    return fbase.onSnapshot(ref, (snapshot) => {
+  function subscribeRecharges({ fbase, appId, onChange } = {}) {
+    return fbase.onSnapshot(collectionRef(fbase, appId, WALLET_RECHARGES_COLLECTION), (snapshot) => {
       const list = [];
       snapshot.forEach((docSnap) => list.push({ id: docSnap.id, ...docSnap.data() }));
-      list.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
+      list.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
       onChange(list);
     }, (error) => {
       console.error('Firestore recargas de cartera:', error);
@@ -647,7 +442,7 @@
     return fbase.onSnapshot(settingsDocRef(fbase, appId), (snapshot) => {
       onChange(snapshot.exists() ? normalizeSettings(snapshot.data()) : defaultSettings());
     }, (error) => {
-      console.error('Firestore configuración de cartera:', error);
+      console.error('Firestore configuración de comisiones:', error);
       onChange(defaultSettings());
     });
   }
@@ -741,12 +536,7 @@
     MOVEMENTS_COLLECTION,
     SETTINGS_DOC_ID,
     MIN_FIRST_RECHARGE,
-    DEFAULT_MINIMUM_WALLET_RECHARGE,
     CURRENCY,
-    PAYMENT_TRANSFER_METHOD,
-    BANK_TRANSFER_LEGEND,
-    RECHARGE_STATUS_PENDING,
-    RECHARGE_STATUS_COMPLETED,
     PLATFORM_LEGEND,
     INSUFFICIENT_MESSAGE,
     clean,
@@ -756,12 +546,8 @@
     safeDocId,
     formatMoney,
     normalizePercent,
-    getMinimumRecharge,
     calculateCommission,
     getUserWalletId,
-    getBankAccount,
-    getBankTransferLegend,
-    isPendingRecharge,
     normalizeWallet,
     defaultSettings,
     normalizeSettings,
@@ -775,8 +561,6 @@
     validateProductsForSale,
     ensureWalletDocument,
     recordRecharge,
-    requestRechargeTransfer,
-    approveRechargeTransfer,
     debitCommissionForSale,
     subscribeWallets,
     subscribeMovements,
@@ -795,16 +579,11 @@
     const SmallLabel = ({ children }) => h('p', { className: 'text-[8px] font-black uppercase tracking-widest text-slate-300 mb-1' }, children);
 
     function UserWalletCard(props = {}) {
-      const settings = normalizeSettings(props.settings || {});
-      const minimumRecharge = getMinimumRecharge(settings);
-      const wallet = normalizeWallet(props.wallet || {}, props.user || {}, settings);
-      const activated = isWalletActivated(wallet, settings);
-      const rechargeValidation = validateRechargeAmount(wallet, props.rechargeAmount || 0, settings);
-      const bankAccount = getBankAccount({ bankAccount: props.paymentAccount || props.bankAccount || props.paymentSettings?.bankAccount || '' });
-      const bankLegend = getBankTransferLegend({ bankLegend: props.bankLegend || props.paymentSettings?.bankLegend || '' });
-      const paymentConfigured = Boolean(bankAccount || props.paymentConfigured);
-      const canSubmitTransfer = paymentConfigured && rechargeValidation.ok && !props.rechargeProcessing && typeof props.onSubmitRechargeTransfer === 'function';
-      const rechargeList = (Array.isArray(props.recharges) ? props.recharges : []).slice(0, 5);
+      const wallet = normalizeWallet(props.wallet || {}, props.user || {});
+      const activated = isWalletActivated(wallet);
+      const rechargeValidation = validateRechargeAmount(wallet, props.rechargeAmount || 0);
+      const paymentConfigured = Boolean(props.paymentConfigured);
+      const canRenderPaypal = paymentConfigured && rechargeValidation.ok && !props.rechargeProcessing;
 
       return h('div', { id: 'user-wallet-section', className: 'card-glass overflow-hidden' },
         h('div', { className: 'bg-gradient-to-br from-red-500 to-red-600 px-6 py-6 text-white' },
@@ -812,7 +591,7 @@
             h('div', null,
               h('p', { className: 'text-[10px] font-black uppercase tracking-widest text-red-100 mb-1' }, 'Cartera del usuario'),
               h('h2', { className: 'text-3xl font-black tracking-tight' }, formatMoney(wallet.balance)),
-              h('p', { className: 'text-[9px] font-bold uppercase text-red-100 mt-2' }, activated ? 'Saldo disponible' : 'Pendiente de recarga aprobada')
+              h('p', { className: 'text-[9px] font-bold uppercase text-red-100 mt-2' }, activated ? 'Saldo disponible' : 'Pendiente de primera recarga')
             ),
             h('button', {
               type: 'button',
@@ -836,18 +615,18 @@
               h('p', { className: 'text-[11px] font-black text-slate-800' }, formatMoney(wallet.totalCommissions || 0))
             )
           ),
-          h('p', { className: 'rounded-2xl bg-red-50 text-red-600 p-4 text-[10px] font-black uppercase leading-relaxed tracking-wide' }, `${PLATFORM_LEGEND} Recarga mínima de cartera: ${formatMoney(minimumRecharge)}.`),
+          h('p', { className: 'rounded-2xl bg-red-50 text-red-600 p-4 text-[10px] font-black uppercase leading-relaxed tracking-wide' }, PLATFORM_LEGEND),
           props.blockedMessage ? h('p', { className: 'rounded-2xl bg-yellow-50 text-yellow-700 p-4 text-[10px] font-black uppercase leading-relaxed tracking-wide' }, props.blockedMessage) : null,
           props.showRecharge ? h('div', { className: 'rounded-2xl border border-slate-100 bg-slate-50 p-4 space-y-4 animate-slide' },
             h('div', { className: 'grid sm:grid-cols-[1fr_auto] gap-3 items-end' },
               h('div', null,
-                h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, 'Monto a recargar por transferencia'),
+                h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, activated ? 'Monto de recarga' : 'Primera recarga mínima $500 MXN'),
                 h('input', {
                   type: 'number',
-                  min: String(minimumRecharge),
+                  min: activated ? '1' : String(MIN_FIRST_RECHARGE),
                   step: '0.01',
                   className: 'input-field',
-                  placeholder: `Mínimo ${formatMoney(minimumRecharge)}`,
+                  placeholder: activated ? 'Ej. 100' : 'Mínimo 500',
                   value: props.rechargeAmount || '',
                   onChange: (event) => props.onRechargeAmountChange && props.onRechargeAmountChange(event.target.value)
                 })
@@ -858,36 +637,11 @@
                 className: 'h-12 px-4 rounded-xl bg-white border border-slate-100 text-[9px] font-black uppercase text-slate-400 hover:text-red-500'
               }, 'Cancelar')
             ),
-            paymentConfigured ? h('div', { className: 'rounded-2xl bg-white border border-slate-100 p-4 space-y-2' },
-              h('p', { className: 'text-[9px] font-black text-slate-400 uppercase' }, 'Transferencia bancaria Banco Azteca'),
-              h('p', { className: 'text-lg font-black text-slate-900 break-all' }, bankAccount || 'Cuenta configurada'),
-              h('p', { className: 'text-[10px] font-bold text-slate-500 uppercase leading-relaxed' }, bankLegend)
-            ) : h('p', { className: 'text-[10px] font-black text-red-500 uppercase' }, 'Falta configurar la cuenta bancaria en el Panel de Control.'),
+            !paymentConfigured ? h('p', { className: 'text-[10px] font-black text-red-500 uppercase' }, 'Falta configurar PayPal en el Panel de Control.') : null,
             props.rechargeAmount && !rechargeValidation.ok ? h('p', { className: 'text-[10px] font-black text-red-500 uppercase' }, rechargeValidation.message) : null,
-            props.rechargeProcessing ? h('p', { className: 'text-[10px] font-black text-slate-400 uppercase' }, 'Registrando solicitud de transferencia...') : null,
-            h('button', {
-              type: 'button',
-              onClick: props.onSubmitRechargeTransfer,
-              disabled: !canSubmitTransfer,
-              className: 'btn-primary h-12 w-full disabled:opacity-50 disabled:cursor-not-allowed'
-            }, props.rechargeProcessing ? 'Registrando...' : 'Registrar transferencia pendiente'),
-            h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed' }, canSubmitTransfer
-              ? 'El saldo será acumulable y se abonará únicamente cuando el administrador confirme la transferencia.'
-              : `Ingresa un monto igual o mayor a ${formatMoney(minimumRecharge)} para registrar la transferencia.`)
-          ) : null,
-          rechargeList.length > 0 ? h('div', { className: 'rounded-2xl border border-slate-100 overflow-hidden' },
-            h('div', { className: 'bg-slate-50 px-4 py-3 border-b border-slate-100' },
-              h('p', { className: 'text-[9px] font-black uppercase text-slate-400 tracking-widest' }, 'Últimas recargas solicitadas')
-            ),
-            h('div', { className: 'divide-y divide-slate-50 bg-white' },
-              rechargeList.map((item) => h('div', { key: item.id || item.rechargeId, className: 'px-4 py-3 flex items-center justify-between gap-3 text-[10px] font-bold text-slate-500' },
-                h('div', null,
-                  h('p', { className: 'font-black text-slate-800' }, formatMoney(item.amount || 0)),
-                  h('p', { className: 'text-[8px] uppercase text-slate-400' }, item.createdAt ? new Date(item.createdAt).toLocaleString('es-MX') : '-')
-                ),
-                h('span', { className: `px-2 py-1 rounded-full text-[8px] font-black uppercase ${isPendingRecharge(item) ? 'bg-yellow-50 text-yellow-700' : 'bg-green-50 text-green-600'}` }, item.status || '-')
-              ))
-            )
+            props.rechargeProcessing ? h('p', { className: 'text-[10px] font-black text-slate-400 uppercase' }, 'Procesando recarga PayPal...') : null,
+            h('div', { id: props.paypalContainerId || 'wallet-paypal-recharge-buttons', className: canRenderPaypal ? '' : 'pointer-events-none opacity-40' }),
+            canRenderPaypal ? null : h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed' }, activated ? 'Ingresa un monto válido para mostrar el botón de PayPal.' : `La primera recarga debe ser de al menos ${formatMoney(MIN_FIRST_RECHARGE)}.`)
           ) : null
         )
       );
@@ -932,10 +686,10 @@
       const settings = normalizeSettings(props.settings || {});
       return h('div', { className: 'card-glass overflow-hidden' },
         h('div', { className: 'bg-slate-50 border-b border-slate-100 px-6 py-4' },
-          h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400' }, 'Configuración de Carteras'),
-          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Comisión global y recarga mínima aplicadas automáticamente a todos los usuarios')
+          h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400' }, 'Configuración de Comisiones'),
+          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Porcentaje global aplicado automáticamente a cada venta de usuarios')
         ),
-        h('form', { onSubmit: props.onSubmit, className: 'p-6 grid md:grid-cols-2 gap-3 items-end' },
+        h('form', { onSubmit: props.onSubmit, className: 'p-6 grid md:grid-cols-[1fr_auto] gap-3 items-end' },
           h('div', null,
             h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, 'Porcentaje de comisión global'),
             h('input', {
@@ -950,144 +704,23 @@
               onChange: (event) => props.onChange && props.onChange(event.target.value)
             })
           ),
-          h('div', null,
-            h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, 'Recarga mínima de cartera'),
-            h('input', {
-              required: true,
-              type: 'number',
-              min: '1',
-              step: '0.01',
-              className: 'input-field',
-              placeholder: 'Ej. 500',
-              value: props.minimumRechargeValue ?? settings.minimumWalletRecharge,
-              onChange: (event) => props.onMinimumRechargeChange && props.onMinimumRechargeChange(event.target.value)
-            })
-          ),
-          h('button', { disabled: props.saving, type: 'submit', className: 'md:col-span-2 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed' }, props.saving ? 'Guardando...' : 'Guardar configuración')
+          h('button', { disabled: props.saving, type: 'submit', className: 'btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed' }, props.saving ? 'Guardando...' : 'Guardar comisión')
         )
       );
     }
 
-    function AdminWalletsPanel(props = {}) {
-      const users = Array.isArray(props.users) ? props.users : [];
-      const wallets = Array.isArray(props.wallets) ? props.wallets : [];
-      const recharges = Array.isArray(props.recharges) ? props.recharges : [];
-      const settings = normalizeSettings(props.settings || {});
-      const registeredUsers = users.filter((user) => user.role !== 'admin');
-      const rechargeList = recharges.slice().sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0)).slice(0, 80);
-      const [search, setSearch] = React.useState('');
-      const [selectedUserId, setSelectedUserId] = React.useState('');
-      const [manualAmount, setManualAmount] = React.useState('');
-      const normalizedSearch = lower(search);
-      const filteredUsers = registeredUsers.filter((user) => {
-        if (!normalizedSearch) return true;
-        return lower(`${user.name || ''} ${user.email || ''} ${user.phone || ''}`).includes(normalizedSearch);
-      }).slice(0, 12);
-      const selectedUser = registeredUsers.find((user) => getUserWalletId(user) === selectedUserId) || null;
-      const paymentAccount = getBankAccount({ bankAccount: props.paymentAccount || props.bankAccount || props.paymentSettings?.bankAccount || '' });
-      const paymentConfigured = Boolean(paymentAccount || props.paymentConfigured);
-      const minimumRecharge = getMinimumRecharge(settings);
-      const manualValidation = validateRechargeAmount({}, manualAmount, settings);
-      const canCreatePendingRecharge = Boolean(selectedUser && paymentConfigured && manualValidation.ok && !props.processing && typeof props.onCreatePendingRecharge === 'function');
-
-      const submitManualRecharge = (event) => {
-        event.preventDefault();
-        if (!selectedUser) {
-          global.alert && global.alert('Selecciona un usuario registrado para la recarga.');
-          return;
-        }
-        if (!paymentConfigured) {
-          global.alert && global.alert('Configura primero la cuenta bancaria en Configuración de Pagos.');
-          return;
-        }
-        if (!manualValidation.ok) {
-          global.alert && global.alert(manualValidation.message);
-          return;
-        }
-        const result = props.onCreatePendingRecharge(selectedUser, manualAmount);
-        if (result && typeof result.then === 'function') {
-          result.then(() => setManualAmount('')).catch(() => {});
-        } else {
-          setManualAmount('');
-        }
-      };
-
+    function AdminWalletsPanel({ users = [], wallets = [], recharges = [] } = {}) {
+      const registeredUsers = (Array.isArray(users) ? users : []).filter((user) => user.role !== 'admin');
+      const rechargeList = (Array.isArray(recharges) ? recharges : []).slice(0, 50);
       return h('div', { className: 'card-glass overflow-hidden' },
         h('div', { className: 'bg-slate-50 border-b border-slate-100 px-6 py-4' },
           h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400' }, 'Carteras de Usuarios'),
-          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Consulta saldos, busca usuarios por nombre registrado y aprueba recargas por transferencia')
+          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Consulta saldos y recargas registradas por PayPal')
         ),
         h('div', { className: 'p-6 space-y-6' },
-          h('form', { onSubmit: submitManualRecharge, className: 'rounded-2xl border border-slate-100 bg-slate-50 p-4 space-y-4' },
-            h('div', { className: 'grid lg:grid-cols-[1.2fr_1fr] gap-4' },
-              h('div', { className: 'space-y-3' },
-                h('div', null,
-                  h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, 'Buscar usuario por nombre registrado'),
-                  h('input', {
-                    type: 'text',
-                    className: 'input-field',
-                    placeholder: 'Nombre registrado, correo o teléfono',
-                    value: search,
-                    onChange: (event) => setSearch(event.target.value)
-                  })
-                ),
-                h('div', { className: 'max-h-64 overflow-y-auto grid sm:grid-cols-2 gap-2 pr-1' },
-                  filteredUsers.map((user) => {
-                    const walletId = getUserWalletId(user);
-                    const active = walletId === selectedUserId;
-                    return h('button', {
-                      key: user.id || user.uid || user.email,
-                      type: 'button',
-                      onClick: () => setSelectedUserId(walletId),
-                      className: `text-left rounded-2xl border p-3 bg-white transition-all ${active ? 'border-red-300 ring-2 ring-red-50' : 'border-slate-100 hover:border-red-200'}`
-                    },
-                      h('p', { className: 'text-[10px] font-black text-slate-800 break-anywhere' }, user.name || user.email || '-'),
-                      h('p', { className: 'text-[8px] font-mono font-bold text-slate-400 break-anywhere mt-1' }, user.email || '-'),
-                      h('p', { className: 'text-[8px] font-bold text-slate-300 uppercase mt-1' }, active ? 'Seleccionado' : 'Seleccionar')
-                    );
-                  }),
-                  filteredUsers.length === 0 ? h('div', { className: 'rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center sm:col-span-2' },
-                    h('p', { className: 'text-[10px] font-black text-slate-300 uppercase tracking-widest' }, 'No se encontraron usuarios con esa búsqueda')
-                  ) : null
-                )
-              ),
-              h('div', { className: 'rounded-2xl bg-white border border-slate-100 p-4 space-y-3' },
-                h('div', null,
-                  h('p', { className: 'text-[8px] font-black uppercase tracking-widest text-slate-300 mb-1' }, 'Usuario seleccionado'),
-                  selectedUser ? h('div', null,
-                    h('p', { className: 'text-sm font-black text-slate-800 break-anywhere' }, selectedUser.name || selectedUser.email || '-'),
-                    h('p', { className: 'text-[9px] font-mono font-bold text-slate-400 break-anywhere' }, selectedUser.email || '-')
-                  ) : h('p', { className: 'text-[10px] font-bold text-slate-300 uppercase' }, 'Selecciona un usuario de la lista')
-                ),
-                h('div', null,
-                  h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, 'Monto de recarga'),
-                  h('input', {
-                    type: 'number',
-                    min: String(minimumRecharge),
-                    step: '0.01',
-                    className: 'input-field',
-                    placeholder: `Mínimo ${formatMoney(minimumRecharge)}`,
-                    value: manualAmount,
-                    onChange: (event) => setManualAmount(event.target.value)
-                  })
-                ),
-                h('div', { className: 'rounded-xl bg-slate-50 p-3' },
-                  h('p', { className: 'text-[8px] font-black uppercase text-slate-300' }, 'Método de pago'),
-                  h('p', { className: 'text-[10px] font-black text-slate-700 break-all' }, paymentAccount || 'Cuenta Banco Azteca no configurada'),
-                  h('p', { className: 'text-[8px] font-bold text-slate-400 uppercase mt-1' }, 'La recarga queda pendiente hasta confirmar la transferencia')
-                ),
-                manualAmount && !manualValidation.ok ? h('p', { className: 'text-[9px] font-black text-red-500 uppercase' }, manualValidation.message) : null,
-                h('button', {
-                  type: 'submit',
-                  disabled: !canCreatePendingRecharge,
-                  className: 'btn-primary h-12 w-full disabled:opacity-50 disabled:cursor-not-allowed'
-                }, props.processing ? 'Procesando...' : 'Registrar recarga pendiente')
-              )
-            )
-          ),
           h('div', { className: 'grid sm:grid-cols-2 xl:grid-cols-3 gap-3' },
             registeredUsers.map((user) => {
-              const wallet = findWalletForUser(wallets, user, settings);
+              const wallet = findWalletForUser(wallets, user);
               return h('article', { key: user.id || user.uid || user.email, className: 'rounded-2xl border border-slate-100 bg-white p-4 shadow-sm' },
                 h('p', { className: 'text-[8px] font-black uppercase tracking-widest text-slate-300 mb-1' }, 'Usuario'),
                 h('h3', { className: 'text-[11px] font-black text-slate-800 break-anywhere' }, user.name || user.email || '-'),
@@ -1099,7 +732,7 @@
                   ),
                   h('div', { className: 'rounded-xl bg-slate-50 p-3' },
                     h('p', { className: 'text-[8px] font-black uppercase text-slate-300' }, 'Estado'),
-                    h('p', { className: `text-[9px] font-black uppercase ${isWalletActivated(wallet, settings) ? 'text-green-600' : 'text-yellow-700'}` }, getWalletStatus(wallet))
+                    h('p', { className: `text-[9px] font-black uppercase ${isWalletActivated(wallet) ? 'text-green-600' : 'text-yellow-700'}` }, getWalletStatus(wallet))
                   )
                 )
               );
@@ -1115,45 +748,20 @@
                   h('th', { className: 'px-6 py-3' }, 'Fecha'),
                   h('th', { className: 'px-6 py-3' }, 'Usuario'),
                   h('th', { className: 'px-6 py-3' }, 'Monto'),
-                  h('th', { className: 'px-6 py-3' }, 'Método'),
-                  h('th', { className: 'px-6 py-3' }, 'Estado'),
-                  h('th', { className: 'px-6 py-3 text-right' }, 'Acciones')
+                  h('th', { className: 'px-6 py-3' }, 'PayPal')
                 )
               ),
               h('tbody', { className: 'divide-y divide-slate-50' },
-                rechargeList.map((item) => {
-                  const pending = isPendingRecharge(item);
-                  return h('tr', { key: item.id || item.rechargeId, className: 'text-[10px] font-bold text-slate-600 align-top' },
-                    h('td', { className: 'px-6 py-4' }, item.createdAt ? new Date(item.createdAt).toLocaleString('es-MX') : '-'),
-                    h('td', { className: 'px-6 py-4' },
-                      h('p', { className: 'font-black text-slate-800' }, item.userName || item.userEmail || item.userId || '-'),
-                      h('p', { className: 'font-mono text-[8px] text-slate-400 break-anywhere' }, item.userEmail || item.userId || '')
-                    ),
-                    h('td', { className: 'px-6 py-4 text-green-600 font-black' }, `+${formatMoney(item.amount || 0)}`),
-                    h('td', { className: 'px-6 py-4' },
-                      h('p', { className: 'font-black text-slate-800' }, item.paymentMethod || PAYMENT_TRANSFER_METHOD),
-                      h('p', { className: 'font-mono text-[8px] text-slate-400 break-anywhere' }, item.bankAccount || '-')
-                    ),
-                    h('td', { className: 'px-6 py-4' }, h('span', { className: `px-2 py-1 rounded-full text-[8px] uppercase font-black ${pending ? 'bg-yellow-50 text-yellow-700' : 'bg-green-50 text-green-600'}` }, item.status || '-')),
-                    h('td', { className: 'px-6 py-4 text-right' },
-                      h('div', { className: 'flex justify-end gap-2 flex-wrap' },
-                        pending && typeof props.onApproveRecharge === 'function' ? h('button', {
-                          type: 'button',
-                          onClick: () => props.onApproveRecharge(item),
-                          disabled: props.processing,
-                          className: 'px-3 py-2 bg-green-50 text-green-600 rounded-xl text-[8px] font-black uppercase disabled:opacity-50'
-                        }, 'Confirmar transferencia') : null,
-                        typeof props.onDeleteRecharge === 'function' ? h('button', {
-                          type: 'button',
-                          onClick: () => props.onDeleteRecharge(item),
-                          disabled: props.processing,
-                          className: 'px-3 py-2 bg-red-50 text-red-500 hover:bg-red-500 hover:text-white rounded-xl text-[8px] font-black uppercase disabled:opacity-50'
-                        }, 'Eliminar') : null
-                      )
-                    )
-                  );
-                }),
-                rechargeList.length === 0 ? h('tr', null, h('td', { colSpan: 6, className: 'px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase' }, 'Aún no hay recargas registradas')) : null
+                rechargeList.map((item) => h('tr', { key: item.id || item.rechargeId, className: 'text-[10px] font-bold text-slate-600' },
+                  h('td', { className: 'px-6 py-4' }, item.createdAt ? new Date(item.createdAt).toLocaleString('es-MX') : '-'),
+                  h('td', { className: 'px-6 py-4' },
+                    h('p', { className: 'font-black text-slate-800' }, item.userName || item.userEmail || item.userId || '-'),
+                    h('p', { className: 'font-mono text-[8px] text-slate-400 break-anywhere' }, item.userEmail || item.userId || '')
+                  ),
+                  h('td', { className: 'px-6 py-4 text-green-600 font-black' }, `+${formatMoney(item.amount || 0)}`),
+                  h('td', { className: 'px-6 py-4 font-mono text-[8px] text-slate-400 break-anywhere' }, item.paypalOrderId || item.paypalCaptureId || '-')
+                )),
+                rechargeList.length === 0 ? h('tr', null, h('td', { colSpan: 4, className: 'px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase' }, 'Aún no hay recargas registradas')) : null
               )
             )
           )
@@ -1167,6 +775,7 @@
   global.DriveMxWallet = Wallet;
   global.DriveMxWalletUI = createWalletUI(global.React);
 })(window);
+
 
 
 
