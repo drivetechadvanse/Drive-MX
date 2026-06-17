@@ -8,6 +8,10 @@ const USER_PRODUCTS_COLLECTION = "user_products";
 const USER_SALES_COLLECTION = "user_sales";
 const COMPLETED_SALES_COLLECTION = "completed_sales";
 const SUPPORT_CHATS_COLLECTION = "support_chats";
+const WALLET_COLLECTION = "wallets";
+const WALLET_RECHARGES_COLLECTION = "wallet_recharges";
+const WALLET_COMMISSIONS_COLLECTION = "wallet_commissions";
+const WALLET_MOVEMENTS_COLLECTION = "movements";
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -180,6 +184,21 @@ module.exports = async function handler(req, res) {
     deletedFirestoreDocs += await deleteCollection(root.collection(USER_SALES_COLLECTION).doc(uidDocId).collection("items"), deletedPaths);
     deletedFirestoreDocs += (await deleteRef(root.collection(USER_SALES_COLLECTION).doc(uidDocId), deletedPaths)) ? 1 : 0;
 
+    deletedFirestoreDocs += await deleteCollection(root.collection(WALLET_COLLECTION).doc(uidDocId).collection(WALLET_MOVEMENTS_COLLECTION), deletedPaths);
+    deletedFirestoreDocs += (await deleteRef(root.collection(WALLET_COLLECTION).doc(uidDocId), deletedPaths)) ? 1 : 0;
+
+    const walletRechargesCollection = root.collection(WALLET_RECHARGES_COLLECTION);
+    for (const field of ["userId", "walletId", "uid"]) {
+      deletedFirestoreDocs += await deleteWhereEquals(walletRechargesCollection, field, uidDocId, deletedPaths);
+      if (uidDocId !== uid) deletedFirestoreDocs += await deleteWhereEquals(walletRechargesCollection, field, uid, deletedPaths);
+    }
+
+    const walletCommissionsCollection = root.collection(WALLET_COMMISSIONS_COLLECTION);
+    for (const field of ["userId", "walletId", "uid"]) {
+      deletedFirestoreDocs += await deleteWhereEquals(walletCommissionsCollection, field, uidDocId, deletedPaths);
+      if (uidDocId !== uid) deletedFirestoreDocs += await deleteWhereEquals(walletCommissionsCollection, field, uid, deletedPaths);
+    }
+
     const productCollection = root.collection(PUBLIC_PRODUCTS_COLLECTION);
     for (const field of ["ownerId", "sellerId", "userId", "createdByUid"]) {
       deletedFirestoreDocs += await deleteWhereEquals(productCollection, field, uid, deletedPaths);
@@ -245,3 +264,4 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
