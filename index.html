@@ -231,14 +231,14 @@
             const [checkoutProductIds, setCheckoutProductIds] = useState([]);
             const [deliveryForm, setDeliveryForm] = useState({ street: '', state: '', municipality: '', neighborhood: '', zip: '', fullName: '', phone: '', email: '', references: '' });
             const [emailSettings, setEmailSettings] = useState(() => { try { return JSON.parse(localStorage.getItem('driveMxEmailSettings') || '{\"senderEmail\":\"\",\"appPassword\":\"\",\"receiverEmail\":\"\"}'); } catch(e) { return { senderEmail: '', appPassword: '', receiverEmail: '' }; } });
-            const [paymentSettings, setPaymentSettings] = useState(() => { try { return JSON.parse(localStorage.getItem('driveMxPaymentSettings') || '{\"bankAccount\":\"\",\"paypalClientId\":\"\",\"paypalClientSecret\":\"\"}'); } catch(e) { return { bankAccount: '', paypalClientId: '', paypalClientSecret: '' }; } });
+            const [paymentSettings, setPaymentSettings] = useState(() => { try { return JSON.parse(localStorage.getItem('driveMxPaymentSettings') || '{\"bankAccount\":\"\"}'); } catch(e) { return { bankAccount: '' }; } });
             const [pendingTransfers, setPendingTransfers] = useState(() => readLocal('driveMxPendingTransfers'));
             const [completedSales, setCompletedSales] = useState([]);
             const [transferTrackingDrafts, setTransferTrackingDrafts] = useState({});
             const [emailSaving, setEmailSaving] = useState(false);
             const [paymentSaving, setPaymentSaving] = useState(false);
             const [orderSending, setOrderSending] = useState(false);
-            const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('paypal');
+            const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('transfer');
             const [showUserModal, setShowUserModalState] = useState(false);
             const [supportChats, setSupportChats] = useState(() => readLocal('driveMxSupportChats'));
             const [supportInput, setSupportInput] = useState('');
@@ -615,9 +615,7 @@
                     if (!snap.exists()) return;
                     const data = snap.data() || {};
                     const next = {
-                        bankAccount: data.bankAccount || '',
-                        paypalClientId: data.paypalClientId || '',
-                        paypalClientSecret: data.paypalClientSecret || ''
+                        bankAccount: data.bankAccount || ''
                     };
                     setPaymentSettings(next);
                     try { localStorage.setItem('driveMxPaymentSettings', JSON.stringify(next)); } catch(e) {}
@@ -658,60 +656,6 @@
                 }
                 return Wallet.subscribeRecharges({ fbase, appId, onChange: setWalletRecharges });
             }, [fbUser, sessionUser?.role]);
-
-            useEffect(() => {
-                if (view !== 'operator' || !showWalletRecharge || !sessionUser || sessionUser.role === 'admin') {
-                    Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons');
-                    return;
-                }
-                const currentWallet = Wallet.findWalletForUser(wallets, sessionUser);
-                const validation = Wallet.validateRechargeAmount(currentWallet, walletRechargeAmount);
-                if (!paymentSettings.paypalClientId || !validation.ok || walletRechargeProcessing) {
-                    Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons');
-                    return;
-                }
-                let cancelled = false;
-                Wallet.renderPayPalRechargeButtons({
-                    clientId: paymentSettings.paypalClientId,
-                    containerId: 'wallet-paypal-recharge-buttons',
-                    amount: validation.amount,
-                    description: 'Recarga de saldo Drive MX',
-                    onStart: () => setWalletRechargeProcessing(true),
-                    onApprove: async ({ data, capture, amount }) => {
-                        if (cancelled) return;
-                        try {
-                            await Wallet.recordRecharge({
-                                fbase,
-                                appId,
-                                user: sessionUser,
-                                wallet: currentWallet,
-                                amount,
-                                paypalOrderId: data?.orderID || capture?.id || '',
-                                paypalCaptureId: capture?.id || '',
-                                actor: sessionUser?.email || ''
-                            });
-                            alert('Recarga PayPal confirmada. El saldo fue abonado a tu cartera.');
-                            setWalletRechargeAmount('');
-                            setShowWalletRecharge(false);
-                        } catch(err) {
-                            console.error('Registrar recarga de cartera:', err);
-                            alert(err.message || 'No se pudo registrar la recarga en la cartera.');
-                        } finally {
-                            setWalletRechargeProcessing(false);
-                        }
-                    },
-                    onCancel: () => {
-                        setWalletRechargeProcessing(false);
-                        alert('Recarga cancelada.');
-                    },
-                    onError: (err) => {
-                        console.error('PayPal recarga cartera:', err);
-                        setWalletRechargeProcessing(false);
-                        alert(err?.message || 'No se pudo completar la recarga con PayPal.');
-                    }
-                });
-                return () => { cancelled = true; Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons'); };
-            }, [view, showWalletRecharge, walletRechargeAmount, walletRechargeProcessing, paymentSettings.paypalClientId, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role, wallets]);
 
             useEffect(() => {
                 if (!fbUser || !sessionUser || sessionUser.role === 'admin') {
@@ -1643,7 +1587,7 @@
                 setSelectedProductId(null);
                 setCheckoutProductIds([]);
                 setCurrentImageIndex(0);
-                setSelectedPaymentMethod('paypal');
+                setSelectedPaymentMethod('transfer');
                 setIsCartOpen(false);
                 resetDeliveryForm();
                 setOrderSending(false);
@@ -1651,93 +1595,7 @@
 
             const resetAfterIncompletePayment = () => {
                 resetPublicFlow();
-                const container = document.getElementById('paypal-buttons-container');
-                if (container) container.innerHTML = '';
             };
-
-            useEffect(() => {
-                if (view !== 'payment-method' || selectedPaymentMethod !== 'paypal' || !paymentSettings.paypalClientId || checkoutProducts.length === 0) return;
-                if (!emailSettings.senderEmail.trim() || !emailSettings.appPassword.trim() || !emailSettings.receiverEmail.trim()) return;
-                const containerId = 'paypal-buttons-container';
-                const paypalDescription = checkoutProducts.length > 1 ? `${checkoutProducts.length} productos Drive MX` : (checkoutProduct?.name || 'Solicitud Drive MX');
-                const paypalAmount = Number(checkoutTotal || 0).toFixed(2);
-                const renderPayPalButtons = () => {
-                    const container = document.getElementById(containerId);
-                    if (!container || !window.paypal) return;
-                    container.innerHTML = '';
-                    window.paypal.Buttons({
-                        style: { layout: 'vertical', shape: 'rect', label: 'paypal' },
-                        createOrder: async (data, actions) => {
-                            if (!ensureCheckoutWalletsAllowed(checkoutProducts)) {
-                                throw new Error(Wallet.INSUFFICIENT_MESSAGE);
-                            }
-                            return actions.order.create({
-                                purchase_units: [{
-                                    description: paypalDescription,
-                                    amount: {
-                                        currency_code: 'MXN',
-                                        value: paypalAmount
-                                    }
-                                }]
-                            });
-                        },
-                        onApprove: async (data, actions) => {
-                            setOrderSending(true);
-                            try {
-                                if (!ensureCheckoutWalletsAllowed(checkoutProducts)) throw new Error(Wallet.INSUFFICIENT_MESSAGE);
-                                const capture = await actions.order.capture();
-                                const payload = appendSaleNotificationToPayload(buildOrderPayload());
-                                await sendOrderEmail(payload);
-                                await registerCompletedSale({
-                                    payload,
-                                    paymentMethod: 'PayPal',
-                                    saleId: `paypal_${data.orderID || capture?.id || Date.now()}`,
-                                    paypalOrderId: data.orderID || capture?.id || ''
-                                });
-                                alert('Pago PayPal confirmado. La solicitud fue enviada correctamente.');
-                                clearCompletedCartIfNeeded();
-                                resetPublicFlow();
-                            } catch(err) {
-                                console.error('Confirmar PayPal:', err);
-                                alert(err.message || 'No se pudo procesar el pago PayPal.');
-                            } finally {
-                                setOrderSending(false);
-                            }
-                        },
-                        onCancel: () => {
-                            alert('Pago cancelado. La pantalla se restablecerá al inicio.');
-                            resetAfterIncompletePayment();
-                        },
-                        onError: (err) => {
-                            console.error('PayPal:', err);
-                            alert('No se pudo completar el pago con PayPal. La pantalla se restablecerá al inicio.');
-                            resetAfterIncompletePayment();
-                        }
-                    }).render(`#${containerId}`);
-                };
-
-                const paypalSdkSrc = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(paymentSettings.paypalClientId)}&currency=MXN&intent=capture&commit=true&locale=es_MX`;
-                const existing = document.querySelector('script[data-drive-mx-paypal="true"]');
-                if (existing && existing.src !== paypalSdkSrc) {
-                    existing.remove();
-                    window.paypal = undefined;
-                }
-                const activeScript = document.querySelector('script[data-drive-mx-paypal="true"]');
-                if (activeScript && window.paypal) {
-                    renderPayPalButtons();
-                    return;
-                }
-                if (activeScript) {
-                    activeScript.addEventListener('load', renderPayPalButtons, { once: true });
-                    return;
-                }
-                const script = document.createElement('script');
-                script.src = paypalSdkSrc;
-                script.dataset.driveMxPaypal = 'true';
-                script.onload = renderPayPalButtons;
-                script.onerror = () => alert('No se pudo cargar PayPal. Revisa el Client ID configurado.');
-                document.body.appendChild(script);
-            }, [view, selectedPaymentMethod, paymentSettings.paypalClientId, checkoutProductKey, checkoutTotal, emailSettings.senderEmail, emailSettings.appPassword, emailSettings.receiverEmail, wallets, walletCommissionPercent]);
 
             const getSecondaryAuth = () => {
                 if (!window.secondaryAuthApp) {
@@ -2084,8 +1942,6 @@
                 e.preventDefault();
                 const next = {
                     bankAccount: paymentSettings.bankAccount.trim(),
-                    paypalClientId: paymentSettings.paypalClientId.trim(),
-                    paypalClientSecret: paymentSettings.paypalClientSecret.trim(),
                     updatedAt: Date.now(),
                     updatedBy: sessionUser?.email || ''
                 };
@@ -2203,7 +2059,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 };
             };
 
-            const registerCompletedSale = async ({ payload = {}, paymentMethod = '', saleId = '', transferId = '', paypalOrderId = '', soldAt = Date.now() }) => {
+            const registerCompletedSale = async ({ payload = {}, paymentMethod = '', saleId = '', transferId = '', soldAt = Date.now() }) => {
                 const payloadProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
                 const orderTotal = payloadProducts.reduce((total, product) => total + Number(product.price || 0), 0);
                 const baseId = String(saleId || `sale_${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -2220,7 +2076,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         orderTotal,
                         paymentMethod,
                         transferId,
-                        paypalOrderId,
                         productId: payloadProduct.id || sourceProduct.id || '',
                         productName: payloadProduct.name || sourceProduct.name || '',
                         productCost: Number(payloadProduct.price || sourceProduct.price || 0),
@@ -2308,24 +2163,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 }
             };
 
-            const confirmPaypalPayment = async () => {
-                if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
-                setOrderSending(true);
-                try {
-                    const payload = appendSaleNotificationToPayload(buildOrderPayload());
-                    await sendOrderEmail(payload);
-                    await registerCompletedSale({ payload, paymentMethod: 'PayPal', saleId: `paypal_manual_${Date.now()}` });
-                    alert('Pago PayPal confirmado. La solicitud fue enviada correctamente.');
-                    clearCompletedCartIfNeeded();
-                    resetPublicFlow();
-                } catch(err) {
-                    console.error('Confirmar PayPal:', err);
-                    alert(err.message || 'No se pudo procesar el pago PayPal.');
-                } finally {
-                    setOrderSending(false);
-                }
-            };
-
             const markTransferPaid = async (transfer) => {
                 if (sessionUser?.role !== 'admin' || transfer.status !== 'Pendiente') return;
                 const transferId = transfer.id || transfer.transferId;
@@ -2406,7 +2243,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 }
                 if (!validateDeliveryForm()) return;
                 if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
-                setSelectedPaymentMethod('paypal');
+                setSelectedPaymentMethod('transfer');
                 setView('payment-method');
             };
 
@@ -3136,7 +2973,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         </div>
                                         <div className="grid md:grid-cols-2 gap-4">
                                             {[
-                                                ['paypal', 'PayPal', 'Completa el pago para procesar la solicitud.'],
                                                 ['transfer', 'Transferencia bancaria', 'Queda Pendiente hasta que el administrador confirme el pago.']
                                             ].map(([value, title, desc]) => (
                                                 <label key={value} className={`border-2 rounded-2xl p-5 cursor-pointer hover:border-red-200 transition-all bg-white ${selectedPaymentMethod === value ? 'border-red-400' : 'border-slate-100'}`}>
@@ -3159,28 +2995,12 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             </div>
                                         )}
 
-                                        {selectedPaymentMethod === 'paypal' && (
-                                            <div className="bg-blue-50 rounded-2xl p-5 space-y-2">
-                                                <p className="text-[9px] font-black text-blue-500 uppercase">PayPal</p>
-                                                <p className="text-[10px] font-bold text-slate-500 uppercase leading-relaxed">PayPal se abrirá en español México. El correo de nueva solicitud se enviará únicamente cuando el pago sea confirmado exitosamente.</p>
-                                                {!paymentSettings.paypalClientId && <p className="text-[10px] font-black text-red-500 uppercase">Falta configurar las claves de PayPal en el Panel Admin.</p>}
-                                                {(!emailSettings.senderEmail || !emailSettings.appPassword || !emailSettings.receiverEmail) && <p className="text-[10px] font-black text-red-500 uppercase">Falta configurar el correo receptor/remitente en el Panel Admin.</p>}
-                                            </div>
-                                        )}
-
                                         <div className="bg-slate-50 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                                             <div>
                                                 <p className="text-[9px] font-black text-slate-400 uppercase">Total</p>
                                                 <p className="text-3xl font-black text-red-500">${Number(checkoutTotal || 0).toFixed(2)}</p>
                                             </div>
-                                            {selectedPaymentMethod === 'transfer' ? (
-                                                <button type="button" onClick={createPendingTransfer} disabled={orderSending || !paymentSettings.bankAccount} className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{orderSending ? 'Registrando...' : 'Registrar transferencia pendiente'}</button>
-                                            ) : (
-                                                <div className="w-full sm:max-w-xs">
-                                                    <div id="paypal-buttons-container" className={orderSending ? 'pointer-events-none opacity-50' : ''}></div>
-                                                    {(!paymentSettings.paypalClientId || !emailSettings.senderEmail || !emailSettings.appPassword || !emailSettings.receiverEmail) && <button type="button" disabled className="btn-primary h-12 w-full opacity-50 cursor-not-allowed">Configura PayPal y Correo</button>}
-                                                </div>
-                                            )}
+                                            <button type="button" onClick={createPendingTransfer} disabled={orderSending || !paymentSettings.bankAccount} className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{orderSending ? 'Registrando...' : 'Registrar transferencia pendiente'}</button>
                                         </div>
                                         <button type="button" onClick={resetAfterIncompletePayment} className="w-full text-[9px] font-black text-slate-400 uppercase hover:text-red-500">Cancelar método de pago y restablecer pantalla</button>
                                     </div>
@@ -3242,7 +3062,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                 <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Configuración de Correo</h2>
                                                 <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Gmail para notificaciones automáticas de pedidos</p>
                                             </div>
-                                            <form onSubmit={saveEmailSettings} className="p-6 grid md:grid-cols-3 gap-3">
+                                            <form onSubmit={saveEmailSettings} className="p-6 grid md:grid-cols-1 gap-3">
                                                 <div>
                                                     <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Correo electrónico remitente</label>
                                                     <input required type="email" className="input-field" placeholder="correo@gmail.com" value={emailSettings.senderEmail} onChange={e => setEmailSettings({...emailSettings, senderEmail: e.target.value})} />
@@ -3255,7 +3075,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                     <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Correo base receptor</label>
                                                     <input required type="email" className="input-field" placeholder="pedidos@empresa.com" value={emailSettings.receiverEmail} onChange={e => setEmailSettings({...emailSettings, receiverEmail: e.target.value})} />
                                                 </div>
-                                                <button disabled={emailSaving} type="submit" className="md:col-span-3 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{emailSaving ? 'Guardando...' : 'Guardar Configuración de Correo'}</button>
+                                                <button disabled={emailSaving} type="submit" className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{emailSaving ? 'Guardando...' : 'Guardar Configuración de Correo'}</button>
                                             </form>
                                         </div>
 
@@ -3263,22 +3083,14 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         <div className="card-glass overflow-hidden">
                                             <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
                                                 <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Configuración de Pagos</h2>
-                                                <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Cuenta Banco Azteca y claves de PayPal para copiar y pegar</p>
+                                                <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Cuenta Banco Azteca para copiar y pegar</p>
                                             </div>
-                                            <form onSubmit={savePaymentSettings} className="p-6 grid md:grid-cols-3 gap-3">
+                                            <form onSubmit={savePaymentSettings} className="p-6 grid md:grid-cols-1 gap-3">
                                                 <div>
                                                     <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Número de cuenta bancaria</label>
                                                     <input required type="text" className="input-field" placeholder="Cuenta Banco Azteca" value={paymentSettings.bankAccount} onChange={e => setPaymentSettings({...paymentSettings, bankAccount: e.target.value})} />
                                                 </div>
-                                                <div>
-                                                    <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">PayPal Client ID</label>
-                                                    <input type="text" className="input-field" placeholder="Pegar Client ID" value={paymentSettings.paypalClientId} onChange={e => setPaymentSettings({...paymentSettings, paypalClientId: e.target.value})} />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">PayPal Secret</label>
-                                                    <input type="password" autoComplete="new-password" className="input-field" placeholder="Pegar Secret" value={paymentSettings.paypalClientSecret} onChange={e => setPaymentSettings({...paymentSettings, paypalClientSecret: e.target.value})} />
-                                                </div>
-                                                <button disabled={paymentSaving} type="submit" className="md:col-span-3 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{paymentSaving ? 'Guardando...' : 'Guardar Configuración de Pagos'}</button>
+                                                <button disabled={paymentSaving} type="submit" className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{paymentSaving ? 'Guardando...' : 'Guardar Configuración de Pagos'}</button>
                                             </form>
                                         </div>
 
@@ -3694,9 +3506,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     onRechargeAmountChange={setWalletRechargeAmount}
                                     showRecharge={showWalletRecharge}
                                     onToggleRecharge={() => { if (!ensureAccountAllowed()) return; setShowWalletRecharge(prev => !prev); }}
-                                    onCloseRecharge={() => { setShowWalletRecharge(false); setWalletRechargeAmount(''); Wallet.clearPayPalContainer('wallet-paypal-recharge-buttons'); }}
-                                    paymentConfigured={Boolean(paymentSettings.paypalClientId)}
-                                    paypalContainerId="wallet-paypal-recharge-buttons"
+                                    onCloseRecharge={() => { setShowWalletRecharge(false); setWalletRechargeAmount(''); }}
                                     rechargeProcessing={walletRechargeProcessing}
                                     blockedMessage={currentUserWalletBlockedMessage}
                                 />
@@ -3789,6 +3599,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
