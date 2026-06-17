@@ -733,34 +733,61 @@
                 return () => unsubUserSales();
             }, [fbUser, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role]);
 
-            const saveDoc = async (col, id, data) => {
-                if (col === 'packages') {
-                    setPkgs(prev => { const next = [...prev.filter(x => x.id !== id), data]; writeLocal('driveMxPackages', next); return next; });
-                }
-                if (col === STAFF_USERS_COLLECTION) {
-                    setUsers(prev => { const next = [...prev.filter(x => x.id !== id), { id, ...data }]; writeLocal(STAFF_USERS_LOCAL_KEY, next); return next; });
-                }
-                if (col === PUBLIC_PRODUCTS_COLLECTION) {
-                    setProducts(prev => { const next = [...prev.filter(x => x.id !== id), data]; writeLocal('driveMxProducts', next); return next; });
-                }
-                if (col === ADMIN_PRODUCTS_COLLECTION) {
-                    setAdminProducts(prev => { const next = [...prev.filter(x => x.id !== id), { id, ...data }].sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0)); writeLocal(ADMIN_PRODUCTS_LOCAL_KEY, next); return next; });
-                }
-                if (col === 'bank_transfers') {
-                    setPendingTransfers(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)]; writeLocal('driveMxPendingTransfers', next); return next; });
-                }
-                if (col === 'completed_sales') {
-                    setCompletedSales(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)].sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0)); writeLocal('driveMxCompletedSales', next); return next; });
-                }
-                if (col === 'support_chats') {
-                    setSupportChats(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)].sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0)); writeLocal('driveMxSupportChats', next); return next; });
-                }
+            const saveDoc = async (col, id, data, options = {}) => {
+                const { throwOnError = false, skipLocalUpdate = false } = options || {};
+                const applyLocalUpdate = () => {
+                    if (skipLocalUpdate) return;
+                    if (col === 'packages') {
+                        setPkgs(prev => { const next = [...prev.filter(x => x.id !== id), data]; writeLocal('driveMxPackages', next); return next; });
+                    }
+                    if (col === STAFF_USERS_COLLECTION) {
+                        setUsers(prev => { const next = [...prev.filter(x => x.id !== id), { id, ...data }]; writeLocal(STAFF_USERS_LOCAL_KEY, next); return next; });
+                    }
+                    if (col === PUBLIC_PRODUCTS_COLLECTION) {
+                        setProducts(prev => { const next = [...prev.filter(x => x.id !== id), data]; writeLocal('driveMxProducts', next); return next; });
+                    }
+                    if (col === ADMIN_PRODUCTS_COLLECTION) {
+                        setAdminProducts(prev => { const next = [...prev.filter(x => x.id !== id), { id, ...data }].sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0)); writeLocal(ADMIN_PRODUCTS_LOCAL_KEY, next); return next; });
+                    }
+                    if (col === 'bank_transfers') {
+                        setPendingTransfers(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)]; writeLocal('driveMxPendingTransfers', next); return next; });
+                    }
+                    if (col === 'completed_sales') {
+                        setCompletedSales(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)].sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0)); writeLocal('driveMxCompletedSales', next); return next; });
+                    }
+                    if (col === 'support_chats') {
+                        setSupportChats(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)].sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0)); writeLocal('driveMxSupportChats', next); return next; });
+                    }
+                };
                 try {
                     const db = fbase.getFirestore();
                     await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', col, id), data);
+                    applyLocalUpdate();
+                    return { success: true };
                 } catch(err) {
                     console.error('Firestore guardar:', err);
+                    if (throwOnError) throw err;
+                    applyLocalUpdate();
+                    return { success: false, error: err };
                 }
+            };
+
+            const getFirebaseAuthErrorMessage = (err) => {
+                const code = err?.code || '';
+                if (code === 'auth/email-already-in-use') return 'El correo ya está registrado en Firebase Authentication. Inicia sesión o usa otro correo.';
+                if (code === 'auth/invalid-email') return 'El correo electrónico no es válido.';
+                if (code === 'auth/weak-password') return 'La contraseña debe tener mínimo 6 caracteres.';
+                if (code === 'auth/network-request-failed') return 'No se pudo conectar con Firebase Authentication. Revisa tu conexión e intenta de nuevo.';
+                if (code === 'auth/operation-not-allowed') return 'El registro con correo y contraseña no está habilitado en Firebase Authentication.';
+                return 'No se pudo crear el usuario en Firebase Authentication. Revisa los datos e intenta de nuevo.';
+            };
+
+            const getFirestoreRegistrationErrorMessage = (err) => {
+                const code = err?.code || '';
+                if (code === 'permission-denied') return 'El usuario fue creado en Authentication, pero Firestore rechazó el guardado del perfil por permisos.';
+                if (code === 'unavailable') return 'El usuario fue creado en Authentication, pero Firestore no estuvo disponible para guardar el perfil.';
+                if (code === 'invalid-argument') return 'El usuario fue creado en Authentication, pero los datos del perfil no pasaron la validación de Firestore.';
+                return 'El usuario fue creado en Authentication, pero ocurrió un error al guardar el perfil en Firestore.';
             };
 
             const deletePkg = async (id) => {
@@ -1878,32 +1905,65 @@
                 }
 
                 if (!trimmedEmail || !userForm.p || !trimmedName || !trimmedPhone) return;
+                const secondaryAuth = getSecondaryAuth();
+                let credential = null;
+                let authUserCreated = false;
                 try {
-                    const secondaryAuth = getSecondaryAuth();
-                    const credential = await fbase.createUserWithEmailAndPassword(secondaryAuth, trimmedEmail, userForm.p);
-                    const now = Date.now();
-                    const newUser = {
-                        uid: credential.user.uid,
-                        email: credential.user.email,
-                        name: trimmedName,
-                        phone: trimmedPhone,
-                        saleNotificationEmail: credential.user.email,
-                        role: 'usuario',
-                        active: true,
-                        blocked: false,
-                        accountStatus: 'Activo',
-                        assignmentsAuthorized: false,
-                        createdAt: now,
-                        updatedAt: now
-                    };
-                    await saveDoc(STAFF_USERS_COLLECTION, credential.user.uid, newUser);
-                    await Wallet.ensureWalletDocument({ fbase, appId, user: { ...newUser, id: credential.user.uid }, createdBy: sessionUser?.email || ADMIN_EMAIL });
-                    await fbase.signOut(secondaryAuth).catch(() => {});
-                    closeRegisteredUserModal();
-                    alert('Usuario creado correctamente con Firebase Auth.');
+                    credential = await fbase.createUserWithEmailAndPassword(secondaryAuth, trimmedEmail, userForm.p);
+                    authUserCreated = Boolean(credential?.user?.uid);
                 } catch(err) {
                     console.error('Crear usuario Firebase Auth:', err);
-                    alert('No se pudo crear el usuario. Revisa que el correo sea válido y que la contraseña tenga mínimo 6 caracteres.');
+                    alert(getFirebaseAuthErrorMessage(err));
+                    return;
+                }
+
+                const userId = credential.user.uid;
+                const userEmail = credential.user.email || trimmedEmail;
+                const now = Date.now();
+                const newUser = {
+                    uid: userId,
+                    email: userEmail,
+                    name: trimmedName,
+                    phone: trimmedPhone,
+                    saleNotificationEmail: userEmail,
+                    role: 'usuario',
+                    active: true,
+                    blocked: false,
+                    accountStatus: 'Activo',
+                    assignmentsAuthorized: false,
+                    createdAt: now,
+                    updatedAt: now
+                };
+
+                try {
+                    await saveDoc(STAFF_USERS_COLLECTION, userId, newUser, { throwOnError: true });
+
+                    const db = fbase.getFirestore();
+                    const profileSnap = await fbase.getDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, userId));
+                    if (!profileSnap.exists()) {
+                        throw new Error('El perfil no se encontró en Firestore después de guardarlo.');
+                    }
+
+                    try {
+                        await Wallet.ensureWalletDocument({ fbase, appId, user: { ...newUser, id: userId }, createdBy: sessionUser?.email || ADMIN_EMAIL });
+                    } catch(walletErr) {
+                        console.error('Crear perfil de cartera de usuario:', walletErr);
+                        closeRegisteredUserModal();
+                        alert('Usuario creado correctamente en Authentication y Firestore. Advertencia: no se pudo crear o actualizar la cartera/perfil financiero del usuario.');
+                        return;
+                    }
+
+                    closeRegisteredUserModal();
+                    alert('Usuario creado correctamente en Firebase Authentication y Firestore.');
+                } catch(err) {
+                    console.error('Guardar perfil de usuario en Firestore:', err);
+                    if (authUserCreated) {
+                        alert(`${getFirestoreRegistrationErrorMessage(err)} El usuario sí existe en Firebase Authentication; corrige el perfil en Firestore para que pueda acceder correctamente.`);
+                    } else {
+                        alert('No se pudo completar el registro del usuario.');
+                    }
+                } finally {
+                    await fbase.signOut(secondaryAuth).catch(() => {});
                 }
             };
 
@@ -3892,6 +3952,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
