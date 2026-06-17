@@ -111,7 +111,26 @@
             return [sizes.length ? `Tallas: ${sizes.join(', ')}` : '', colors.length ? `Colores: ${colors.join(', ')}` : ''].filter(Boolean).join('\n');
         };
         const productOptionsInlineText = (product = {}) => productOptionsText(product).replace(/\n/g, ' · ');
+        const roundCurrency = (value = 0) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+        const moneyClose = (left, right) => Math.abs(roundCurrency(left) - roundCurrency(right)) <= 0.01;
+        const isValidEmailAddress = (value = '') => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+        const sanitizePayPalText = (value = '', max = 127) => String(value || '').trim().replace(/\s+/g, ' ').slice(0, max);
         const getSafeFirestoreDocId = (value = '') => String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+        const firstFilledValue = (...values) => values.map(value => String(value ?? '').trim()).find(Boolean) || '';
+        const normalizeEmailSettings = (settings = {}) => ({
+            ...settings,
+            senderEmail: firstFilledValue(settings.senderEmail, settings.fromEmail, settings.emailSender, settings.remitente, settings.correoRemitente, settings.sender, settings.gmailEmail, settings.gmailUser, settings.user),
+            appPassword: firstFilledValue(settings.appPassword, settings.gmailAppPassword, settings.password, settings.gmailPassword, settings.contrasenaAplicacion, settings.contraseñaAplicacion, settings.pass).replace(/\s+/g, ''),
+            receiverEmail: firstFilledValue(settings.receiverEmail, settings.baseReceiverEmail, settings.baseRecipientEmail, settings.recipientEmail, settings.emailReceiver, settings.receptor, settings.correoReceptor, settings.receiver, settings.toEmail)
+        });
+        const createEmptyEmailSettings = () => normalizeEmailSettings({ senderEmail: '', appPassword: '', receiverEmail: '' });
+        const normalizePaymentSettings = (settings = {}) => ({
+            ...settings,
+            bankAccount: firstFilledValue(settings.bankAccount, settings.accountNumber, settings.bankAccountNumber, settings.cuentaBancaria, settings.numeroCuenta),
+            paypalClientId: firstFilledValue(settings.paypalClientId, settings.payPalClientId, settings.paypal_client_id, settings.clientId, settings.paypalClientID),
+            paypalClientSecret: firstFilledValue(settings.paypalClientSecret, settings.payPalClientSecret, settings.paypal_client_secret, settings.clientSecret, settings.paypalSecret)
+        });
+        const createEmptyPaymentSettings = () => normalizePaymentSettings({ bankAccount: '', paypalClientId: '', paypalClientSecret: '' });
         const createVisitorCartSessionId = () => `${Date.now()}_${Math.random().toString(36).slice(2)}`;
         const getVisitorCartStorageKey = () => {
             try {
@@ -299,6 +318,7 @@
             const lastHistorySnapshotKeyRef = useRef('');
             const allowNativeBackExitRef = useRef(false);
             const blockedAccountHandledRef = useRef(false);
+            const paypalProcessingOrdersRef = useRef(new Set());
 
             const toggleFormSize = (setForm, size) => {
                 setForm(prev => {
@@ -597,7 +617,6 @@
                 const supportCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'support_chats');
                 const mailSettingsRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'mail_settings', 'config');
                 const paymentSettingsRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'payment_settings', 'config');
-                const paymentPublicSettingsRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'payment_public_settings', 'config');
                 
                 const unsubPkgs = fbase.onSnapshot(pkgCol, (s) => {
                     const l = []; s.forEach(d => l.push(d.data()));
@@ -645,29 +664,13 @@
                     setCompletedSales([]);
                 }
 
-                let unsubMailSettings = () => {};
-                if (sessionUser?.role === 'admin') {
-                    unsubMailSettings = fbase.onSnapshot(mailSettingsRef, (snap) => {
-                        if (!snap.exists()) return;
-                        const data = snap.data() || {};
-                        const next = {
-                            senderEmail: data.senderEmail || '',
-                            appPassword: data.appPassword || '',
-                            receiverEmail: data.receiverEmail || ''
-                        };
-                        setEmailSettings(next);
-                        fbase.setDoc(paymentPublicSettingsRef, {
-                            emailConfigured: Boolean(next.senderEmail && next.appPassword && next.receiverEmail),
-                            emailUpdatedAt: data.updatedAt || Date.now(),
-                            updatedAt: data.updatedAt || Date.now(),
-                            updatedBy: data.updatedBy || ''
-                        }, { merge: true }).catch(err => console.error('Sincronizar correo público:', err));
-                        try { localStorage.setItem('driveMxEmailSettings', JSON.stringify(next)); } catch(e) {}
-                    }, (err) => { console.error('Firestore configuración correo:', err); });
-                } else {
-                    setEmailSettings({ senderEmail: '', appPassword: '', receiverEmail: '' });
-                    try { localStorage.removeItem('driveMxEmailSettings'); } catch(e) {}
-                }
+                const unsubMailSettings = fbase.onSnapshot(mailSettingsRef, (snap) => {
+                    if (!snap.exists()) return;
+                    const data = snap.data() || {};
+                    const next = normalizeEmailSettings(data);
+                    setEmailSettings(next);
+                    try { localStorage.setItem('driveMxEmailSettings', JSON.stringify(next)); } catch(e) {}
+                }, (err) => { console.error('Firestore configuración correo:', err); });
 
                 const unsubSupportChats = fbase.onSnapshot(supportCol, (s) => {
                     const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
@@ -676,101 +679,16 @@
                     writeLocal('driveMxSupportChats', l);
                 }, (err) => { console.error('Firestore soporte:', err); });
 
-                const persistPaymentSettingsLocal = (settings, includeSecret = false) => {
-                    try {
-                        localStorage.setItem('driveMxPaymentSettings', JSON.stringify({
-                            bankAccount: settings.bankAccount || '',
-                            paypalClientId: settings.paypalClientId || '',
-                            paypalClientSecret: includeSecret ? (settings.paypalClientSecret || '') : '',
-                            paypalConfigured: Boolean(settings.paypalConfigured),
-                            emailConfigured: settings.emailConfigured
-                        }));
-                    } catch(e) {}
-                };
-
-                const unsubPaymentPublicSettings = fbase.onSnapshot(paymentPublicSettingsRef, (snap) => {
+                const unsubPaymentSettings = fbase.onSnapshot(paymentSettingsRef, (snap) => {
                     if (!snap.exists()) return;
                     const data = snap.data() || {};
-                    setPaymentSettings(prev => {
-                        const next = {
-                            ...prev,
-                            bankAccount: data.bankAccount === undefined ? (prev.bankAccount || '') : (data.bankAccount || ''),
-                            paypalClientId: data.paypalClientId === undefined ? (prev.paypalClientId || '') : (data.paypalClientId || ''),
-                            paypalConfigured: Boolean(data.paypalConfigured),
-                            emailConfigured: data.emailConfigured === undefined ? prev.emailConfigured : Boolean(data.emailConfigured),
-                            paypalClientSecret: sessionUser?.role === 'admin' ? (prev.paypalClientSecret || '') : ''
-                        };
-                        persistPaymentSettingsLocal(next, sessionUser?.role === 'admin');
-                        return next;
-                    });
-                }, (err) => { console.error('Firestore configuración pública de pagos:', err); });
+                    const next = normalizePaymentSettings(data);
+                    setPaymentSettings(next);
+                    try { localStorage.setItem('driveMxPaymentSettings', JSON.stringify(next)); } catch(e) {}
+                }, (err) => { console.error('Firestore configuración pagos:', err); });
 
-                let unsubPaymentSettings = () => {};
-                if (sessionUser?.role === 'admin') {
-                    unsubPaymentSettings = fbase.onSnapshot(paymentSettingsRef, (snap) => {
-                        if (!snap.exists()) return;
-                        const data = snap.data() || {};
-                        setPaymentSettings(prev => {
-                            const next = {
-                                ...prev,
-                                bankAccount: data.bankAccount || '',
-                                paypalClientId: data.paypalClientId || '',
-                                paypalClientSecret: data.paypalClientSecret || '',
-                                paypalConfigured: Boolean(data.paypalClientId && data.paypalClientSecret)
-                            };
-                            fbase.setDoc(paymentPublicSettingsRef, {
-                                bankAccount: next.bankAccount,
-                                paypalClientId: next.paypalClientId,
-                                paypalConfigured: Boolean(next.paypalClientId && next.paypalClientSecret),
-                                paymentUpdatedAt: data.updatedAt || Date.now(),
-                                updatedAt: data.updatedAt || Date.now(),
-                                updatedBy: data.updatedBy || ''
-                            }, { merge: true }).catch(err => console.error('Sincronizar pagos públicos:', err));
-                            persistPaymentSettingsLocal(next, true);
-                            return next;
-                        });
-                    }, (err) => { console.error('Firestore configuración pagos:', err); });
-                } else {
-                    setPaymentSettings(prev => {
-                        const next = { ...prev, paypalClientSecret: '' };
-                        persistPaymentSettingsLocal(next, false);
-                        return next;
-                    });
-                }
-
-                return () => { unsubPkgs(); unsubUsers(); unsubProducts(); unsubAdminProducts(); unsubTransfers(); unsubCompletedSales(); unsubSupportChats(); unsubMailSettings(); unsubPaymentPublicSettings(); unsubPaymentSettings(); };
+                return () => { unsubPkgs(); unsubUsers(); unsubProducts(); unsubAdminProducts(); unsubTransfers(); unsubCompletedSales(); unsubSupportChats(); unsubMailSettings(); unsubPaymentSettings(); };
             }, [fbUser, sessionUser?.role]);
-
-            useEffect(() => {
-                let cancelled = false;
-                fetch('/api/paypal-order?action=config')
-                    .then(res => res.ok ? res.json() : null)
-                    .then(data => {
-                        if (cancelled || !data?.success) return;
-                        setPaymentSettings(prev => {
-                            const next = {
-                                ...prev,
-                                bankAccount: data.bankAccount || prev.bankAccount || '',
-                                paypalClientId: data.paypalClientId || prev.paypalClientId || '',
-                                paypalConfigured: Boolean(data.paypalConfigured),
-                                emailConfigured: Boolean(data.emailConfigured),
-                                paypalClientSecret: sessionUser?.role === 'admin' ? (prev.paypalClientSecret || '') : ''
-                            };
-                            try {
-                                localStorage.setItem('driveMxPaymentSettings', JSON.stringify({
-                                    bankAccount: next.bankAccount,
-                                    paypalClientId: next.paypalClientId,
-                                    paypalClientSecret: sessionUser?.role === 'admin' ? next.paypalClientSecret : '',
-                                    paypalConfigured: next.paypalConfigured,
-                                    emailConfigured: next.emailConfigured
-                                }));
-                            } catch(e) {}
-                            return next;
-                        });
-                    })
-                    .catch(err => { console.warn('Config pública PayPal:', err); });
-                return () => { cancelled = true; };
-            }, [sessionUser?.role]);
 
             useEffect(() => {
                 if (!fbUser) return;
@@ -903,7 +821,7 @@
                     await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', col, id), data);
                 } catch(err) {
                     console.error('Firestore guardar:', err);
-                    if (col === 'completed_sales' || col === 'bank_transfers') throw err;
+                    if (col === 'completed_sales' || col === 'bank_transfers' || col === 'orders') throw err;
                 }
             };
 
@@ -1624,6 +1542,10 @@
             const checkoutProductNames = checkoutProducts.map(product => product.name).filter(Boolean).join(', ');
             const checkoutProductIdsLabel = checkoutProducts.map(product => product.id).filter(Boolean).join(', ');
             const checkoutProductKey = checkoutProducts.map(product => `${product.id}:${Number(product.price || 0)}`).join('|');
+            const paypalClientId = String(paymentSettings.paypalClientId || '').trim();
+            const normalizedEmailSettings = normalizeEmailSettings(emailSettings);
+            const paypalEmailConfigured = Boolean(normalizedEmailSettings.senderEmail && normalizedEmailSettings.appPassword && normalizedEmailSettings.receiverEmail);
+            const paypalCheckoutReady = Boolean(paypalClientId && checkoutProducts.length > 0 && Number(checkoutTotal || 0) > 0);
             const selectedGallery = getProductGallery(selectedProduct);
             const selectedMainImage = selectedGallery[currentImageIndex] || '';
 
@@ -1920,47 +1842,118 @@
                 if (container) container.innerHTML = '';
             };
 
-            const requestPayPalOrder = async ({ action, payload, orderID = '' } = {}) => {
-                const res = await fetch('/api/paypal-order', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action, payload, orderID })
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok || !data.success) throw new Error(data.error || 'No se pudo procesar PayPal.');
-                return data;
+            const getPayPalCaptureSummary = (capture = {}) => {
+                const purchaseUnits = Array.isArray(capture.purchase_units) ? capture.purchase_units : [];
+                const purchaseUnit = purchaseUnits[0] || {};
+                const payments = purchaseUnit.payments || {};
+                const captures = Array.isArray(payments.captures) ? payments.captures : [];
+                const firstCapture = captures[0] || {};
+                const amount = firstCapture.amount || purchaseUnit.amount || {};
+                return {
+                    orderId: String(capture.id || '').trim(),
+                    captureId: String(firstCapture.id || '').trim(),
+                    status: String(firstCapture.status || capture.status || '').trim(),
+                    orderStatus: String(capture.status || '').trim(),
+                    currency: String(amount.currency_code || '').trim(),
+                    value: roundCurrency(amount.value || 0),
+                    payerEmail: String(capture.payer?.email_address || '').trim().toLowerCase()
+                };
+            };
+
+            const assertPayPalCaptureCompleted = (capture = {}, expectedAmount = checkoutTotal) => {
+                const summary = getPayPalCaptureSummary(capture);
+                const completed = [summary.status, summary.orderStatus].some(status => String(status || '').toUpperCase() === 'COMPLETED');
+                if (!completed) throw new Error('PayPal no confirmó la captura del pago.');
+                if (summary.currency !== 'MXN') throw new Error('PayPal confirmó el pago en una moneda distinta a MXN.');
+                if (!moneyClose(summary.value, expectedAmount)) throw new Error('El monto capturado por PayPal no coincide con el total de la compra.');
+                if (!summary.captureId && !summary.orderId) throw new Error('PayPal no devolvió identificador de captura.');
+                return summary;
+            };
+
+            const buildPayPalOrderDetails = () => {
+                const total = Number(checkoutTotal || 0).toFixed(2);
+                const description = sanitizePayPalText(checkoutProducts.length > 1 ? `${checkoutProducts.length} productos Drive MX` : (checkoutProduct?.name || 'Compra Drive MX'), 127);
+                return {
+                    intent: 'CAPTURE',
+                    purchase_units: [{
+                        reference_id: sanitizePayPalText(`drive_mx_${Date.now()}`, 127),
+                        description,
+                        custom_id: sanitizePayPalText(checkoutProducts.map(product => product.id).filter(Boolean).join('_'), 127),
+                        amount: {
+                            currency_code: 'MXN',
+                            value: total
+                        }
+                    }]
+                };
             };
 
             useEffect(() => {
-                if (view !== 'payment-method' || selectedPaymentMethod !== 'paypal' || !paymentSettings.paypalClientId || paymentSettings.emailConfigured === false || checkoutProducts.length === 0 || Number(checkoutTotal || 0) <= 0) return;
+                if (view !== 'payment-method' || selectedPaymentMethod !== 'paypal' || !paypalCheckoutReady) return;
                 const containerId = 'paypal-buttons-container';
+                let cancelled = false;
                 const renderPayPalButtons = () => {
                     const container = document.getElementById(containerId);
-                    if (!container || !window.paypal) return;
+                    if (!container || !window.paypal || cancelled) return;
                     container.innerHTML = '';
-                    const paypalButtons = window.paypal.Buttons({
+                    const buttons = window.paypal.Buttons({
                         style: { layout: 'vertical', shape: 'rect', label: 'paypal' },
-                        createOrder: async () => {
+                        createOrder: async (data, actions) => {
                             if (!ensureCheckoutWalletsAllowed(checkoutProducts)) {
                                 throw new Error(Wallet.INSUFFICIENT_MESSAGE);
                             }
-                            const payload = appendSaleNotificationToPayload(buildOrderPayload());
-                            const order = await requestPayPalOrder({ action: 'create', payload });
-                            if (!order.orderID) throw new Error('PayPal no devolvió el ID de la orden.');
-                            return order.orderID;
+                            return actions.order.create(buildPayPalOrderDetails());
                         },
-                        onApprove: async (data) => {
+                        onApprove: async (data, actions) => {
+                            const paypalOrderKey = String(data?.orderID || '').trim();
+                            if (paypalOrderKey && paypalProcessingOrdersRef.current.has(paypalOrderKey)) return;
+                            if (paypalOrderKey) paypalProcessingOrdersRef.current.add(paypalOrderKey);
                             setOrderSending(true);
                             try {
                                 if (!ensureCheckoutWalletsAllowed(checkoutProducts)) throw new Error(Wallet.INSUFFICIENT_MESSAGE);
+                                if (!actions?.order?.capture) throw new Error('PayPal no entregó la acción de captura.');
+                                const capture = await actions.order.capture();
+                                const paypalSummary = assertPayPalCaptureCompleted(capture, checkoutTotal);
                                 const payload = appendSaleNotificationToPayload(buildOrderPayload());
-                                const capture = await requestPayPalOrder({ action: 'capture', orderID: data.orderID, payload });
-                                const mailWarning = [capture.emailWarning, capture.saleNotificationError].filter(Boolean).join(' ');
-                                alert(mailWarning ? `Pago PayPal confirmado y compra registrada, pero hubo aviso de correo: ${mailWarning}` : 'Pago PayPal confirmado. La compra fue registrada y notificada correctamente.');
+                                const saleId = `paypal_${paypalOrderKey || paypalSummary.orderId || paypalSummary.captureId || Date.now()}`;
+                                const sales = await registerCompletedSale({
+                                    payload,
+                                    paymentMethod: 'PayPal',
+                                    saleId,
+                                    paypalOrderId: paypalOrderKey || paypalSummary.orderId || '',
+                                    paypalCaptureId: paypalSummary.captureId || '',
+                                    soldAt: Date.now(),
+                                    skipWalletCommission: true
+                                });
+                                await registerOrderRecord({
+                                    payload,
+                                    paymentMethod: 'PayPal',
+                                    orderId: saleId,
+                                    status: 'Pagado',
+                                    sales,
+                                    paypalSummary
+                                });
+                                let mailWarning = '';
+                                try {
+                                    await sendOrderEmail({
+                                        ...payload,
+                                        payment: {
+                                            method: 'PayPal',
+                                            paypalOrderId: paypalOrderKey || paypalSummary.orderId || '',
+                                            paypalCaptureId: paypalSummary.captureId || '',
+                                            paypalCaptureStatus: paypalSummary.status || paypalSummary.orderStatus || '',
+                                            paypalPayerEmail: paypalSummary.payerEmail || ''
+                                        }
+                                    });
+                                } catch(mailErr) {
+                                    console.error('Correo PayPal:', mailErr);
+                                    mailWarning = mailErr.message || 'No se pudo enviar el correo.';
+                                }
+                                alert(mailWarning ? `Pago PayPal confirmado y compra registrada, pero no se envió correo: ${mailWarning}` : 'Pago PayPal confirmado. La solicitud fue enviada correctamente.');
                                 clearCompletedCartIfNeeded();
                                 resetPublicFlow();
                             } catch(err) {
                                 console.error('Confirmar PayPal:', err);
+                                if (paypalOrderKey) paypalProcessingOrdersRef.current.delete(paypalOrderKey);
                                 alert(err.message || 'No se pudo procesar el pago PayPal.');
                             } finally {
                                 setOrderSending(false);
@@ -1976,16 +1969,16 @@
                             resetAfterIncompletePayment();
                         }
                     });
-                    const rendered = paypalButtons.render(`#${containerId}`);
+                    const rendered = buttons.render(`#${containerId}`);
                     if (rendered?.catch) {
                         rendered.catch((err) => {
                             console.error('Render PayPal:', err);
-                            alert('No se pudo mostrar el botón de PayPal.');
+                            alert('No se pudo mostrar el botón de PayPal. Revisa el Client ID configurado.');
                         });
                     }
                 };
 
-                const paypalSdkSrc = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(paymentSettings.paypalClientId)}&currency=MXN&intent=capture&commit=true&locale=es_MX&components=buttons&enable-funding=card`;
+                const paypalSdkSrc = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(paypalClientId)}&currency=MXN&intent=capture&commit=true&locale=es_MX&components=buttons&enable-funding=card`;
                 const existing = document.querySelector('script[data-drive-mx-paypal="true"]');
                 if (existing && existing.src !== paypalSdkSrc) {
                     existing.remove();
@@ -1994,11 +1987,11 @@
                 const activeScript = document.querySelector('script[data-drive-mx-paypal="true"]');
                 if (activeScript && window.paypal) {
                     renderPayPalButtons();
-                    return;
+                    return () => { cancelled = true; };
                 }
                 if (activeScript) {
                     activeScript.addEventListener('load', renderPayPalButtons, { once: true });
-                    return;
+                    return () => { cancelled = true; activeScript.removeEventListener('load', renderPayPalButtons); };
                 }
                 const script = document.createElement('script');
                 script.src = paypalSdkSrc;
@@ -2006,7 +1999,8 @@
                 script.onload = renderPayPalButtons;
                 script.onerror = () => alert('No se pudo cargar PayPal. Revisa el Client ID configurado.');
                 document.body.appendChild(script);
-            }, [view, selectedPaymentMethod, paymentSettings.paypalClientId, paymentSettings.emailConfigured, checkoutProductKey, checkoutTotal, wallets, walletCommissionPercent]);
+                return () => { cancelled = true; script.onload = null; script.onerror = null; };
+            }, [view, selectedPaymentMethod, paypalClientId, paypalCheckoutReady, checkoutProductKey, checkoutTotal, wallets, walletCommissionPercent]);
 
             const getSecondaryAuth = () => {
                 if (!window.secondaryAuthApp) {
@@ -2283,9 +2277,7 @@
             const saveEmailSettings = async (e) => {
                 e.preventDefault();
                 const next = {
-                    senderEmail: emailSettings.senderEmail.trim(),
-                    appPassword: emailSettings.appPassword.trim().replace(/\s+/g, ''),
-                    receiverEmail: emailSettings.receiverEmail.trim(),
+                    ...normalizeEmailSettings(emailSettings),
                     updatedAt: Date.now(),
                     updatedBy: sessionUser?.email || ''
                 };
@@ -2295,15 +2287,7 @@
                 }
                 setEmailSaving(true);
                 try {
-                    const db = fbase.getFirestore();
-                    await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'mail_settings', 'config'), next);
-                    await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'payment_public_settings', 'config'), {
-                        emailConfigured: true,
-                        emailUpdatedAt: next.updatedAt,
-                        updatedAt: next.updatedAt,
-                        updatedBy: next.updatedBy
-                    }, { merge: true });
-                    setPaymentSettings(prev => ({ ...prev, emailConfigured: true }));
+                    await saveDoc('mail_settings', 'config', next);
                     try { localStorage.setItem('driveMxEmailSettings', JSON.stringify(next)); } catch(err) {}
                     alert('Configuración de correo guardada correctamente.');
                 } catch(err) {
@@ -2360,32 +2344,18 @@
             const savePaymentSettings = async (e) => {
                 e.preventDefault();
                 const next = {
-                    bankAccount: paymentSettings.bankAccount.trim(),
-                    paypalClientId: paymentSettings.paypalClientId.trim(),
-                    paypalClientSecret: paymentSettings.paypalClientSecret.trim(),
+                    ...normalizePaymentSettings(paymentSettings),
                     updatedAt: Date.now(),
                     updatedBy: sessionUser?.email || ''
                 };
-                if (!next.bankAccount) {
-                    alert('Configura el número de cuenta bancaria.');
+                if (!next.bankAccount && !next.paypalClientId) {
+                    alert('Configura el número de cuenta bancaria o el PayPal Client ID.');
                     return;
                 }
-                const publicNext = {
-                    bankAccount: next.bankAccount,
-                    paypalClientId: next.paypalClientId,
-                    paypalConfigured: Boolean(next.paypalClientId && next.paypalClientSecret),
-                    paymentUpdatedAt: next.updatedAt,
-                    updatedAt: next.updatedAt,
-                    updatedBy: next.updatedBy
-                };
                 setPaymentSaving(true);
                 try {
-                    const db = fbase.getFirestore();
-                    await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'payment_settings', 'config'), next);
-                    await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'payment_public_settings', 'config'), publicNext, { merge: true });
-                    const localNext = { ...next, ...publicNext, emailConfigured: paymentSettings.emailConfigured };
-                    setPaymentSettings(prev => ({ ...prev, ...localNext }));
-                    try { localStorage.setItem('driveMxPaymentSettings', JSON.stringify(localNext)); } catch(err) {}
+                    await saveDoc('payment_settings', 'config', next);
+                    try { localStorage.setItem('driveMxPaymentSettings', JSON.stringify(next)); } catch(err) {}
                     alert('Configuración de pagos guardada correctamente.');
                 } catch(err) {
                     console.error('Guardar configuración de pagos:', err);
@@ -2417,11 +2387,7 @@
                 const primaryProduct = orderProducts[0] || {};
                 const orderTotal = orderProducts.reduce((total, product) => total + Number(product.price || 0), 0);
                 return {
-                    mailSettings: {
-                        senderEmail: emailSettings.senderEmail.trim(),
-                        appPassword: emailSettings.appPassword.trim().replace(/\s+/g, ''),
-                        receiverEmail: emailSettings.receiverEmail.trim()
-                    },
+                    mailSettings: normalizeEmailSettings(emailSettings),
                     product: primaryProduct,
                     products: orderProducts,
                     cart: {
@@ -2501,7 +2467,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 };
             };
 
-            const registerCompletedSale = async ({ payload = {}, paymentMethod = '', saleId = '', transferId = '', paypalOrderId = '', soldAt = Date.now(), skipWalletCommission = false }) => {
+            const registerCompletedSale = async ({ payload = {}, paymentMethod = '', saleId = '', transferId = '', paypalOrderId = '', paypalCaptureId = '', soldAt = Date.now(), skipWalletCommission = false }) => {
                 const payloadProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
                 const orderTotal = payloadProducts.reduce((total, product) => total + Number(product.price || 0), 0);
                 const baseId = String(saleId || `sale_${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -2519,6 +2485,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         paymentMethod,
                         transferId,
                         paypalOrderId,
+                        paypalCaptureId,
                         productId: payloadProduct.id || sourceProduct.id || '',
                         productName: payloadProduct.name || sourceProduct.name || '',
                         productCost: Number(payloadProduct.price || sourceProduct.price || 0),
@@ -2576,7 +2543,42 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 return savedSales.length === 1 ? savedSales[0] : savedSales;
             };
 
+            const normalizeSalesResult = (sales) => Array.isArray(sales) ? sales : (sales ? [sales] : []);
+
+            const registerOrderRecord = async ({ payload = {}, paymentMethod = '', orderId = '', status = 'Pagado', sales = [], paypalSummary = {}, transferId = '' }) => {
+                const orderProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
+                const salesList = normalizeSalesResult(sales);
+                const total = roundCurrency(payload.cart?.total ?? orderProducts.reduce((sum, product) => sum + Number(product.price || 0), 0));
+                const id = getSafeFirestoreDocId(orderId || `${paymentMethod || 'order'}_${Date.now()}`);
+                const now = Date.now();
+                const order = {
+                    id,
+                    orderId: id,
+                    status,
+                    paymentMethod,
+                    transferId,
+                    paypalOrderId: paypalSummary.orderId || '',
+                    paypalCaptureId: paypalSummary.captureId || '',
+                    paypalCaptureStatus: paypalSummary.status || paypalSummary.orderStatus || '',
+                    paypalPayerEmail: paypalSummary.payerEmail || '',
+                    product: orderProducts[0] || {},
+                    products: orderProducts,
+                    cart: { ...(payload.cart || {}), itemCount: orderProducts.length, total, maxItems: CART_MAX_ITEMS },
+                    delivery: payload.delivery || {},
+                    total,
+                    saleIds: salesList.map(sale => sale.id || sale.saleId).filter(Boolean),
+                    sales: salesList,
+                    createdAt: now,
+                    paidAt: now,
+                    updatedAt: now
+                };
+                await saveDoc('orders', id, order);
+                return order;
+            };
+
+
             const sendOrderEmail = async (payload) => {
+                payload.mailSettings = normalizeEmailSettings(payload.mailSettings || emailSettings);
                 if (!payload.mailSettings.senderEmail || !payload.mailSettings.appPassword || !payload.mailSettings.receiverEmail) {
                     throw new Error('Falta configurar el correo en el Panel Admin.');
                 }
@@ -2636,16 +2638,15 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     const payload = appendSaleNotificationToPayload({
                         ...transfer.order,
                         mailSettings: {
-                            senderEmail: emailSettings.senderEmail.trim(),
-                            appPassword: emailSettings.appPassword.trim().replace(/\s+/g, ''),
-                            receiverEmail: emailSettings.receiverEmail.trim()
+                            ...normalizeEmailSettings(emailSettings)
                         }
                     });
                     const transferProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
                     if (!ensureCheckoutWalletsAllowed(transferProducts)) return;
                     await sendOrderEmail(payload);
                     await saveDoc('bank_transfers', transferId, { ...transfer, status: 'Pagado', paidAt, updatedAt: paidAt, paidBy: sessionUser?.email || '' });
-                    await registerCompletedSale({ payload, paymentMethod: 'Transferencia bancaria', saleId: `transfer_${transferId}`, transferId, soldAt: paidAt });
+                    const sales = await registerCompletedSale({ payload, paymentMethod: 'Transferencia bancaria', saleId: `transfer_${transferId}`, transferId, soldAt: paidAt });
+                    await registerOrderRecord({ payload, paymentMethod: 'Transferencia bancaria', orderId: `transfer_${transferId}`, transferId, status: 'Pagado', sales });
                     alert('Transferencia marcada como Pagado y correo enviado correctamente.');
                 } catch(err) {
                     console.error('Marcar transferencia pagada:', err);
@@ -3540,8 +3541,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             <div className="bg-blue-50 rounded-2xl p-5 space-y-2">
                                                 <p className="text-[9px] font-black text-blue-500 uppercase">PayPal</p>
                                                 <p className="text-[10px] font-bold text-slate-500 uppercase leading-relaxed">PayPal se abrirá en español México. El correo de nueva solicitud se enviará únicamente cuando el pago sea confirmado exitosamente.</p>
-                                                {!paymentSettings.paypalClientId && <p className="text-[10px] font-black text-red-500 uppercase">Falta configurar PayPal en el Panel Admin.</p>}
-                                                {paymentSettings.emailConfigured === false && <p className="text-[10px] font-black text-red-500 uppercase">Falta configurar el correo receptor/remitente en el Panel Admin.</p>}
+                                                {!paypalClientId && <p className="text-[10px] font-black text-red-500 uppercase">Falta configurar PayPal Client ID en el Panel Admin.</p>}
                                             </div>
                                         )}
 
@@ -3555,7 +3555,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             ) : (
                                                 <div className="w-full sm:max-w-xs">
                                                     <div id="paypal-buttons-container" className={orderSending ? 'pointer-events-none opacity-50' : ''}></div>
-                                                    {(!paymentSettings.paypalClientId || paymentSettings.emailConfigured === false) && <button type="button" disabled className="btn-primary h-12 w-full opacity-50 cursor-not-allowed">Configura PayPal y Correo</button>}
+                                                    {!paypalClientId && <button type="button" disabled className="btn-primary h-12 w-full opacity-50 cursor-not-allowed">Configura PayPal</button>}
                                                 </div>
                                             )}
                                         </div>
@@ -3652,7 +3652,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                     <input type="text" className="input-field" placeholder="Pegar Client ID" value={paymentSettings.paypalClientId} onChange={e => setPaymentSettings({...paymentSettings, paypalClientId: e.target.value})} />
                                                 </div>
                                                 <div>
-                                                    <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">PayPal Secret</label>
+                                                    <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">PayPal Secret (opcional)</label>
                                                     <input type="password" autoComplete="new-password" className="input-field" placeholder="Pegar Secret" value={paymentSettings.paypalClientSecret} onChange={e => setPaymentSettings({...paymentSettings, paypalClientSecret: e.target.value})} />
                                                 </div>
                                                 <button disabled={paymentSaving} type="submit" className="md:col-span-3 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{paymentSaving ? 'Guardando...' : 'Guardar Configuración de Pagos'}</button>
