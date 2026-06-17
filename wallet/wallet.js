@@ -257,7 +257,7 @@
     return await ensureWalletDocument({ fbase, appId, user: { ...user, uid: walletId, id: walletId }, createdBy: 'sistema' });
   }
 
-  async function recordRecharge({ fbase, appId, user = {}, wallet = null, amount: rawAmount = 0, paypalOrderId = '', paypalCaptureId = '', actor = '' } = {}) {
+  async function recordRecharge({ fbase, appId, user = {}, wallet = null, amount: rawAmount = 0, referenceId = '', actor = '' } = {}) {
     const current = await fetchWallet({ fbase, appId, user, wallet });
     const validation = validateRechargeAmount(current, rawAmount);
     if (!validation.ok) throw new Error(validation.message);
@@ -267,8 +267,8 @@
     const createdAt = now();
     const balanceBefore = roundMoney(current.balance || 0);
     const balanceAfter = roundMoney(balanceBefore + amount);
-    const movementId = safeDocId(`mov_recharge_${paypalOrderId || paypalCaptureId || createdAt}`);
-    const rechargeId = safeDocId(`recharge_${walletId}_${paypalOrderId || paypalCaptureId || createdAt}`);
+    const movementId = safeDocId(`mov_recharge_${referenceId || createdAt}`);
+    const rechargeId = safeDocId(`recharge_${walletId}_${referenceId || createdAt}`);
     const nextWallet = {
       ...current,
       userName: getUserName(user) || current.userName,
@@ -294,13 +294,12 @@
       userEmail: nextWallet.userEmail,
       type: 'recharge',
       direction: 'credit',
-      concept: 'Recarga de saldo PayPal',
+      concept: 'Recarga de saldo',
       amount,
       balanceBefore,
       balanceAfter,
       currency: CURRENCY,
-      paypalOrderId: clean(paypalOrderId),
-      paypalCaptureId: clean(paypalCaptureId),
+      referenceId: clean(referenceId),
       createdAt,
       createdBy: actor || getUserEmail(user)
     };
@@ -455,79 +454,6 @@
     return next;
   }
 
-  function loadPayPalSdk({ clientId, currency = CURRENCY, locale = 'es_MX' } = {}) {
-    const cleanClientId = clean(clientId);
-    if (!cleanClientId) return Promise.reject(new Error('Falta configurar PayPal Client ID.'));
-    const src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(cleanClientId)}&currency=${encodeURIComponent(currency)}&intent=capture&commit=true&locale=${encodeURIComponent(locale)}`;
-
-    return new Promise((resolve, reject) => {
-      const existing = document.querySelector('script[data-drive-mx-paypal="true"]');
-      if (existing && existing.src !== src) {
-        existing.remove();
-        global.paypal = undefined;
-      }
-      const active = document.querySelector('script[data-drive-mx-paypal="true"]');
-      if (active && global.paypal) {
-        resolve(global.paypal);
-        return;
-      }
-      if (active) {
-        active.addEventListener('load', () => resolve(global.paypal), { once: true });
-        active.addEventListener('error', () => reject(new Error('No se pudo cargar PayPal. Revisa el Client ID configurado.')), { once: true });
-        return;
-      }
-      const script = document.createElement('script');
-      script.src = src;
-      script.dataset.driveMxPaypal = 'true';
-      script.onload = () => resolve(global.paypal);
-      script.onerror = () => reject(new Error('No se pudo cargar PayPal. Revisa el Client ID configurado.'));
-      document.body.appendChild(script);
-    });
-  }
-
-  async function renderPayPalRechargeButtons({ clientId, containerId, amount, description = 'Recarga de saldo Drive MX', onApprove, onStart, onCancel, onError } = {}) {
-    const container = document.getElementById(containerId);
-    if (!container) return null;
-    container.innerHTML = '';
-    const rechargeAmount = parseAmount(amount);
-    if (!Number.isFinite(rechargeAmount) || rechargeAmount <= 0) return null;
-
-    try {
-      const paypal = await loadPayPalSdk({ clientId });
-      if (!paypal || !document.getElementById(containerId)) return null;
-      const buttons = paypal.Buttons({
-        style: { layout: 'vertical', shape: 'rect', label: 'paypal' },
-        createOrder: (data, actions) => actions.order.create({
-          purchase_units: [{
-            description,
-            amount: { currency_code: CURRENCY, value: rechargeAmount.toFixed(2) }
-          }]
-        }),
-        onApprove: async (data, actions) => {
-          if (typeof onStart === 'function') onStart();
-          const capture = await actions.order.capture();
-          if (typeof onApprove === 'function') await onApprove({ data, capture, amount: rechargeAmount });
-        },
-        onCancel: () => {
-          if (typeof onCancel === 'function') onCancel();
-        },
-        onError: (error) => {
-          if (typeof onError === 'function') onError(error);
-        }
-      });
-      await buttons.render(`#${containerId}`);
-      return buttons;
-    } catch (error) {
-      if (typeof onError === 'function') onError(error);
-      return null;
-    }
-  }
-
-  function clearPayPalContainer(containerId) {
-    const container = document.getElementById(containerId);
-    if (container) container.innerHTML = '';
-  }
-
   const Wallet = {
     WALLET_COLLECTION,
     WALLET_SETTINGS_COLLECTION,
@@ -567,9 +493,6 @@
     subscribeRecharges,
     subscribeSettings,
     saveSettings,
-    loadPayPalSdk,
-    renderPayPalRechargeButtons,
-    clearPayPalContainer
   };
 
   function createWalletUI(React) {
@@ -582,8 +505,6 @@
       const wallet = normalizeWallet(props.wallet || {}, props.user || {});
       const activated = isWalletActivated(wallet);
       const rechargeValidation = validateRechargeAmount(wallet, props.rechargeAmount || 0);
-      const paymentConfigured = Boolean(props.paymentConfigured);
-      const canRenderPaypal = paymentConfigured && rechargeValidation.ok && !props.rechargeProcessing;
 
       return h('div', { id: 'user-wallet-section', className: 'card-glass overflow-hidden' },
         h('div', { className: 'bg-gradient-to-br from-red-500 to-red-600 px-6 py-6 text-white' },
@@ -637,11 +558,8 @@
                 className: 'h-12 px-4 rounded-xl bg-white border border-slate-100 text-[9px] font-black uppercase text-slate-400 hover:text-red-500'
               }, 'Cancelar')
             ),
-            !paymentConfigured ? h('p', { className: 'text-[10px] font-black text-red-500 uppercase' }, 'Falta configurar PayPal en el Panel de Control.') : null,
             props.rechargeAmount && !rechargeValidation.ok ? h('p', { className: 'text-[10px] font-black text-red-500 uppercase' }, rechargeValidation.message) : null,
-            props.rechargeProcessing ? h('p', { className: 'text-[10px] font-black text-slate-400 uppercase' }, 'Procesando recarga PayPal...') : null,
-            h('div', { id: props.paypalContainerId || 'wallet-paypal-recharge-buttons', className: canRenderPaypal ? '' : 'pointer-events-none opacity-40' }),
-            canRenderPaypal ? null : h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed' }, activated ? 'Ingresa un monto válido para mostrar el botón de PayPal.' : `La primera recarga debe ser de al menos ${formatMoney(MIN_FIRST_RECHARGE)}.`)
+            h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed' }, 'Las recargas en línea no están disponibles desde la aplicación.')
           ) : null
         )
       );
@@ -715,7 +633,7 @@
       return h('div', { className: 'card-glass overflow-hidden' },
         h('div', { className: 'bg-slate-50 border-b border-slate-100 px-6 py-4' },
           h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400' }, 'Carteras de Usuarios'),
-          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Consulta saldos y recargas registradas por PayPal')
+          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Consulta saldos y recargas registradas')
         ),
         h('div', { className: 'p-6 space-y-6' },
           h('div', { className: 'grid sm:grid-cols-2 xl:grid-cols-3 gap-3' },
@@ -748,7 +666,7 @@
                   h('th', { className: 'px-6 py-3' }, 'Fecha'),
                   h('th', { className: 'px-6 py-3' }, 'Usuario'),
                   h('th', { className: 'px-6 py-3' }, 'Monto'),
-                  h('th', { className: 'px-6 py-3' }, 'PayPal')
+                  h('th', { className: 'px-6 py-3' }, 'Referencia')
                 )
               ),
               h('tbody', { className: 'divide-y divide-slate-50' },
@@ -759,7 +677,7 @@
                     h('p', { className: 'font-mono text-[8px] text-slate-400 break-anywhere' }, item.userEmail || item.userId || '')
                   ),
                   h('td', { className: 'px-6 py-4 text-green-600 font-black' }, `+${formatMoney(item.amount || 0)}`),
-                  h('td', { className: 'px-6 py-4 font-mono text-[8px] text-slate-400 break-anywhere' }, item.paypalOrderId || item.paypalCaptureId || '-')
+                  h('td', { className: 'px-6 py-4 font-mono text-[8px] text-slate-400 break-anywhere' }, item.referenceId || '-')
                 )),
                 rechargeList.length === 0 ? h('tr', null, h('td', { colSpan: 4, className: 'px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase' }, 'Aún no hay recargas registradas')) : null
               )
@@ -775,6 +693,7 @@
   global.DriveMxWallet = Wallet;
   global.DriveMxWalletUI = createWalletUI(global.React);
 })(window);
+
 
 
 
