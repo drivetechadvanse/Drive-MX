@@ -109,12 +109,13 @@ module.exports = async function handler(req, res) {
       products = [],
       cart = {},
       delivery = {},
+      payment = {},
       saleNotification = {},
       saleNotifications = [],
     } = req.body || {};
 
     const senderEmail = clean(mailSettings.senderEmail);
-    const appPassword = clean(mailSettings.appPassword);
+    const appPassword = clean(mailSettings.appPassword).replace(/\s+/g, "");
     const receiverEmail = clean(mailSettings.receiverEmail);
 
     if (!senderEmail || !appPassword || !receiverEmail) {
@@ -125,10 +126,7 @@ module.exports = async function handler(req, res) {
     }
 
     if (!isValidEmail(senderEmail) || !isValidEmail(receiverEmail)) {
-      return res.status(400).json({
-        success: false,
-        error: "La configuración de correo contiene direcciones inválidas.",
-      });
+      return res.status(400).json({ success: false, error: "La configuración de correo contiene direcciones inválidas." });
     }
 
     const requiredDelivery = {
@@ -159,13 +157,19 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    if (!isValidEmail(delivery.email)) {
-      return res.status(400).json({ success: false, error: "Ingresa un correo electrónico válido." });
-    }
-
     const orderTotal = orderProducts.reduce((total, item) => total + Number(item.price || 0), 0);
     const itemCount = Number(cart.itemCount || orderProducts.length);
     const productSubject = orderProducts.length > 1 ? `${orderProducts.length} productos` : orderProducts[0].name;
+    const paymentMethod = clean(payment.method || payment.paymentMethod);
+    const paypalOrderId = clean(payment.paypalOrderId);
+    const paypalCaptureId = clean(payment.paypalCaptureId);
+    const paypalCaptureStatus = clean(payment.paypalCaptureStatus);
+    const paymentHtml = [
+      paymentMethod ? `<p><b>Método de pago:</b> ${escapeHtml(paymentMethod)}</p>` : "",
+      paypalOrderId ? `<p><b>Orden PayPal:</b> ${escapeHtml(paypalOrderId)}</p>` : "",
+      paypalCaptureId ? `<p><b>Captura PayPal:</b> ${escapeHtml(paypalCaptureId)}</p>` : "",
+      paypalCaptureStatus ? `<p><b>Estatus PayPal:</b> ${escapeHtml(paypalCaptureStatus)}</p>` : "",
+    ].filter(Boolean).join("");
 
     const transporter = nodemailer.createTransport({
       service: "gmail",
@@ -178,6 +182,7 @@ module.exports = async function handler(req, res) {
     const html = `
       <div style="font-family: Arial, sans-serif; color:#111827;">
         <h2>Nueva solicitud de compra</h2>
+        ${paymentHtml}
 
         <h3>Productos</h3>
         ${productsHtml(orderProducts)}
@@ -334,5 +339,3 @@ module.exports = async function handler(req, res) {
     });
   }
 };
-
-
