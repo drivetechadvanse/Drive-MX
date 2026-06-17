@@ -1470,8 +1470,13 @@
             const saveWalletCommissionSettings = async (e) => {
                 e.preventDefault();
                 const percent = Number(walletSettings.globalCommissionPercent || 0);
+                const minimumFirstRecharge = Number(walletSettings.minimumFirstRecharge || 0);
                 if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
                     alert('Ingresa un porcentaje de comisión global entre 0 y 100.');
+                    return;
+                }
+                if (!Number.isFinite(minimumFirstRecharge) || minimumFirstRecharge <= 0) {
+                    alert('Ingresa una recarga mínima válida mayor a 0.');
                     return;
                 }
                 setWalletSettingsSaving(true);
@@ -1479,11 +1484,11 @@
                     const next = await Wallet.saveSettings({
                         fbase,
                         appId,
-                        settings: { ...walletSettings, globalCommissionPercent: percent },
+                        settings: { ...walletSettings, globalCommissionPercent: percent, minimumFirstRecharge },
                         actor: sessionUser?.email || ADMIN_EMAIL
                     });
                     setWalletSettings(next);
-                    alert('Configuración de comisiones guardada correctamente.');
+                    alert('Configuración de cartera guardada correctamente.');
                 } catch(err) {
                     console.error('Guardar configuración de comisiones:', err);
                     alert('No se pudo guardar la configuración de comisiones.');
@@ -2131,6 +2136,57 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 return data;
             };
 
+            const createPendingWalletRechargeTransfer = async () => {
+                if (!ensureAccountAllowed()) return;
+                if (!paymentSettings.bankAccount.trim()) {
+                    alert('Falta configurar el número de cuenta bancaria en el Panel Admin.');
+                    return;
+                }
+                const currentWallet = Wallet.findWalletForUser(wallets, sessionUser || {});
+                const validation = Wallet.validateRechargeAmount(currentWallet, walletRechargeAmount, walletSettings);
+                if (!validation.ok) {
+                    alert(validation.message);
+                    return;
+                }
+                const userId = Wallet.getUserWalletId(sessionUser || {});
+                if (!userId) {
+                    alert('No se pudo identificar la cartera del usuario.');
+                    return;
+                }
+                setWalletRechargeProcessing(true);
+                try {
+                    const createdAt = Date.now();
+                    const id = `WR-${userId}-${createdAt}`;
+                    await saveDoc('bank_transfers', id, {
+                        transferId: id,
+                        type: 'wallet_recharge',
+                        paymentMethod: 'Transferencia bancaria',
+                        bankAccount: paymentSettings.bankAccount.trim(),
+                        bankLegend: 'La recarga se abonará al saldo a favor cuando el administrador confirme la transferencia.',
+                        holderName: Wallet.getUserName ? Wallet.getUserName(sessionUser || {}) : (sessionUser?.name || sessionUser?.email || 'Usuario'),
+                        status: 'Pendiente',
+                        walletId: userId,
+                        userId,
+                        userName: sessionUser?.name || sessionUser?.email || 'Usuario',
+                        userEmail: sessionUser?.email || '',
+                        userPhone: sessionUser?.phone || '',
+                        amount: validation.amount,
+                        currency: 'MXN',
+                        createdAt,
+                        updatedAt: createdAt,
+                        createdBy: sessionUser?.email || ''
+                    });
+                    alert('Recarga registrada como Pendiente. El saldo se abonará cuando el administrador confirme la transferencia.');
+                    setWalletRechargeAmount('');
+                    setShowWalletRecharge(false);
+                } catch(err) {
+                    console.error('Registrar recarga por transferencia:', err);
+                    alert('No se pudo registrar la recarga pendiente.');
+                } finally {
+                    setWalletRechargeProcessing(false);
+                }
+            };
+
             const createPendingTransfer = async () => {
                 if (!paymentSettings.bankAccount.trim()) {
                     alert('Falta configurar el número de cuenta bancaria en el Panel Admin.');
@@ -2169,6 +2225,28 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 const paidAt = Date.now();
                 setOrderSending(true);
                 try {
+                    if (transfer.type === 'wallet_recharge') {
+                        const targetUser = {
+                            uid: transfer.walletId || transfer.userId,
+                            id: transfer.walletId || transfer.userId,
+                            name: transfer.userName || transfer.holderName || 'Usuario',
+                            email: transfer.userEmail || '',
+                            phone: transfer.userPhone || ''
+                        };
+                        await Wallet.recordRecharge({
+                            fbase,
+                            appId,
+                            user: targetUser,
+                            wallet: Wallet.getWalletById(wallets, transfer.walletId || transfer.userId),
+                            amount: transfer.amount,
+                            referenceId: transferId,
+                            actor: sessionUser?.email || ADMIN_EMAIL,
+                            settings: walletSettings
+                        });
+                        await saveDoc('bank_transfers', transferId, { ...transfer, status: 'Pagado', paidAt, updatedAt: paidAt, paidBy: sessionUser?.email || '' });
+                        alert('Transferencia de recarga aprobada. El saldo fue abonado al usuario.');
+                        return;
+                    }
                     const payload = appendSaleNotificationToPayload({
                         ...transfer.order,
                         mailSettings: {
@@ -3098,6 +3176,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             settings={walletSettings}
                                             value={walletSettings.globalCommissionPercent}
                                             onChange={(value) => setWalletSettings(prev => ({ ...prev, globalCommissionPercent: value }))}
+                                            minimumValue={walletSettings.minimumFirstRecharge}
+                                            onMinimumChange={(value) => setWalletSettings(prev => ({ ...prev, minimumFirstRecharge: value }))}
                                             onSubmit={saveWalletCommissionSettings}
                                             saving={walletSettingsSaving}
                                         />
@@ -3120,7 +3200,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                             <th className="px-6 py-3">Titular</th>
                                                             <th className="px-6 py-3">Fecha y hora</th>
                                                             <th className="px-6 py-3">Estado</th>
-                                                            <th className="px-6 py-3">Datos del pedido</th>
+                                                            <th className="px-6 py-3">Detalle</th>
                                                             <th className="px-6 py-3">Guía del producto</th>
                                                             <th className="px-6 py-3 text-right">Acciones</th>
                                                         </tr>
@@ -3132,22 +3212,35 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                                 <td className="px-6 py-4">{t.createdAt ? new Date(t.createdAt).toLocaleString('es-MX') : '-'}</td>
                                                                 <td className="px-6 py-4"><span className={`px-2 py-1 rounded-full text-[8px] uppercase ${t.status === 'Pagado' ? 'bg-green-50 text-green-600' : 'bg-yellow-50 text-yellow-700'}`}>{t.status}</span></td>
                                                                 <td className="px-6 py-4">
-                                                                    {(Array.isArray(t.order?.products) && t.order.products.length > 0 ? t.order.products : (t.order?.product ? [t.order.product] : [])).map((product, index) => (
-                                                                        <div key={`${t.id || t.transferId}_${product.id || index}`} className={index > 0 ? 'mt-2 pt-2 border-t border-slate-100' : ''}>
-                                                                            <p className="font-black">{product.name}</p>
-                                                                            <p className="text-slate-400 font-mono">ID: {product.id}</p>
-                                                                            <p className="text-red-600 font-black">${Number(product.price || 0).toFixed(2)}</p>
+                                                                    {t.type === 'wallet_recharge' ? (
+                                                                        <div>
+                                                                            <p className="font-black text-slate-800">Recarga de saldo a favor</p>
+                                                                            <p className="text-slate-400 font-mono">Usuario: {t.userEmail || t.userId || t.walletId}</p>
+                                                                            <p className="text-red-600 font-black">${Number(t.amount || 0).toFixed(2)} MXN</p>
+                                                                            <p className="text-slate-400">{t.userPhone || ''}</p>
                                                                         </div>
-                                                                    ))}
-                                                                    <p className="text-slate-800 font-black mt-2">Total: ${Number(t.order?.cart?.total || (Array.isArray(t.order?.products) ? t.order.products : [t.order?.product || {}]).reduce((total, product) => total + Number(product.price || 0), 0)).toFixed(2)}</p>
-                                                                    <p className="text-slate-400">{t.order?.delivery?.phone} · {t.order?.delivery?.email}</p>
+                                                                    ) : (<>
+                                                                        {(Array.isArray(t.order?.products) && t.order.products.length > 0 ? t.order.products : (t.order?.product ? [t.order.product] : [])).map((product, index) => (
+                                                                            <div key={`${t.id || t.transferId}_${product.id || index}`} className={index > 0 ? 'mt-2 pt-2 border-t border-slate-100' : ''}>
+                                                                                <p className="font-black">{product.name}</p>
+                                                                                <p className="text-slate-400 font-mono">ID: {product.id}</p>
+                                                                                <p className="text-red-600 font-black">${Number(product.price || 0).toFixed(2)}</p>
+                                                                            </div>
+                                                                        ))}
+                                                                        <p className="text-slate-800 font-black mt-2">Total: ${Number(t.order?.cart?.total || (Array.isArray(t.order?.products) ? t.order.products : [t.order?.product || {}]).reduce((total, product) => total + Number(product.price || 0), 0)).toFixed(2)}</p>
+                                                                        <p className="text-slate-400">{t.order?.delivery?.phone} · {t.order?.delivery?.email}</p>
+                                                                    </>)}
                                                                 </td>
                                                                 <td className="px-6 py-4 min-w-[210px]">
-                                                                    <div className="space-y-2">
-                                                                        <input className="input-field uppercase text-[10px]" placeholder="NÚMERO DE GUÍA" value={transferTrackingDrafts[t.id || t.transferId] ?? t.trackingNumber ?? ''} onChange={e => setTransferTrackingDrafts(prev => ({ ...prev, [t.id || t.transferId]: e.target.value }))} />
-                                                                        <button type="button" onClick={() => assignTrackingToTransfer(t)} className="px-3 py-2 bg-red-50 text-red-600 rounded-xl text-[8px] font-black uppercase">Guardar guía</button>
-                                                                        {t.trackingNumber && <p className="text-[8px] font-black text-green-600 uppercase">Guía asociada: {t.trackingNumber}</p>}
-                                                                    </div>
+                                                                    {t.type === 'wallet_recharge' ? (
+                                                                        <span className="text-[8px] font-black uppercase text-slate-300">No aplica</span>
+                                                                    ) : (
+                                                                        <div className="space-y-2">
+                                                                            <input className="input-field uppercase text-[10px]" placeholder="NÚMERO DE GUÍA" value={transferTrackingDrafts[t.id || t.transferId] ?? t.trackingNumber ?? ''} onChange={e => setTransferTrackingDrafts(prev => ({ ...prev, [t.id || t.transferId]: e.target.value }))} />
+                                                                            <button type="button" onClick={() => assignTrackingToTransfer(t)} className="px-3 py-2 bg-red-50 text-red-600 rounded-xl text-[8px] font-black uppercase">Guardar guía</button>
+                                                                            {t.trackingNumber && <p className="text-[8px] font-black text-green-600 uppercase">Guía asociada: {t.trackingNumber}</p>}
+                                                                        </div>
+                                                                    )}
                                                                 </td>
                                                                 <td className="px-6 py-4 text-right">
                                                                     <div className="flex justify-end gap-2 flex-wrap">
@@ -3508,6 +3601,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     onToggleRecharge={() => { if (!ensureAccountAllowed()) return; setShowWalletRecharge(prev => !prev); }}
                                     onCloseRecharge={() => { setShowWalletRecharge(false); setWalletRechargeAmount(''); }}
                                     rechargeProcessing={walletRechargeProcessing}
+                                    settings={walletSettings}
+                                    bankAccount={paymentSettings.bankAccount}
+                                    onCreatePendingRecharge={createPendingWalletRechargeTransfer}
                                     blockedMessage={currentUserWalletBlockedMessage}
                                 />
 
@@ -3599,6 +3695,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
