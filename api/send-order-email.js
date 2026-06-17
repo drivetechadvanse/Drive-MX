@@ -24,6 +24,31 @@ function money(value) {
   return Number(value || 0).toFixed(2);
 }
 
+const PRODUCT_SIZE_OPTIONS = ['Chica', 'Mediana', 'Grande', 'XL'];
+
+function normalizeProductSizes(sizes = []) {
+  return Array.isArray(sizes) ? sizes.map(clean).filter((size) => PRODUCT_SIZE_OPTIONS.includes(size)) : [];
+}
+
+function normalizeProductColors(colors = []) {
+  return Array.isArray(colors) ? colors.map(clean).filter(Boolean) : [];
+}
+
+function productOptionsHtml(item = {}) {
+  const sizes = normalizeProductSizes(item.sizes || item.medidas).join(', ');
+  const colors = normalizeProductColors(item.colors || item.colores).join(', ');
+  return `${sizes ? `<p><b>Medidas:</b> ${escapeHtml(sizes)}</p>` : ''}${colors ? `<p><b>Colores:</b> ${escapeHtml(colors)}</p>` : ''}`;
+}
+
+function productOptionsText(item = {}) {
+  const lines = [];
+  const sizes = normalizeProductSizes(item.sizes || item.medidas).join(', ');
+  const colors = normalizeProductColors(item.colors || item.colores).join(', ');
+  if (sizes) lines.push(`Medidas: ${sizes}`);
+  if (colors) lines.push(`Colores: ${colors}`);
+  return lines.join('\n');
+}
+
 function normalizeProducts(product = {}, products = []) {
   const source = Array.isArray(products) && products.length > 0 ? products : [product];
   return source
@@ -32,6 +57,8 @@ function normalizeProducts(product = {}, products = []) {
       id: clean(item.id),
       name: clean(item.name),
       price: Number(item.price || 0),
+      sizes: normalizeProductSizes(item.sizes || item.medidas),
+      colors: normalizeProductColors(item.colors || item.colores),
       ownerId: clean(item.ownerId),
       ownerName: clean(item.ownerName),
       ownerEmail: clean(item.ownerEmail),
@@ -53,6 +80,7 @@ function productsHtml(orderProducts = []) {
           <p><b>ID:</b> ${escapeHtml(item.id)}</p>
           <p><b>Nombre:</b> ${escapeHtml(item.name)}</p>
           <p><b>Precio:</b> $${money(item.price)}</p>
+          ${productOptionsHtml(item)}
         </div>
       `
     )
@@ -63,7 +91,7 @@ function productsText(orderProducts = []) {
   return orderProducts
     .map(
       (item, index) =>
-        `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nPrecio: $${money(item.price)}`
+        `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nPrecio: $${money(item.price)}${productOptionsText(item) ? `\n${productOptionsText(item)}` : ''}`
     )
     .join("\n\n");
 }
@@ -299,6 +327,7 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
 
 
 
