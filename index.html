@@ -1697,6 +1697,58 @@
                 return fbase.getAuth(window.secondaryAuthApp);
             };
 
+
+            const createOrUpdateUserWalletProfile = async (userData) => {
+                const userId = userData?.uid || userData?.id;
+                if (!userId) return { success: false, reason: 'missing-user-id' };
+
+                try {
+                    await Wallet.ensureWalletDocument({
+                        fbase,
+                        appId,
+                        user: { ...userData, id: userId },
+                        createdBy: sessionUser?.email || ADMIN_EMAIL
+                    });
+                    return { success: true, source: 'wallet-module' };
+                } catch (walletErr) {
+                    console.error('Crear cartera con módulo Wallet:', walletErr);
+                }
+
+                try {
+                    const db = fbase.getFirestore();
+                    const walletId = Wallet.getUserWalletId({ ...userData, id: userId }) || userId;
+                    const walletRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'wallets', walletId);
+                    const now = Date.now();
+                    const fallbackWallet = {
+                        id: walletId,
+                        uid: walletId,
+                        userId: walletId,
+                        userName: userData.name || userData.email || 'Usuario',
+                        userEmail: String(userData.email || '').trim().toLowerCase(),
+                        userPhone: userData.phone || '',
+                        currency: 'MXN',
+                        balance: 0,
+                        activated: false,
+                        firstRechargeCompleted: false,
+                        firstRechargeAt: null,
+                        rechargeCount: 0,
+                        totalRecharged: 0,
+                        totalCommissions: 0,
+                        lastRechargeAt: null,
+                        lastCommissionAt: null,
+                        createdAt: now,
+                        updatedAt: now,
+                        createdBy: sessionUser?.email || ADMIN_EMAIL,
+                        status: 'Pendiente de activación'
+                    };
+                    await fbase.setDoc(walletRef, fallbackWallet, { merge: true });
+                    return { success: true, source: 'fallback-direct' };
+                } catch (fallbackErr) {
+                    console.error('Crear cartera fallback:', fallbackErr);
+                    return { success: false, error: fallbackErr };
+                }
+            };
+
             const getStaffProfile = async (user) => {
                 const db = fbase.getFirestore();
                 const profileRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, user.uid);
@@ -1944,13 +1996,9 @@
                         throw new Error('El perfil no se encontró en Firestore después de guardarlo.');
                     }
 
-                    try {
-                        await Wallet.ensureWalletDocument({ fbase, appId, user: { ...newUser, id: userId }, createdBy: sessionUser?.email || ADMIN_EMAIL });
-                    } catch(walletErr) {
-                        console.error('Crear perfil de cartera de usuario:', walletErr);
-                        closeRegisteredUserModal();
-                        alert('Usuario creado correctamente en Authentication y Firestore. Advertencia: no se pudo crear o actualizar la cartera/perfil financiero del usuario.');
-                        return;
+                    const walletResult = await createOrUpdateUserWalletProfile({ ...newUser, id: userId });
+                    if (!walletResult.success) {
+                        console.error('La cartera/perfil financiero no se pudo crear en este momento. El usuario podrá iniciar sesión y el sistema volverá a intentarlo automáticamente.', walletResult.error || walletResult.reason);
                     }
 
                     closeRegisteredUserModal();
@@ -3952,6 +4000,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
