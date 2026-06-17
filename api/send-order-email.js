@@ -7,46 +7,6 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
-function firstFilledValue(...values) {
-  return values.map((value) => clean(value)).find(Boolean) || "";
-}
-
-function normalizeMailSettings(settings = {}) {
-  return {
-    senderEmail: firstFilledValue(
-      settings.senderEmail,
-      settings.fromEmail,
-      settings.emailSender,
-      settings.remitente,
-      settings.correoRemitente,
-      settings.sender,
-      settings.gmailEmail,
-      settings.gmailUser,
-      settings.user
-    ),
-    appPassword: firstFilledValue(
-      settings.appPassword,
-      settings.gmailAppPassword,
-      settings.password,
-      settings.gmailPassword,
-      settings.contrasenaAplicacion,
-      settings["contraseñaAplicacion"],
-      settings.pass
-    ).replace(/\s+/g, ""),
-    receiverEmail: firstFilledValue(
-      settings.receiverEmail,
-      settings.baseReceiverEmail,
-      settings.baseRecipientEmail,
-      settings.recipientEmail,
-      settings.emailReceiver,
-      settings.receptor,
-      settings.correoReceptor,
-      settings.receiver,
-      settings.toEmail
-    ),
-  };
-}
-
 function escapeHtml(value) {
   return clean(value)
     .replace(/&/g, "&amp;")
@@ -64,45 +24,23 @@ function money(value) {
   return Number(value || 0).toFixed(2);
 }
 
-function normalizeList(...values) {
-  const source = values.flatMap((value) => (Array.isArray(value) ? value : value ? String(value).split(',') : []));
-  const seen = new Set();
-  return source
-    .map((item) => clean(item))
-    .filter(Boolean)
-    .filter((item) => {
-      const key = item.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-}
-
 function normalizeProducts(product = {}, products = []) {
   const source = Array.isArray(products) && products.length > 0 ? products : [product];
   return source
     .filter(Boolean)
-    .map((item) => {
-      const sizes = normalizeList(item.sizes, item.tallas);
-      const colors = normalizeList(item.colors, item.colores, item.color);
-      return {
-        id: clean(item.id),
-        name: clean(item.name),
-        price: Number(item.price || 0),
-        sizes,
-        tallas: sizes,
-        colors,
-        colores: colors,
-        ownerId: clean(item.ownerId),
-        ownerName: clean(item.ownerName),
-        ownerEmail: clean(item.ownerEmail),
-        ownerPhone: clean(item.ownerPhone),
-        sellerNotificationEmail: clean(item.sellerNotificationEmail),
-        saleNotificationEmail: clean(item.saleNotificationEmail),
-        notificationEmail: clean(item.notificationEmail),
-        ownerNotificationEmail: clean(item.ownerNotificationEmail),
-      };
-    })
+    .map((item) => ({
+      id: clean(item.id),
+      name: clean(item.name),
+      price: Number(item.price || 0),
+      ownerId: clean(item.ownerId),
+      ownerName: clean(item.ownerName),
+      ownerEmail: clean(item.ownerEmail),
+      ownerPhone: clean(item.ownerPhone),
+      sellerNotificationEmail: clean(item.sellerNotificationEmail),
+      saleNotificationEmail: clean(item.saleNotificationEmail),
+      notificationEmail: clean(item.notificationEmail),
+      ownerNotificationEmail: clean(item.ownerNotificationEmail),
+    }))
     .filter((item) => item.id && item.name);
 }
 
@@ -115,8 +53,6 @@ function productsHtml(orderProducts = []) {
           <p><b>ID:</b> ${escapeHtml(item.id)}</p>
           <p><b>Nombre:</b> ${escapeHtml(item.name)}</p>
           <p><b>Precio:</b> $${money(item.price)}</p>
-          ${item.sizes?.length ? `<p><b>Tallas:</b> ${escapeHtml(item.sizes.join(', '))}</p>` : ''}
-          ${item.colors?.length ? `<p><b>Colores:</b> ${escapeHtml(item.colors.join(', '))}</p>` : ''}
         </div>
       `
     )
@@ -127,7 +63,7 @@ function productsText(orderProducts = []) {
   return orderProducts
     .map(
       (item, index) =>
-        `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nPrecio: $${money(item.price)}${item.sizes?.length ? `\nTallas: ${item.sizes.join(', ')}` : ''}${item.colors?.length ? `\nColores: ${item.colors.join(', ')}` : ''}`
+        `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nPrecio: $${money(item.price)}`
     )
     .join("\n\n");
 }
@@ -149,25 +85,19 @@ module.exports = async function handler(req, res) {
       products = [],
       cart = {},
       delivery = {},
-      payment = {},
       saleNotification = {},
       saleNotifications = [],
     } = req.body || {};
 
-    const normalizedMailSettings = normalizeMailSettings(mailSettings);
-    const senderEmail = normalizedMailSettings.senderEmail;
-    const appPassword = normalizedMailSettings.appPassword;
-    const receiverEmail = normalizedMailSettings.receiverEmail;
+    const senderEmail = clean(mailSettings.senderEmail);
+    const appPassword = clean(mailSettings.appPassword);
+    const receiverEmail = clean(mailSettings.receiverEmail);
 
     if (!senderEmail || !appPassword || !receiverEmail) {
       return res.status(400).json({
         success: false,
         error: "Falta configuración de correo: remitente, contraseña de aplicación o correo base receptor.",
       });
-    }
-
-    if (!isValidEmail(senderEmail) || !isValidEmail(receiverEmail)) {
-      return res.status(400).json({ success: false, error: "La configuración de correo contiene direcciones inválidas." });
     }
 
     const requiredDelivery = {
@@ -201,16 +131,6 @@ module.exports = async function handler(req, res) {
     const orderTotal = orderProducts.reduce((total, item) => total + Number(item.price || 0), 0);
     const itemCount = Number(cart.itemCount || orderProducts.length);
     const productSubject = orderProducts.length > 1 ? `${orderProducts.length} productos` : orderProducts[0].name;
-    const paymentMethod = clean(payment.method || payment.paymentMethod);
-    const paypalOrderId = clean(payment.paypalOrderId);
-    const paypalCaptureId = clean(payment.paypalCaptureId);
-    const paypalCaptureStatus = clean(payment.paypalCaptureStatus);
-    const paymentHtml = [
-      paymentMethod ? `<p><b>Método de pago:</b> ${escapeHtml(paymentMethod)}</p>` : "",
-      paypalOrderId ? `<p><b>Orden PayPal:</b> ${escapeHtml(paypalOrderId)}</p>` : "",
-      paypalCaptureId ? `<p><b>Captura PayPal:</b> ${escapeHtml(paypalCaptureId)}</p>` : "",
-      paypalCaptureStatus ? `<p><b>Estatus PayPal:</b> ${escapeHtml(paypalCaptureStatus)}</p>` : "",
-    ].filter(Boolean).join("");
 
     const transporter = nodemailer.createTransport({
       service: "gmail",
@@ -223,7 +143,6 @@ module.exports = async function handler(req, res) {
     const html = `
       <div style="font-family: Arial, sans-serif; color:#111827;">
         <h2>Nueva solicitud de compra</h2>
-        ${paymentHtml}
 
         <h3>Productos</h3>
         ${productsHtml(orderProducts)}
@@ -380,3 +299,4 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
