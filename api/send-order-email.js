@@ -7,6 +7,46 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
+function firstFilledValue(...values) {
+  return values.map((value) => clean(value)).find(Boolean) || "";
+}
+
+function normalizeMailSettings(settings = {}) {
+  return {
+    senderEmail: firstFilledValue(
+      settings.senderEmail,
+      settings.fromEmail,
+      settings.emailSender,
+      settings.remitente,
+      settings.correoRemitente,
+      settings.sender,
+      settings.gmailEmail,
+      settings.gmailUser,
+      settings.user
+    ),
+    appPassword: firstFilledValue(
+      settings.appPassword,
+      settings.gmailAppPassword,
+      settings.password,
+      settings.gmailPassword,
+      settings.contrasenaAplicacion,
+      settings["contraseñaAplicacion"],
+      settings.pass
+    ).replace(/\s+/g, ""),
+    receiverEmail: firstFilledValue(
+      settings.receiverEmail,
+      settings.baseReceiverEmail,
+      settings.baseRecipientEmail,
+      settings.recipientEmail,
+      settings.emailReceiver,
+      settings.receptor,
+      settings.correoReceptor,
+      settings.receiver,
+      settings.toEmail
+    ),
+  };
+}
+
 function escapeHtml(value) {
   return clean(value)
     .replace(/&/g, "&amp;")
@@ -114,9 +154,10 @@ module.exports = async function handler(req, res) {
       saleNotifications = [],
     } = req.body || {};
 
-    const senderEmail = clean(mailSettings.senderEmail);
-    const appPassword = clean(mailSettings.appPassword).replace(/\s+/g, "");
-    const receiverEmail = clean(mailSettings.receiverEmail);
+    const normalizedMailSettings = normalizeMailSettings(mailSettings);
+    const senderEmail = normalizedMailSettings.senderEmail;
+    const appPassword = normalizedMailSettings.appPassword;
+    const receiverEmail = normalizedMailSettings.receiverEmail;
 
     if (!senderEmail || !appPassword || !receiverEmail) {
       return res.status(400).json({
