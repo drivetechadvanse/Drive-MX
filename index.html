@@ -1612,7 +1612,7 @@
                     .sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0))
                     .slice(0, 5)
                 : [];
-            const activeProducts = products.filter(p => p.active !== false && Number(p.stock || 0) > 0);
+            const activeProducts = products.filter(p => p.active !== false);
             const findProductById = (productId) => products.find(p => String(p.id) === String(productId));
             const selectedProduct = findProductById(selectedProductId);
             const cartProducts = cartItems.map(item => findProductById(item.id) || item).filter(Boolean).slice(0, CART_MAX_ITEMS);
@@ -1841,10 +1841,6 @@
 
             const addProductToCart = (product) => {
                 if (!product?.id) return;
-                if (Number(product.stock || 0) <= 0 || product.active === false) {
-                    alert('Este producto no tiene inventario disponible.');
-                    return;
-                }
                 if (isProductInCart(product.id)) {
                     alert('Este producto ya está en el carrito.');
                     setIsCartOpen(true);
@@ -1881,10 +1877,6 @@
                     alert('No se encontró el producto seleccionado.');
                     return;
                 }
-                if (Number(product.stock || 0) <= 0 || product.active === false) {
-                    alert('Este producto no tiene inventario disponible.');
-                    return;
-                }
                 if (!ensureCheckoutWalletsAllowed([product])) return;
                 setCheckoutProductIds([]);
                 setSelectedProductId(product.id);
@@ -1893,7 +1885,7 @@
             };
 
             const startCartCheckout = () => {
-                const validCartProducts = cartProducts.filter(product => product?.id && product.active !== false && Number(product.stock || 0) > 0).slice(0, CART_MAX_ITEMS);
+                const validCartProducts = cartProducts.filter(product => product?.id).slice(0, CART_MAX_ITEMS);
                 if (validCartProducts.length === 0) {
                     alert('El carrito está vacío.');
                     return;
@@ -2292,7 +2284,7 @@
                 e.preventDefault();
                 const next = {
                     senderEmail: emailSettings.senderEmail.trim(),
-                    appPassword: emailSettings.appPassword.trim(),
+                    appPassword: emailSettings.appPassword.trim().replace(/\s+/g, ''),
                     receiverEmail: emailSettings.receiverEmail.trim(),
                     updatedAt: Date.now(),
                     updatedBy: sessionUser?.email || ''
@@ -2427,7 +2419,7 @@
                 return {
                     mailSettings: {
                         senderEmail: emailSettings.senderEmail.trim(),
-                        appPassword: emailSettings.appPassword.trim(),
+                        appPassword: emailSettings.appPassword.trim().replace(/\s+/g, ''),
                         receiverEmail: emailSettings.receiverEmail.trim()
                     },
                     product: primaryProduct,
@@ -2645,7 +2637,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         ...transfer.order,
                         mailSettings: {
                             senderEmail: emailSettings.senderEmail.trim(),
-                            appPassword: emailSettings.appPassword.trim(),
+                            appPassword: emailSettings.appPassword.trim().replace(/\s+/g, ''),
                             receiverEmail: emailSettings.receiverEmail.trim()
                         }
                     });
