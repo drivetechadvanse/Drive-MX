@@ -731,6 +731,9 @@
                 if (col === 'bank_transfers') {
                     setPendingTransfers(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)]; writeLocal('driveMxPendingTransfers', next); return next; });
                 }
+                if (col === Wallet.WALLET_RECHARGES_COLLECTION) {
+                    setWalletRecharges(prev => [{ id, ...data }, ...prev.filter(x => x.id !== id)].sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)));
+                }
                 if (col === 'completed_sales') {
                     setCompletedSales(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)].sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0)); writeLocal('driveMxCompletedSales', next); return next; });
                 }
@@ -2157,17 +2160,22 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 try {
                     const createdAt = Date.now();
                     const id = `WR-${userId}-${createdAt}`;
-                    await saveDoc('bank_transfers', id, {
+                    const userName = Wallet.getUserName ? Wallet.getUserName(sessionUser || {}) : (sessionUser?.name || sessionUser?.email || 'Usuario');
+                    const pendingRechargeId = Wallet.safeDocId(`pending_recharge_${userId}_${createdAt}`);
+                    const pendingRecharge = {
+                        id: pendingRechargeId,
+                        rechargeId: pendingRechargeId,
+                        referenceId: id,
                         transferId: id,
-                        type: 'wallet_recharge',
+                        type: 'recharge',
                         paymentMethod: 'Transferencia bancaria',
                         bankAccount: paymentSettings.bankAccount.trim(),
                         bankLegend: 'La recarga se abonará al saldo a favor cuando el administrador confirme la transferencia.',
-                        holderName: Wallet.getUserName ? Wallet.getUserName(sessionUser || {}) : (sessionUser?.name || sessionUser?.email || 'Usuario'),
+                        holderName: userName,
                         status: 'Pendiente',
                         walletId: userId,
                         userId,
-                        userName: sessionUser?.name || sessionUser?.email || 'Usuario',
+                        userName,
                         userEmail: sessionUser?.email || '',
                         userPhone: sessionUser?.phone || '',
                         amount: validation.amount,
@@ -2175,6 +2183,14 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         createdAt,
                         updatedAt: createdAt,
                         createdBy: sessionUser?.email || ''
+                    };
+                    await saveDoc(Wallet.WALLET_RECHARGES_COLLECTION, pendingRechargeId, pendingRecharge);
+                    await saveDoc('bank_transfers', id, {
+                        ...pendingRecharge,
+                        id,
+                        transferId: id,
+                        rechargeId: pendingRechargeId,
+                        type: 'wallet_recharge'
                     });
                     alert('Recarga registrada como Pendiente. El saldo se abonará cuando el administrador confirme la transferencia.');
                     setWalletRechargeAmount('');
@@ -2241,7 +2257,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                             amount: transfer.amount,
                             referenceId: transferId,
                             actor: sessionUser?.email || ADMIN_EMAIL,
-                            settings: walletSettings
+                            settings: walletSettings,
+                            rechargeDocId: transfer.rechargeId || ''
                         });
                         await saveDoc('bank_transfers', transferId, { ...transfer, status: 'Pagado', paidAt, updatedAt: paidAt, paidBy: sessionUser?.email || '' });
                         alert('Transferencia de recarga aprobada. El saldo fue abonado al usuario.');
@@ -2282,6 +2299,68 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 } catch(err) {
                     console.error('Firestore borrar transferencia:', err);
                     alert('No se pudo eliminar la transferencia en Firestore.');
+                }
+            };
+
+
+            const approveWalletRechargeFromPanel = async (recharge) => {
+                if (sessionUser?.role !== 'admin') return;
+                const rechargeId = recharge?.id || recharge?.rechargeId;
+                if (!rechargeId || String(recharge.status || '').toLowerCase() !== 'pendiente') return;
+                const transferId = recharge.transferId || recharge.referenceId || '';
+                setWalletRechargeProcessing(rechargeId);
+                try {
+                    const paidAt = Date.now();
+                    const targetUser = {
+                        uid: recharge.walletId || recharge.userId,
+                        id: recharge.walletId || recharge.userId,
+                        name: recharge.userName || recharge.holderName || 'Usuario',
+                        email: recharge.userEmail || '',
+                        phone: recharge.userPhone || ''
+                    };
+                    await Wallet.recordRecharge({
+                        fbase,
+                        appId,
+                        user: targetUser,
+                        wallet: Wallet.getWalletById(wallets, recharge.walletId || recharge.userId),
+                        amount: recharge.amount,
+                        referenceId: transferId || rechargeId,
+                        actor: sessionUser?.email || ADMIN_EMAIL,
+                        settings: walletSettings,
+                        rechargeDocId: rechargeId
+                    });
+                    if (transferId) {
+                        await saveDoc('bank_transfers', transferId, { ...recharge, id: transferId, transferId, rechargeId, type: 'wallet_recharge', status: 'Pagado', paidAt, updatedAt: paidAt, paidBy: sessionUser?.email || '' });
+                    }
+                    alert('Recarga aprobada. El saldo fue abonado al usuario.');
+                } catch(err) {
+                    console.error('Aprobar recarga desde cartera:', err);
+                    alert(err.message || 'No se pudo aprobar la recarga.');
+                } finally {
+                    setWalletRechargeProcessing(false);
+                }
+            };
+
+            const deleteWalletRechargeFromPanel = async (recharge) => {
+                if (sessionUser?.role !== 'admin') return;
+                const rechargeId = recharge?.id || recharge?.rechargeId;
+                if (!rechargeId) return;
+                const message = String(recharge.status || '').toLowerCase() === 'pendiente'
+                    ? '¿Eliminar esta recarga pendiente? No se abonará saldo al usuario.'
+                    : '¿Eliminar este registro de recarga de la cartera?';
+                if (!confirm(message)) return;
+                const transferId = recharge.transferId || recharge.referenceId || '';
+                setWalletRecharges(prev => prev.filter(item => (item.id || item.rechargeId) !== rechargeId));
+                try {
+                    const db = fbase.getFirestore();
+                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', Wallet.WALLET_RECHARGES_COLLECTION, rechargeId));
+                    if (transferId && String(recharge.status || '').toLowerCase() === 'pendiente') {
+                        await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'bank_transfers', transferId));
+                        setPendingTransfers(prev => { const next = prev.filter(item => (item.id || item.transferId) !== transferId); writeLocal('driveMxPendingTransfers', next); return next; });
+                    }
+                } catch(err) {
+                    console.error('Borrar recarga desde cartera:', err);
+                    alert('No se pudo eliminar la recarga en Firestore.');
                 }
             };
 
@@ -3186,6 +3265,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             users={users}
                                             wallets={wallets}
                                             recharges={walletRecharges}
+                                            onApproveRecharge={approveWalletRechargeFromPanel}
+                                            onDeleteRecharge={deleteWalletRechargeFromPanel}
+                                            rechargeProcessingId={walletRechargeProcessing}
                                         />
 
                                         <div className="card-glass overflow-hidden">
@@ -3695,6 +3777,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
