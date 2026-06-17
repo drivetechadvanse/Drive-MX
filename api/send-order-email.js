@@ -124,6 +124,13 @@ module.exports = async function handler(req, res) {
       });
     }
 
+    if (!isValidEmail(senderEmail) || !isValidEmail(receiverEmail)) {
+      return res.status(400).json({
+        success: false,
+        error: "La configuración de correo contiene direcciones inválidas.",
+      });
+    }
+
     const requiredDelivery = {
       street: "Calle",
       state: "Estado",
@@ -150,6 +157,10 @@ module.exports = async function handler(req, res) {
       if (!clean(delivery[key])) {
         return res.status(400).json({ success: false, error: `Falta el campo: ${label}.` });
       }
+    }
+
+    if (!isValidEmail(delivery.email)) {
+      return res.status(400).json({ success: false, error: "Ingresa un correo electrónico válido." });
     }
 
     const orderTotal = orderProducts.reduce((total, item) => total + Number(item.price || 0), 0);
