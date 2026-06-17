@@ -571,7 +571,7 @@
             props.rechargeAmount && !rechargeValidation.ok ? h('p', { className: 'text-[10px] font-black text-red-500 uppercase' }, rechargeValidation.message) : null,
             h('div', { className: 'space-y-3' },
               props.bankAccount ? h('div', { className: 'rounded-xl bg-white border border-slate-100 p-3' },
-                h('p', { className: 'text-[8px] font-black uppercase text-slate-400 mb-1' }, 'Cuenta configurada para transferencia'),
+                h('p', { className: 'text-[8px] font-black uppercase text-slate-400 mb-1' }, 'Pagar solo con Banco Azteca, el nombre del titular de la cuenta debe coincidir con el usuario registrado en el panel para que la tranferencia sea aprobada'),
                 h('p', { className: 'text-sm font-black text-slate-900 break-all' }, props.bankAccount)
               ) : h('p', { className: 'text-[10px] font-black text-red-500 uppercase' }, 'El administrador aún no configuró la cuenta bancaria.'),
               h('button', {
@@ -755,6 +755,7 @@
   global.DriveMxWallet = Wallet;
   global.DriveMxWalletUI = createWalletUI(global.React);
 })(window);
+
 
 
 
