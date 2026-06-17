@@ -259,7 +259,7 @@
     return await ensureWalletDocument({ fbase, appId, user: { ...user, uid: walletId, id: walletId }, createdBy: 'sistema' });
   }
 
-  async function recordRecharge({ fbase, appId, user = {}, wallet = null, amount: rawAmount = 0, referenceId = '', actor = '', settings = {} } = {}) {
+  async function recordRecharge({ fbase, appId, user = {}, wallet = null, amount: rawAmount = 0, referenceId = '', actor = '', settings = {}, rechargeDocId = '' } = {}) {
     const current = await fetchWallet({ fbase, appId, user, wallet });
     const validation = validateRechargeAmount(current, rawAmount, settings);
     if (!validation.ok) throw new Error(validation.message);
@@ -270,7 +270,7 @@
     const balanceBefore = roundMoney(current.balance || 0);
     const balanceAfter = roundMoney(balanceBefore + amount);
     const movementId = safeDocId(`mov_recharge_${referenceId || createdAt}`);
-    const rechargeId = safeDocId(`recharge_${walletId}_${referenceId || createdAt}`);
+    const rechargeId = safeDocId(rechargeDocId || `recharge_${walletId}_${referenceId || createdAt}`);
     const nextWallet = {
       ...current,
       userName: getUserName(user) || current.userName,
@@ -309,7 +309,9 @@
       ...movement,
       id: rechargeId,
       rechargeId,
-      status: 'Completada'
+      status: 'Completada',
+      approvedAt: createdAt,
+      approvedBy: actor || getUserEmail(user)
     };
 
     await fbase.setDoc(walletDocRef(fbase, appId, walletId), nextWallet, { merge: true });
@@ -660,13 +662,16 @@
       );
     }
 
-    function AdminWalletsPanel({ users = [], wallets = [], recharges = [] } = {}) {
+    function AdminWalletsPanel({ users = [], wallets = [], recharges = [], onApproveRecharge = null, onDeleteRecharge = null, rechargeProcessingId = '' } = {}) {
       const registeredUsers = (Array.isArray(users) ? users : []).filter((user) => user.role !== 'admin');
       const rechargeList = (Array.isArray(recharges) ? recharges : []).slice(0, 50);
+      const getRechargeStatusClass = (status = '') => String(status || '').toLowerCase() === 'pendiente'
+        ? 'bg-yellow-50 text-yellow-700'
+        : 'bg-green-50 text-green-600';
       return h('div', { className: 'card-glass overflow-hidden' },
         h('div', { className: 'bg-slate-50 border-b border-slate-100 px-6 py-4' },
           h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400' }, 'Carteras de Usuarios'),
-          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Consulta saldos y recargas registradas')
+          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Consulta saldos, recargas pendientes y recargas aprobadas')
         ),
         h('div', { className: 'p-6 space-y-6' },
           h('div', { className: 'grid sm:grid-cols-2 xl:grid-cols-3 gap-3' },
@@ -699,20 +704,44 @@
                   h('th', { className: 'px-6 py-3' }, 'Fecha'),
                   h('th', { className: 'px-6 py-3' }, 'Usuario'),
                   h('th', { className: 'px-6 py-3' }, 'Monto'),
-                  h('th', { className: 'px-6 py-3' }, 'Referencia')
+                  h('th', { className: 'px-6 py-3' }, 'Estado'),
+                  h('th', { className: 'px-6 py-3' }, 'Referencia'),
+                  h('th', { className: 'px-6 py-3 text-right' }, 'Acciones')
                 )
               ),
               h('tbody', { className: 'divide-y divide-slate-50' },
-                rechargeList.map((item) => h('tr', { key: item.id || item.rechargeId, className: 'text-[10px] font-bold text-slate-600' },
-                  h('td', { className: 'px-6 py-4' }, item.createdAt ? new Date(item.createdAt).toLocaleString('es-MX') : '-'),
-                  h('td', { className: 'px-6 py-4' },
-                    h('p', { className: 'font-black text-slate-800' }, item.userName || item.userEmail || item.userId || '-'),
-                    h('p', { className: 'font-mono text-[8px] text-slate-400 break-anywhere' }, item.userEmail || item.userId || '')
-                  ),
-                  h('td', { className: 'px-6 py-4 text-green-600 font-black' }, `+${formatMoney(item.amount || 0)}`),
-                  h('td', { className: 'px-6 py-4 font-mono text-[8px] text-slate-400 break-anywhere' }, item.referenceId || '-')
-                )),
-                rechargeList.length === 0 ? h('tr', null, h('td', { colSpan: 4, className: 'px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase' }, 'Aún no hay recargas registradas')) : null
+                rechargeList.map((item) => {
+                  const itemId = item.id || item.rechargeId || item.referenceId;
+                  const isPending = String(item.status || '').toLowerCase() === 'pendiente';
+                  const isProcessing = rechargeProcessingId === itemId;
+                  return h('tr', { key: itemId, className: 'text-[10px] font-bold text-slate-600 align-top' },
+                    h('td', { className: 'px-6 py-4' }, item.createdAt ? new Date(item.createdAt).toLocaleString('es-MX') : '-'),
+                    h('td', { className: 'px-6 py-4' },
+                      h('p', { className: 'font-black text-slate-800' }, item.userName || item.userEmail || item.userId || '-'),
+                      h('p', { className: 'font-mono text-[8px] text-slate-400 break-anywhere' }, item.userEmail || item.userId || item.walletId || '')
+                    ),
+                    h('td', { className: 'px-6 py-4 text-green-600 font-black' }, `+${formatMoney(item.amount || 0)}`),
+                    h('td', { className: 'px-6 py-4' }, h('span', { className: `px-2 py-1 rounded-full text-[8px] uppercase font-black ${getRechargeStatusClass(item.status)}` }, item.status || 'Completada')),
+                    h('td', { className: 'px-6 py-4 font-mono text-[8px] text-slate-400 break-anywhere' }, item.referenceId || itemId || '-'),
+                    h('td', { className: 'px-6 py-4 text-right' },
+                      h('div', { className: 'flex justify-end gap-2 flex-wrap' },
+                        isPending && onApproveRecharge ? h('button', {
+                          type: 'button',
+                          onClick: () => onApproveRecharge(item),
+                          disabled: isProcessing,
+                          className: 'px-3 py-2 bg-green-50 text-green-600 rounded-xl text-[8px] font-black uppercase disabled:opacity-50'
+                        }, isProcessing ? 'Aprobando...' : 'Aprobar') : null,
+                        onDeleteRecharge ? h('button', {
+                          type: 'button',
+                          onClick: () => onDeleteRecharge(item),
+                          disabled: isProcessing,
+                          className: 'px-3 py-2 bg-red-50 text-red-500 hover:bg-red-500 hover:text-white rounded-xl text-[8px] font-black uppercase disabled:opacity-50'
+                        }, 'Eliminar') : null
+                      )
+                    )
+                  );
+                }),
+                rechargeList.length === 0 ? h('tr', null, h('td', { colSpan: 6, className: 'px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase' }, 'Aún no hay recargas registradas')) : null
               )
             )
           )
@@ -726,6 +755,7 @@
   global.DriveMxWallet = Wallet;
   global.DriveMxWalletUI = createWalletUI(global.React);
 })(window);
+
 
 
 
