@@ -1509,8 +1509,8 @@
                     alert('Ingresa un porcentaje de comisión global entre 0 y 100.');
                     return;
                 }
-                if (!Number.isFinite(minimumFirstRecharge) || minimumFirstRecharge <= 0) {
-                    alert('Ingresa una recarga mínima válida mayor a 0.');
+                if (!Number.isFinite(minimumFirstRecharge) || minimumFirstRecharge < Wallet.MIN_FIRST_RECHARGE || minimumFirstRecharge > 1000000) {
+                    alert(`La recarga mínima debe ser de al menos ${Wallet.formatMoney(Wallet.MIN_FIRST_RECHARGE)} y máximo $1,000,000 MXN.`);
                     return;
                 }
                 setWalletSettingsSaving(true);
@@ -3780,6 +3780,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
