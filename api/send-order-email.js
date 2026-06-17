@@ -156,7 +156,10 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    const orderTotal = orderProducts.reduce((total, item) => total + Number(item.price || 0), 0);
+    const SHIPPING_FEE = 150;
+    const orderSubtotal = orderProducts.reduce((total, item) => total + Number(item.price || 0), 0);
+    const orderShippingFee = Number(cart.shippingFee ?? (orderProducts.length > 0 ? SHIPPING_FEE : 0));
+    const orderTotal = Number(cart.total ?? (orderSubtotal + orderShippingFee));
     const itemCount = Number(cart.itemCount || orderProducts.length);
     const productSubject = orderProducts.length > 1 ? `${orderProducts.length} productos` : orderProducts[0].name;
 
@@ -174,6 +177,8 @@ module.exports = async function handler(req, res) {
 
         <h3>Productos</h3>
         ${productsHtml(orderProducts)}
+        <p><b>Subtotal productos:</b> $${money(orderSubtotal)}</p>
+        <p><b>Gastos de envío:</b> $${money(orderShippingFee)}</p>
         <p><b>Total acumulado:</b> $${money(orderTotal)}</p>
         <p><b>Cantidad de productos:</b> ${itemCount}</p>
 
@@ -271,7 +276,9 @@ module.exports = async function handler(req, res) {
 
           <h3>Productos de la compra</h3>
           ${saleProductsHtml}
-          <p><b>Total acumulado:</b> $${money(orderTotal)}</p>
+          <p><b>Subtotal productos:</b> $${money(orderSubtotal)}</p>
+        <p><b>Gastos de envío:</b> $${money(orderShippingFee)}</p>
+        <p><b>Total acumulado:</b> $${money(orderTotal)}</p>
 
           <hr />
 
@@ -327,6 +334,7 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
 
 
 
