@@ -809,6 +809,7 @@
                     await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', col, id), data);
                 } catch(err) {
                     console.error('Firestore guardar:', err);
+                    if (col === 'completed_sales' || col === 'bank_transfers') throw err;
                 }
             };
 
@@ -1857,14 +1858,21 @@
                                 if (!ensureCheckoutWalletsAllowed(checkoutProducts)) throw new Error(Wallet.INSUFFICIENT_MESSAGE);
                                 const capture = await actions.order.capture();
                                 const payload = appendSaleNotificationToPayload(buildOrderPayload());
-                                await sendOrderEmail(payload);
                                 await registerCompletedSale({
                                     payload,
                                     paymentMethod: 'PayPal',
                                     saleId: `paypal_${data.orderID || capture?.id || Date.now()}`,
-                                    paypalOrderId: data.orderID || capture?.id || ''
+                                    paypalOrderId: data.orderID || capture?.id || '',
+                                    skipWalletCommission: true
                                 });
-                                alert('Pago PayPal confirmado. La solicitud fue enviada correctamente.');
+                                let mailWarning = '';
+                                try {
+                                    await sendOrderEmail(payload);
+                                } catch(mailErr) {
+                                    console.error('Correo PayPal:', mailErr);
+                                    mailWarning = mailErr.message || 'No se pudo enviar el correo.';
+                                }
+                                alert(mailWarning ? `Pago PayPal confirmado y compra registrada, pero no se envió correo: ${mailWarning}` : 'Pago PayPal confirmado. La solicitud fue enviada correctamente.');
                                 clearCompletedCartIfNeeded();
                                 resetPublicFlow();
                             } catch(err) {
@@ -1886,7 +1894,7 @@
                     }).render(`#${containerId}`);
                 };
 
-                const paypalSdkSrc = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(paymentSettings.paypalClientId)}&currency=MXN&intent=capture&commit=true&locale=es_MX`;
+                const paypalSdkSrc = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(paymentSettings.paypalClientId)}&currency=MXN&intent=capture&commit=true&locale=es_MX&components=buttons&enable-funding=card`;
                 const existing = document.querySelector('script[data-drive-mx-paypal="true"]');
                 if (existing && existing.src !== paypalSdkSrc) {
                     existing.remove();
@@ -2382,7 +2390,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 };
             };
 
-            const registerCompletedSale = async ({ payload = {}, paymentMethod = '', saleId = '', transferId = '', paypalOrderId = '', soldAt = Date.now() }) => {
+            const registerCompletedSale = async ({ payload = {}, paymentMethod = '', saleId = '', transferId = '', paypalOrderId = '', soldAt = Date.now(), skipWalletCommission = false }) => {
                 const payloadProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
                 const orderTotal = payloadProducts.reduce((total, product) => total + Number(product.price || 0), 0);
                 const baseId = String(saleId || `sale_${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -2419,20 +2427,33 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         createdAt: soldAt,
                         updatedAt: Date.now()
                     };
-                    const commissionResult = await Wallet.debitCommissionForSale({
-                        fbase,
-                        appId,
-                        seller: { ...seller, id: seller.id || payloadProduct.ownerId || '', uid: seller.id || payloadProduct.ownerId || '' },
-                        wallet: Wallet.getWalletById(wallets, seller.id || payloadProduct.ownerId || ''),
-                        sale,
-                        commissionPercent: walletCommissionPercent,
-                        actor: sessionUser?.email || paymentMethod || 'sistema'
-                    });
+                    const shouldDebitWalletCommission = !skipWalletCommission && sessionUser?.role === 'admin';
+                    const estimatedCommissionAmount = Wallet.calculateCommission(Number(sale.productCost || 0), walletCommissionPercent);
+                    let commissionResult = {
+                        applies: estimatedCommissionAmount > 0,
+                        commissionAmount: estimatedCommissionAmount,
+                        balanceBefore: null,
+                        balanceAfter: null,
+                        percent: walletCommissionPercent
+                    };
+                    if (shouldDebitWalletCommission) {
+                        commissionResult = await Wallet.debitCommissionForSale({
+                            fbase,
+                            appId,
+                            seller: { ...seller, id: seller.id || payloadProduct.ownerId || '', uid: seller.id || payloadProduct.ownerId || '' },
+                            wallet: Wallet.getWalletById(wallets, seller.id || payloadProduct.ownerId || ''),
+                            sale,
+                            commissionPercent: walletCommissionPercent,
+                            actor: sessionUser?.email || paymentMethod || 'sistema'
+                        });
+                    }
                     const saleWithWallet = {
                         ...sale,
                         walletCommissionPercent: commissionResult.percent ?? walletCommissionPercent,
                         walletCommissionAmount: Number(commissionResult.commissionAmount || 0),
-                        walletCommissionStatus: commissionResult.applies ? (Number(commissionResult.commissionAmount || 0) > 0 ? 'Descontada' : 'Sin comisión') : 'No aplica',
+                        walletCommissionStatus: shouldDebitWalletCommission
+                            ? (commissionResult.applies ? (Number(commissionResult.commissionAmount || 0) > 0 ? 'Descontada' : 'Sin comisión') : 'No aplica')
+                            : (Number(commissionResult.commissionAmount || 0) > 0 ? 'Pendiente de descuento' : 'Sin comisión'),
                         walletBalanceBeforeCommission: commissionResult.balanceBefore,
                         walletBalanceAfterCommission: commissionResult.balanceAfter
                     };
@@ -2496,9 +2517,15 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 setOrderSending(true);
                 try {
                     const payload = appendSaleNotificationToPayload(buildOrderPayload());
-                    await sendOrderEmail(payload);
-                    await registerCompletedSale({ payload, paymentMethod: 'PayPal', saleId: `paypal_manual_${Date.now()}` });
-                    alert('Pago PayPal confirmado. La solicitud fue enviada correctamente.');
+                    await registerCompletedSale({ payload, paymentMethod: 'PayPal', saleId: `paypal_manual_${Date.now()}`, skipWalletCommission: true });
+                    let mailWarning = '';
+                    try {
+                        await sendOrderEmail(payload);
+                    } catch(mailErr) {
+                        console.error('Correo PayPal manual:', mailErr);
+                        mailWarning = mailErr.message || 'No se pudo enviar el correo.';
+                    }
+                    alert(mailWarning ? `Pago PayPal registrado, pero no se envió correo: ${mailWarning}` : 'Pago PayPal confirmado. La solicitud fue enviada correctamente.');
                     clearCompletedCartIfNeeded();
                     resetPublicFlow();
                 } catch(err) {
@@ -4064,6 +4091,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
