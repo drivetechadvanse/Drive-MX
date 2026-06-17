@@ -88,6 +88,7 @@
         const SALE_NOTIFICATION_MESSAGE = 'Tu producto ha sido vendido. Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.';
         const PRODUCT_SIZE_OPTIONS = ['Chica', 'Mediana', 'Grande', 'XL'];
         const PAYMENT_BANK_AZTECA_ORDER_TEXT = 'Pagar solo con Banco Azteca, el nombre del titular de la cuenta debe de coincidir con el nombre registrado en el pedido para que la tranferencia sea aprobada';
+        const GLOBAL_SHIPPING_FEE = 150;
         const normalizeProductSizes = (sizes = []) => Array.isArray(sizes) ? sizes.filter(size => PRODUCT_SIZE_OPTIONS.includes(String(size || '').trim())) : [];
         const normalizeProductColors = (colors = []) => Array.isArray(colors) ? colors.map(color => String(color || '').trim()).filter(Boolean) : [];
         const productSizesText = (product = {}) => normalizeProductSizes(product.sizes || product.medidas).join(', ');
@@ -1490,7 +1491,9 @@
             const checkoutProducts = checkoutProductIds.length > 0
                 ? checkoutProductIds.map(id => findProductById(id) || cartItems.find(item => String(item.id) === String(id))).filter(Boolean).slice(0, CART_MAX_ITEMS)
                 : (selectedProduct ? [selectedProduct] : []);
-            const checkoutTotal = checkoutProducts.reduce((total, product) => total + Number(product.price || 0), 0);
+            const checkoutSubtotal = checkoutProducts.reduce((total, product) => total + Number(product.price || 0), 0);
+            const checkoutShippingFee = checkoutProducts.length > 0 ? GLOBAL_SHIPPING_FEE : 0;
+            const checkoutTotal = checkoutSubtotal + checkoutShippingFee;
             const checkoutProduct = checkoutProducts[0] || null;
             const checkoutProductNames = checkoutProducts.map(product => product.name).filter(Boolean).join(', ');
             const checkoutProductIdsLabel = checkoutProducts.map(product => product.id).filter(Boolean).join(', ');
@@ -2043,7 +2046,9 @@
                     };
                 }).filter(product => product.id && product.name).slice(0, CART_MAX_ITEMS);
                 const primaryProduct = orderProducts[0] || {};
-                const orderTotal = orderProducts.reduce((total, product) => total + Number(product.price || 0), 0);
+                const orderSubtotal = orderProducts.reduce((total, product) => total + Number(product.price || 0), 0);
+                const orderShippingFee = orderProducts.length > 0 ? GLOBAL_SHIPPING_FEE : 0;
+                const orderTotal = orderSubtotal + orderShippingFee;
                 return {
                     mailSettings: {
                         senderEmail: emailSettings.senderEmail.trim(),
@@ -2055,6 +2060,8 @@
                     cart: {
                         itemCount: orderProducts.length,
                         maxItems: CART_MAX_ITEMS,
+                        subtotal: orderSubtotal,
+                        shippingFee: orderShippingFee,
                         total: orderTotal,
                         expiresInMinutes: Math.round(CART_TTL_MS / 60000)
                     },
@@ -2116,12 +2123,14 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         productId: product.id || '',
                         productPrice: Number(product.price || 0)
                     }));
-                const enrichedTotal = enrichedProducts.reduce((total, product) => total + Number(product.price || 0), 0);
+                const enrichedSubtotal = enrichedProducts.reduce((total, product) => total + Number(product.price || 0), 0);
+                const enrichedShippingFee = enrichedProducts.length > 0 ? GLOBAL_SHIPPING_FEE : 0;
+                const enrichedTotal = enrichedSubtotal + enrichedShippingFee;
                 return {
                     ...payload,
                     product: enrichedProducts[0] || payload.product || {},
                     products: enrichedProducts,
-                    cart: { ...(payload.cart || {}), itemCount: enrichedProducts.length, total: enrichedTotal, maxItems: CART_MAX_ITEMS },
+                    cart: { ...(payload.cart || {}), itemCount: enrichedProducts.length, subtotal: enrichedSubtotal, shippingFee: enrichedShippingFee, total: enrichedTotal, maxItems: CART_MAX_ITEMS },
                     saleNotification: saleNotifications[0] || undefined,
                     saleNotifications
                 };
@@ -2129,7 +2138,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
 
             const registerCompletedSale = async ({ payload = {}, paymentMethod = '', saleId = '', transferId = '', soldAt = Date.now() }) => {
                 const payloadProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
-                const orderTotal = payloadProducts.reduce((total, product) => total + Number(product.price || 0), 0);
+                const orderSubtotal = payloadProducts.reduce((total, product) => total + Number(product.price || 0), 0);
+                const orderShippingFee = Number(payload.cart?.shippingFee ?? (payloadProducts.length > 0 ? GLOBAL_SHIPPING_FEE : 0));
+                const orderTotal = Number(payload.cart?.total ?? (orderSubtotal + orderShippingFee));
                 const baseId = String(saleId || `sale_${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '_');
                 const savedSales = [];
 
@@ -2142,6 +2153,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         orderSaleId: baseId,
                         cartItemCount: payloadProducts.length,
                         orderTotal,
+                        orderSubtotal,
+                        shippingFee: orderShippingFee,
                         paymentMethod,
                         transferId,
                         productId: payloadProduct.id || sourceProduct.id || '',
@@ -2266,7 +2279,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         transferId: id,
                         paymentMethod: 'Transferencia bancaria',
                         bankAccount: paymentSettings.bankAccount.trim(),
-                        bankLegend: 'Pagar solo con Banco Azteca, el nombre del titular de la cuenta debe de coincidir con el nombre registrado en el pedido para que la tranferencia sea aprobada',
+                        bankLegend: PAYMENT_BANK_AZTECA_ORDER_TEXT,
                         holderName: payload.delivery.fullName,
                         status: 'Pendiente',
                         order: payload,
@@ -2461,7 +2474,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     productId: orderProducts.map(item => item.id).filter(Boolean).join(', ') || product.id || '',
                     product: { ...product },
                     products: orderProducts.map(item => ({ ...item })),
-                    orderTotal: orderProducts.reduce((total, item) => total + Number(item.price || 0), 0),
+                    orderTotal: Number(order.cart?.total ?? (orderProducts.reduce((total, item) => total + Number(item.price || 0), 0) + (orderProducts.length > 0 ? GLOBAL_SHIPPING_FEE : 0))),
+                    shippingFee: Number(order.cart?.shippingFee ?? (orderProducts.length > 0 ? GLOBAL_SHIPPING_FEE : 0)),
                     customer: {
                         fullName: delivery.fullName || transfer?.holderName || '',
                         phone: delivery.phone || '',
@@ -3127,6 +3141,12 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                 <span className="text-[9px] font-black text-slate-400 uppercase">Total</span>
                                                 <span className="text-xl font-black text-red-500">${Number(checkoutTotal || 0).toFixed(2)}</span>
                                             </div>
+                                            {checkoutProducts.length > 0 && (
+                                                <div className="flex items-center justify-between gap-3 text-sm font-bold border-t border-slate-200 pt-3">
+                                                    <span className="text-slate-700">Gastos de envio</span>
+                                                    <span className="text-red-500 font-black">${Number(checkoutShippingFee || 0).toFixed(2)}</span>
+                                                </div>
+                                            )}
                                         </div>
                                         <div className="grid md:grid-cols-2 gap-4">
                                             <div className="md:col-span-2">
@@ -3190,10 +3210,14 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                     <span className="text-red-500 font-black">${Number(product.price || 0).toFixed(2)}</span>
                                                 </div>
                                             ))}
+                                            <div className="flex items-center justify-between gap-3 text-sm font-bold border-t border-slate-200 pt-3">
+                                                <span className="text-slate-700">Gastos de envio</span>
+                                                <span className="text-red-500 font-black">${Number(checkoutShippingFee || 0).toFixed(2)}</span>
+                                            </div>
                                         </div>
                                         <div className="grid md:grid-cols-2 gap-4">
                                             {[
-                                                ['transfer', 'Transferencia bancaria', 'Queda Pendiente hasta que el administrador confirme el pago.']
+                                                ['transfer', 'Transferencia bancaria', 'Queda Pendiente hasta que el administrador confirme el pago. Gastos de envio 150 pesos.']
                                             ].map(([value, title, desc]) => (
                                                 <label key={value} className={`border-2 rounded-2xl p-5 cursor-pointer hover:border-red-200 transition-all bg-white ${selectedPaymentMethod === value ? 'border-red-400' : 'border-slate-100'}`}>
                                                     <div className="flex items-start gap-3">
@@ -3211,13 +3235,14 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             <div className="bg-slate-50 rounded-2xl p-5 space-y-3">
                                                 <p className="text-[9px] font-black text-slate-400 uppercase">Cuenta bancaria Banco Azteca</p>
                                                 <p className="text-2xl font-black text-slate-900 break-all">{paymentSettings.bankAccount || 'Cuenta no configurada'}</p>
-                                                <p className="text-[10px] font-bold text-slate-500 uppercase leading-relaxed">Pagar solo con Banco Azteca, el nombre del titular de la cuenta debe de coincidir con el nombre registrado en el pedido para que la tranferencia sea aprobada</p>
+                                                <p className="text-[10px] font-bold text-slate-500 uppercase leading-relaxed">{PAYMENT_BANK_AZTECA_ORDER_TEXT}</p>
                                             </div>
                                         )}
 
                                         <div className="bg-slate-50 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                                             <div>
                                                 <p className="text-[9px] font-black text-slate-400 uppercase">Total</p>
+                                                <p className="text-[10px] font-bold text-slate-400 uppercase">Productos: ${Number(checkoutSubtotal || 0).toFixed(2)} · Envío: ${Number(checkoutShippingFee || 0).toFixed(2)}</p>
                                                 <p className="text-3xl font-black text-red-500">${Number(checkoutTotal || 0).toFixed(2)}</p>
                                             </div>
                                             <button type="button" onClick={createPendingTransfer} disabled={orderSending || !paymentSettings.bankAccount} className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{orderSending ? 'Registrando...' : 'Registrar transferencia pendiente'}</button>
@@ -3373,7 +3398,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                                                 {productOptionsLines(product).map(line => <p key={line} className="text-slate-400 uppercase">{line}</p>)}
                                                                             </div>
                                                                         ))}
-                                                                        <p className="text-slate-800 font-black mt-2">Total: ${Number(t.order?.cart?.total || (Array.isArray(t.order?.products) ? t.order.products : [t.order?.product || {}]).reduce((total, product) => total + Number(product.price || 0), 0)).toFixed(2)}</p>
+                                                                        <p className="text-slate-500 font-bold mt-2">Gastos de envio: ${Number(t.order?.cart?.shippingFee ?? 150).toFixed(2)}</p>
+                                                                        <p className="text-slate-800 font-black">Total: ${Number(t.order?.cart?.total || ((Array.isArray(t.order?.products) ? t.order.products : [t.order?.product || {}]).reduce((total, product) => total + Number(product.price || 0), 0) + Number(t.order?.cart?.shippingFee ?? 150))).toFixed(2)}</p>
                                                                         <p className="text-slate-400">{t.order?.delivery?.phone} · {t.order?.delivery?.email}</p>
                                                                     </>)}
                                                                 </td>
@@ -3866,6 +3892,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
