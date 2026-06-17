@@ -8,6 +8,7 @@
   const MOVEMENTS_COLLECTION = 'movements';
   const SETTINGS_DOC_ID = 'config';
   const MIN_FIRST_RECHARGE = 500;
+  const getMinimumRecharge = (settings = {}) => { const value = Number(settings.minimumFirstRecharge || settings.minimumRecharge || MIN_FIRST_RECHARGE); return Number.isFinite(value) && value > 0 ? Math.round((value + Number.EPSILON) * 100) / 100 : MIN_FIRST_RECHARGE; };
   const CURRENCY = 'MXN';
   const PLATFORM_LEGEND = 'Las comisiones por uso de la plataforma y servicios serán descontadas automáticamente de tu saldo disponible. Recarga mínima: $500 MXN.';
   const INSUFFICIENT_MESSAGE = 'Tu saldo es insuficiente para continuar utilizando la plataforma. Realiza una nueva recarga para seguir publicando y vendiendo.';
@@ -100,7 +101,7 @@
       ...defaultSettings(),
       ...settings,
       globalCommissionPercent: normalizePercent(settings.globalCommissionPercent ?? settings.commissionPercent ?? 0),
-      minimumFirstRecharge: Number(settings.minimumFirstRecharge || MIN_FIRST_RECHARGE),
+      minimumFirstRecharge: getMinimumRecharge(settings),
       currency: settings.currency || CURRENCY
     };
   }
@@ -161,13 +162,14 @@
     return Boolean(sellerId || type === 'usuario' || type === 'user' || type === 'panel_usuario' || type === 'panel-usuario');
   }
 
-  function validateRechargeAmount(wallet = {}, amountValue = 0) {
+  function validateRechargeAmount(wallet = {}, amountValue = 0, settings = {}) {
     const amount = parseAmount(amountValue);
+    const minimum = getMinimumRecharge(settings);
     if (!Number.isFinite(amount) || amount <= 0) {
       return { ok: false, amount, message: 'Ingresa un monto válido para recargar.' };
     }
-    if (!isWalletActivated(wallet) && amount < MIN_FIRST_RECHARGE) {
-      return { ok: false, amount, message: `La primera recarga debe ser de al menos ${formatMoney(MIN_FIRST_RECHARGE)} para activar la cartera.` };
+    if (!isWalletActivated(wallet) && amount < minimum) {
+      return { ok: false, amount, message: `La primera recarga debe ser de al menos ${formatMoney(minimum)} para activar la cartera.` };
     }
     return { ok: true, amount, message: '' };
   }
@@ -257,9 +259,9 @@
     return await ensureWalletDocument({ fbase, appId, user: { ...user, uid: walletId, id: walletId }, createdBy: 'sistema' });
   }
 
-  async function recordRecharge({ fbase, appId, user = {}, wallet = null, amount: rawAmount = 0, referenceId = '', actor = '' } = {}) {
+  async function recordRecharge({ fbase, appId, user = {}, wallet = null, amount: rawAmount = 0, referenceId = '', actor = '', settings = {} } = {}) {
     const current = await fetchWallet({ fbase, appId, user, wallet });
-    const validation = validateRechargeAmount(current, rawAmount);
+    const validation = validateRechargeAmount(current, rawAmount, settings);
     if (!validation.ok) throw new Error(validation.message);
 
     const amount = validation.amount;
@@ -462,6 +464,7 @@
     MOVEMENTS_COLLECTION,
     SETTINGS_DOC_ID,
     MIN_FIRST_RECHARGE,
+    getMinimumRecharge,
     CURRENCY,
     PLATFORM_LEGEND,
     INSUFFICIENT_MESSAGE,
@@ -474,6 +477,9 @@
     normalizePercent,
     calculateCommission,
     getUserWalletId,
+    getUserName,
+    getUserEmail,
+    getUserPhone,
     normalizeWallet,
     defaultSettings,
     normalizeSettings,
@@ -504,7 +510,9 @@
     function UserWalletCard(props = {}) {
       const wallet = normalizeWallet(props.wallet || {}, props.user || {});
       const activated = isWalletActivated(wallet);
-      const rechargeValidation = validateRechargeAmount(wallet, props.rechargeAmount || 0);
+      const settings = normalizeSettings(props.settings || {});
+      const minimumRecharge = getMinimumRecharge(settings);
+      const rechargeValidation = validateRechargeAmount(wallet, props.rechargeAmount || 0, settings);
 
       return h('div', { id: 'user-wallet-section', className: 'card-glass overflow-hidden' },
         h('div', { className: 'bg-gradient-to-br from-red-500 to-red-600 px-6 py-6 text-white' },
@@ -541,13 +549,13 @@
           props.showRecharge ? h('div', { className: 'rounded-2xl border border-slate-100 bg-slate-50 p-4 space-y-4 animate-slide' },
             h('div', { className: 'grid sm:grid-cols-[1fr_auto] gap-3 items-end' },
               h('div', null,
-                h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, activated ? 'Monto de recarga' : 'Primera recarga mínima $500 MXN'),
+                h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, activated ? 'Monto de recarga' : `Primera recarga mínima ${formatMoney(minimumRecharge)}`),
                 h('input', {
                   type: 'number',
-                  min: activated ? '1' : String(MIN_FIRST_RECHARGE),
+                  min: activated ? '1' : String(minimumRecharge),
                   step: '0.01',
                   className: 'input-field',
-                  placeholder: activated ? 'Ej. 100' : 'Mínimo 500',
+                  placeholder: activated ? 'Ej. 100' : `Mínimo ${minimumRecharge}`,
                   value: props.rechargeAmount || '',
                   onChange: (event) => props.onRechargeAmountChange && props.onRechargeAmountChange(event.target.value)
                 })
@@ -559,7 +567,19 @@
               }, 'Cancelar')
             ),
             props.rechargeAmount && !rechargeValidation.ok ? h('p', { className: 'text-[10px] font-black text-red-500 uppercase' }, rechargeValidation.message) : null,
-            h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed' }, 'Las recargas en línea no están disponibles desde la aplicación.')
+            h('div', { className: 'space-y-3' },
+              props.bankAccount ? h('div', { className: 'rounded-xl bg-white border border-slate-100 p-3' },
+                h('p', { className: 'text-[8px] font-black uppercase text-slate-400 mb-1' }, 'Cuenta configurada para transferencia'),
+                h('p', { className: 'text-sm font-black text-slate-900 break-all' }, props.bankAccount)
+              ) : h('p', { className: 'text-[10px] font-black text-red-500 uppercase' }, 'El administrador aún no configuró la cuenta bancaria.'),
+              h('button', {
+                type: 'button',
+                onClick: props.onCreatePendingRecharge,
+                disabled: props.rechargeProcessing || !props.bankAccount || !props.rechargeAmount || !rechargeValidation.ok,
+                className: 'btn-primary h-12 w-full disabled:opacity-50 disabled:cursor-not-allowed'
+              }, props.rechargeProcessing ? 'Registrando...' : 'Registrar transferencia pendiente'),
+              h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed' }, 'La recarga se abonará a tu cartera cuando el administrador confirme la transferencia.')
+            )
           ) : null
         )
       );
@@ -607,7 +627,7 @@
           h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400' }, 'Configuración de Comisiones'),
           h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Porcentaje global aplicado automáticamente a cada venta de usuarios')
         ),
-        h('form', { onSubmit: props.onSubmit, className: 'p-6 grid md:grid-cols-[1fr_auto] gap-3 items-end' },
+        h('form', { onSubmit: props.onSubmit, className: 'p-6 grid md:grid-cols-[1fr_1fr_auto] gap-3 items-end' },
           h('div', null,
             h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, 'Porcentaje de comisión global'),
             h('input', {
@@ -622,7 +642,20 @@
               onChange: (event) => props.onChange && props.onChange(event.target.value)
             })
           ),
-          h('button', { disabled: props.saving, type: 'submit', className: 'btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed' }, props.saving ? 'Guardando...' : 'Guardar comisión')
+          h('div', null,
+            h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, 'Recarga mínima'),
+            h('input', {
+              required: true,
+              type: 'number',
+              min: '1',
+              step: '0.01',
+              className: 'input-field',
+              placeholder: 'Ej. 500',
+              value: props.minimumValue ?? settings.minimumFirstRecharge,
+              onChange: (event) => props.onMinimumChange && props.onMinimumChange(event.target.value)
+            })
+          ),
+          h('button', { disabled: props.saving, type: 'submit', className: 'btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed' }, props.saving ? 'Guardando...' : 'Guardar configuración')
         )
       );
     }
@@ -693,6 +726,7 @@
   global.DriveMxWallet = Wallet;
   global.DriveMxWalletUI = createWalletUI(global.React);
 })(window);
+
 
 
 
