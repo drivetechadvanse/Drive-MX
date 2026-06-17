@@ -264,6 +264,7 @@
             const [showWalletRecharge, setShowWalletRecharge] = useState(false);
             const [walletRechargeAmount, setWalletRechargeAmount] = useState('');
             const [walletRechargeProcessing, setWalletRechargeProcessing] = useState(false);
+            const [walletRechargeActionId, setWalletRechargeActionId] = useState('');
 
             const latestNavigationSnapshotRef = useRef(null);
             const sessionUserRef = useRef(null);
@@ -730,9 +731,6 @@
                 }
                 if (col === 'bank_transfers') {
                     setPendingTransfers(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)]; writeLocal('driveMxPendingTransfers', next); return next; });
-                }
-                if (col === Wallet.WALLET_RECHARGES_COLLECTION) {
-                    setWalletRecharges(prev => [{ id, ...data }, ...prev.filter(x => x.id !== id)].sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)));
                 }
                 if (col === 'completed_sales') {
                     setCompletedSales(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)].sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0)); writeLocal('driveMxCompletedSales', next); return next; });
@@ -1428,6 +1426,39 @@
             const currentUserWalletBlockedMessage = sessionUser && sessionUser.role !== 'admin' && !Wallet.isWalletActivated(currentUserWallet)
                 ? Wallet.INSUFFICIENT_MESSAGE
                 : '';
+            const walletRechargeRows = (() => {
+                const byId = new Map();
+                (Array.isArray(walletRecharges) ? walletRecharges : []).forEach((recharge) => {
+                    const id = String(recharge.referenceId || recharge.rechargeId || recharge.id || '');
+                    if (!id) return;
+                    byId.set(id, { ...recharge, status: recharge.status || 'Completada' });
+                });
+                (Array.isArray(pendingTransfers) ? pendingTransfers : [])
+                    .filter((transfer) => transfer.type === 'wallet_recharge')
+                    .forEach((transfer) => {
+                        const transferId = String(transfer.id || transfer.transferId || '');
+                        if (!transferId) return;
+                        const status = String(transfer.status || '').toLowerCase() === 'pagado' ? 'Completada' : 'Pendiente';
+                        if (status === 'Completada' && byId.has(transferId)) return;
+                        byId.set(transferId, {
+                            id: transferId,
+                            rechargeId: transferId,
+                            referenceId: transferId,
+                            sourceTransferId: transferId,
+                            walletId: transfer.walletId || transfer.userId || '',
+                            userId: transfer.userId || transfer.walletId || '',
+                            userName: transfer.userName || transfer.holderName || 'Usuario',
+                            userEmail: transfer.userEmail || '',
+                            amount: Number(transfer.amount || 0),
+                            currency: transfer.currency || 'MXN',
+                            status,
+                            createdAt: transfer.createdAt || transfer.updatedAt || Date.now(),
+                            createdBy: transfer.createdBy || '',
+                            source: 'bank_transfers'
+                        });
+                    });
+                return Array.from(byId.values()).sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+            })();
             const activeProducts = products.filter(p => p.active !== false);
             const findProductById = (productId) => products.find(p => String(p.id) === String(productId));
             const selectedProduct = findProductById(selectedProductId);
@@ -2160,22 +2191,17 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 try {
                     const createdAt = Date.now();
                     const id = `WR-${userId}-${createdAt}`;
-                    const userName = Wallet.getUserName ? Wallet.getUserName(sessionUser || {}) : (sessionUser?.name || sessionUser?.email || 'Usuario');
-                    const pendingRechargeId = Wallet.safeDocId(`pending_recharge_${userId}_${createdAt}`);
-                    const pendingRecharge = {
-                        id: pendingRechargeId,
-                        rechargeId: pendingRechargeId,
-                        referenceId: id,
+                    await saveDoc('bank_transfers', id, {
                         transferId: id,
-                        type: 'recharge',
+                        type: 'wallet_recharge',
                         paymentMethod: 'Transferencia bancaria',
                         bankAccount: paymentSettings.bankAccount.trim(),
                         bankLegend: 'La recarga se abonará al saldo a favor cuando el administrador confirme la transferencia.',
-                        holderName: userName,
+                        holderName: Wallet.getUserName ? Wallet.getUserName(sessionUser || {}) : (sessionUser?.name || sessionUser?.email || 'Usuario'),
                         status: 'Pendiente',
                         walletId: userId,
                         userId,
-                        userName,
+                        userName: sessionUser?.name || sessionUser?.email || 'Usuario',
                         userEmail: sessionUser?.email || '',
                         userPhone: sessionUser?.phone || '',
                         amount: validation.amount,
@@ -2183,14 +2209,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         createdAt,
                         updatedAt: createdAt,
                         createdBy: sessionUser?.email || ''
-                    };
-                    await saveDoc(Wallet.WALLET_RECHARGES_COLLECTION, pendingRechargeId, pendingRecharge);
-                    await saveDoc('bank_transfers', id, {
-                        ...pendingRecharge,
-                        id,
-                        transferId: id,
-                        rechargeId: pendingRechargeId,
-                        type: 'wallet_recharge'
                     });
                     alert('Recarga registrada como Pendiente. El saldo se abonará cuando el administrador confirme la transferencia.');
                     setWalletRechargeAmount('');
@@ -2257,8 +2275,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                             amount: transfer.amount,
                             referenceId: transferId,
                             actor: sessionUser?.email || ADMIN_EMAIL,
-                            settings: walletSettings,
-                            rechargeDocId: transfer.rechargeId || ''
+                            settings: walletSettings
                         });
                         await saveDoc('bank_transfers', transferId, { ...transfer, status: 'Pagado', paidAt, updatedAt: paidAt, paidBy: sessionUser?.email || '' });
                         alert('Transferencia de recarga aprobada. El saldo fue abonado al usuario.');
@@ -2302,65 +2319,51 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 }
             };
 
+            const findWalletRechargeTransfer = (item = {}) => {
+                const wantedId = String(item.sourceTransferId || item.referenceId || item.transferId || item.id || item.rechargeId || '');
+                return pendingTransfers.find((transfer) => {
+                    const transferId = String(transfer.id || transfer.transferId || '');
+                    return transfer.type === 'wallet_recharge' && transferId && transferId === wantedId;
+                }) || null;
+            };
 
-            const approveWalletRechargeFromPanel = async (recharge) => {
+            const approveWalletRechargeFromPanel = async (item = {}) => {
                 if (sessionUser?.role !== 'admin') return;
-                const rechargeId = recharge?.id || recharge?.rechargeId;
-                if (!rechargeId || String(recharge.status || '').toLowerCase() !== 'pendiente') return;
-                const transferId = recharge.transferId || recharge.referenceId || '';
-                setWalletRechargeProcessing(rechargeId);
+                const transfer = findWalletRechargeTransfer(item);
+                if (!transfer) {
+                    alert('No se encontró la transferencia pendiente de esta recarga. Revisa la sección Transferencias Pendientes.');
+                    return;
+                }
+                const itemId = item.id || item.rechargeId || item.referenceId || transfer.id || transfer.transferId;
+                setWalletRechargeActionId(itemId);
                 try {
-                    const paidAt = Date.now();
-                    const targetUser = {
-                        uid: recharge.walletId || recharge.userId,
-                        id: recharge.walletId || recharge.userId,
-                        name: recharge.userName || recharge.holderName || 'Usuario',
-                        email: recharge.userEmail || '',
-                        phone: recharge.userPhone || ''
-                    };
-                    await Wallet.recordRecharge({
-                        fbase,
-                        appId,
-                        user: targetUser,
-                        wallet: Wallet.getWalletById(wallets, recharge.walletId || recharge.userId),
-                        amount: recharge.amount,
-                        referenceId: transferId || rechargeId,
-                        actor: sessionUser?.email || ADMIN_EMAIL,
-                        settings: walletSettings,
-                        rechargeDocId: rechargeId
-                    });
-                    if (transferId) {
-                        await saveDoc('bank_transfers', transferId, { ...recharge, id: transferId, transferId, rechargeId, type: 'wallet_recharge', status: 'Pagado', paidAt, updatedAt: paidAt, paidBy: sessionUser?.email || '' });
-                    }
-                    alert('Recarga aprobada. El saldo fue abonado al usuario.');
-                } catch(err) {
-                    console.error('Aprobar recarga desde cartera:', err);
-                    alert(err.message || 'No se pudo aprobar la recarga.');
+                    await markTransferPaid(transfer);
                 } finally {
-                    setWalletRechargeProcessing(false);
+                    setWalletRechargeActionId('');
                 }
             };
 
-            const deleteWalletRechargeFromPanel = async (recharge) => {
+            const deleteWalletRechargeFromPanel = async (item = {}) => {
                 if (sessionUser?.role !== 'admin') return;
-                const rechargeId = recharge?.id || recharge?.rechargeId;
-                if (!rechargeId) return;
-                const message = String(recharge.status || '').toLowerCase() === 'pendiente'
-                    ? '¿Eliminar esta recarga pendiente? No se abonará saldo al usuario.'
-                    : '¿Eliminar este registro de recarga de la cartera?';
-                if (!confirm(message)) return;
-                const transferId = recharge.transferId || recharge.referenceId || '';
-                setWalletRecharges(prev => prev.filter(item => (item.id || item.rechargeId) !== rechargeId));
+                const transfer = findWalletRechargeTransfer(item);
+                const itemId = item.id || item.rechargeId || item.referenceId;
+                setWalletRechargeActionId(itemId || '');
                 try {
-                    const db = fbase.getFirestore();
-                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', Wallet.WALLET_RECHARGES_COLLECTION, rechargeId));
-                    if (transferId && String(recharge.status || '').toLowerCase() === 'pendiente') {
-                        await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'bank_transfers', transferId));
-                        setPendingTransfers(prev => { const next = prev.filter(item => (item.id || item.transferId) !== transferId); writeLocal('driveMxPendingTransfers', next); return next; });
+                    if (transfer) {
+                        await deleteTransfer(transfer);
+                        return;
                     }
+                    const rechargeId = item.rechargeId || item.id;
+                    if (!rechargeId) return;
+                    if (!confirm('¿Eliminar este registro de recarga del historial? Esta acción no modifica el saldo ya abonado.')) return;
+                    setWalletRecharges(prev => prev.filter(recharge => (recharge.id || recharge.rechargeId) !== rechargeId));
+                    const db = fbase.getFirestore();
+                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'wallet_recharges', rechargeId));
                 } catch(err) {
-                    console.error('Borrar recarga desde cartera:', err);
-                    alert('No se pudo eliminar la recarga en Firestore.');
+                    console.error('Eliminar recarga de cartera:', err);
+                    alert('No se pudo eliminar la recarga.');
+                } finally {
+                    setWalletRechargeActionId('');
                 }
             };
 
@@ -3264,10 +3267,10 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         <WalletUI.AdminWalletsPanel
                                             users={users}
                                             wallets={wallets}
-                                            recharges={walletRecharges}
+                                            recharges={walletRechargeRows}
                                             onApproveRecharge={approveWalletRechargeFromPanel}
                                             onDeleteRecharge={deleteWalletRechargeFromPanel}
-                                            rechargeProcessingId={walletRechargeProcessing}
+                                            rechargeProcessingId={walletRechargeActionId}
                                         />
 
                                         <div className="card-glass overflow-hidden">
@@ -3777,6 +3780,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
