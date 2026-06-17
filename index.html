@@ -1870,21 +1870,54 @@
                 return summary;
             };
 
-            const buildPayPalOrderDetails = () => {
-                const total = Number(checkoutTotal || 0).toFixed(2);
-                const description = sanitizePayPalText(checkoutProducts.length > 1 ? `${checkoutProducts.length} productos Drive MX` : (checkoutProduct?.name || 'Compra Drive MX'), 127);
+            const getCheckoutPaymentSnapshot = () => {
+                const payload = buildOrderPayload();
+                const snapshotProducts = (Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []))
+                    .filter(Boolean)
+                    .slice(0, CART_MAX_ITEMS)
+                    .map(product => ({
+                        id: String(product.id || '').trim(),
+                        name: String(product.name || '').trim(),
+                        price: roundCurrency(product.price || 0),
+                        sizes: normalizeProductSizes(product),
+                        tallas: normalizeProductSizes(product),
+                        colors: normalizeProductColors(product),
+                        colores: normalizeProductColors(product),
+                        ownerId: product.ownerId || '',
+                        ownerName: product.ownerName || '',
+                        ownerEmail: product.ownerEmail || '',
+                        ownerPhone: product.ownerPhone || '',
+                        saleNotificationEmail: product.saleNotificationEmail || '',
+                        sellerNotificationEmail: product.sellerNotificationEmail || ''
+                    }))
+                    .filter(product => product.id && product.name && product.price > 0);
+                const snapshotTotal = roundCurrency(snapshotProducts.reduce((total, product) => total + Number(product.price || 0), 0));
+                if (!snapshotProducts.length || snapshotTotal <= 0) throw new Error('El carrito no tiene productos con precio válido para PayPal.');
                 return {
-                    intent: 'CAPTURE',
-                    purchase_units: [{
-                        reference_id: sanitizePayPalText(`drive_mx_${Date.now()}`, 127),
-                        description,
-                        custom_id: sanitizePayPalText(checkoutProducts.map(product => product.id).filter(Boolean).join('_'), 127),
-                        amount: {
-                            currency_code: 'MXN',
-                            value: total
-                        }
-                    }]
+                    payload: {
+                        ...payload,
+                        product: snapshotProducts[0] || {},
+                        products: snapshotProducts,
+                        cart: { ...(payload.cart || {}), itemCount: snapshotProducts.length, total: snapshotTotal, maxItems: CART_MAX_ITEMS }
+                    },
+                    products: snapshotProducts,
+                    total: snapshotTotal
                 };
+            };
+
+            const callPayPalOrderApi = async (body = {}) => {
+                const res = await fetch('/api/paypal-order', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ...body,
+                        paypalClientId: paymentSettings.paypalClientId,
+                        paypalClientSecret: paymentSettings.paypalClientSecret
+                    })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) throw new Error(data.error || 'PayPal no pudo procesar la orden.');
+                return data;
             };
 
             useEffect(() => {
@@ -1897,11 +1930,18 @@
                     container.innerHTML = '';
                     const buttons = window.paypal.Buttons({
                         style: { layout: 'vertical', shape: 'rect', label: 'paypal' },
-                        createOrder: async (data, actions) => {
-                            if (!ensureCheckoutWalletsAllowed(checkoutProducts)) {
-                                throw new Error(Wallet.INSUFFICIENT_MESSAGE);
-                            }
-                            return actions.order.create(buildPayPalOrderDetails());
+                        createOrder: async () => {
+                            if (orderSending) throw new Error('Ya se está procesando un pago PayPal.');
+                            if (!ensureCheckoutWalletsAllowed(checkoutProducts)) throw new Error(Wallet.INSUFFICIENT_MESSAGE);
+                            const snapshot = getCheckoutPaymentSnapshot();
+                            if (!moneyClose(snapshot.total, checkoutTotal)) throw new Error('El total cambió. Vuelve a revisar tu carrito antes de pagar.');
+                            const created = await callPayPalOrderApi({
+                                action: 'create',
+                                products: snapshot.products,
+                                total: snapshot.total,
+                                cart: snapshot.payload.cart
+                            });
+                            return created.orderId;
                         },
                         onApprove: async (data, actions) => {
                             const paypalOrderKey = String(data?.orderID || '').trim();
@@ -1910,10 +1950,23 @@
                             setOrderSending(true);
                             try {
                                 if (!ensureCheckoutWalletsAllowed(checkoutProducts)) throw new Error(Wallet.INSUFFICIENT_MESSAGE);
-                                if (!actions?.order?.capture) throw new Error('PayPal no entregó la acción de captura.');
-                                const capture = await actions.order.capture();
-                                const paypalSummary = assertPayPalCaptureCompleted(capture, checkoutTotal);
-                                const payload = appendSaleNotificationToPayload(buildOrderPayload());
+                                const snapshot = getCheckoutPaymentSnapshot();
+                                if (!paypalOrderKey) throw new Error('PayPal no devolvió el ID de la orden.');
+                                const captured = await callPayPalOrderApi({
+                                    action: 'capture',
+                                    orderId: paypalOrderKey,
+                                    products: snapshot.products,
+                                    total: snapshot.total,
+                                    cart: snapshot.payload.cart
+                                });
+                                const paypalSummary = captured.paypalSummary || {};
+                                assertPayPalCaptureCompleted({
+                                    id: paypalSummary.orderId,
+                                    status: paypalSummary.orderStatus || paypalSummary.status,
+                                    payer: { email_address: paypalSummary.payerEmail || '' },
+                                    purchase_units: [{ payments: { captures: [{ id: paypalSummary.captureId, status: paypalSummary.status, amount: { currency_code: paypalSummary.currency, value: paypalSummary.value } }] } }]
+                                }, snapshot.total);
+                                const payload = appendSaleNotificationToPayload(snapshot.payload);
                                 const saleId = `paypal_${paypalOrderKey || paypalSummary.orderId || paypalSummary.captureId || Date.now()}`;
                                 const sales = await registerCompletedSale({
                                     payload,
@@ -2000,7 +2053,7 @@
                 script.onerror = () => alert('No se pudo cargar PayPal. Revisa el Client ID configurado.');
                 document.body.appendChild(script);
                 return () => { cancelled = true; script.onload = null; script.onerror = null; };
-            }, [view, selectedPaymentMethod, paypalClientId, paypalCheckoutReady, checkoutProductKey, checkoutTotal, wallets, walletCommissionPercent]);
+            }, [view, selectedPaymentMethod, paypalClientId, paymentSettings.paypalClientSecret, paypalCheckoutReady, checkoutProductKey, checkoutTotal, wallets, walletCommissionPercent, orderSending]);
 
             const getSecondaryAuth = () => {
                 if (!window.secondaryAuthApp) {
