@@ -649,7 +649,7 @@
             h('input', {
               required: true,
               type: 'number',
-              min: '1',
+              min: String(MIN_FIRST_RECHARGE),
               step: '0.01',
               className: 'input-field',
               placeholder: 'Ej. 500',
@@ -755,6 +755,7 @@
   global.DriveMxWallet = Wallet;
   global.DriveMxWalletUI = createWalletUI(global.React);
 })(window);
+
 
 
 
