@@ -1,7 +1,14 @@
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
+const https = require("https");
 
-const DEFAULT_APP_ID = process.env.DRIVE_MX_APP_ID || "drivemx-paqueteria";
+const DEFAULT_PROJECT_ID = String(
+  process.env.FIREBASE_PROJECT_ID ||
+    process.env.GCLOUD_PROJECT ||
+    process.env.GOOGLE_CLOUD_PROJECT ||
+    "drivemx-paqueteria"
+).trim();
+const DEFAULT_APP_ID = String(process.env.DRIVE_MX_APP_ID || DEFAULT_PROJECT_ID || "drivemx-paqueteria").trim();
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@drivemx.com";
 const PUBLIC_PRODUCTS_COLLECTION = "products";
 const ADMIN_PRODUCTS_COLLECTION = "admin_products";
@@ -86,25 +93,66 @@ function basicAuth(clientId, clientSecret) {
   return Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 }
 
+function httpFetch(url, options = {}) {
+  if (typeof fetch === "function") return fetch(url, options);
+
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const req = https.request(
+      target,
+      {
+        method: options.method || "GET",
+        headers: options.headers || {},
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          resolve({
+            ok: response.statusCode >= 200 && response.statusCode < 300,
+            status: response.statusCode,
+            json: async () => (text ? JSON.parse(text) : {}),
+            text: async () => text,
+          });
+        });
+      }
+    );
+    req.on("error", reject);
+    if (options.body) req.write(options.body);
+    req.end();
+  });
+}
+
 function decodeServiceAccount(value = "") {
   const raw = clean(value);
   if (!raw) return null;
+  let parsed;
   try {
-    return JSON.parse(raw);
+    parsed = JSON.parse(raw);
   } catch (_) {
     try {
-      return JSON.parse(Buffer.from(raw, "base64").toString("utf8"));
+      parsed = JSON.parse(Buffer.from(raw, "base64").toString("utf8"));
     } catch (error) {
       throw new Error("FIREBASE_SERVICE_ACCOUNT_KEY no es un JSON/base64 válido.");
     }
   }
+  if (parsed.private_key) parsed.private_key = String(parsed.private_key).replace(/\\n/g, "\n");
+  if (!parsed.project_id && parsed.projectId) parsed.project_id = parsed.projectId;
+  if (!parsed.project_id) parsed.project_id = DEFAULT_PROJECT_ID;
+  return parsed;
 }
 
 function getFirebaseCredentialConfig() {
-  const serviceAccount = decodeServiceAccount(process.env.FIREBASE_SERVICE_ACCOUNT_KEY || "");
+  const serviceAccount = decodeServiceAccount(
+    process.env.FIREBASE_SERVICE_ACCOUNT_KEY ||
+      process.env.FIREBASE_SERVICE_ACCOUNT_JSON ||
+      process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON ||
+      ""
+  );
   if (serviceAccount) return serviceAccount;
 
-  const projectId = clean(process.env.FIREBASE_PROJECT_ID);
+  const projectId = clean(process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || DEFAULT_PROJECT_ID);
   const clientEmail = clean(process.env.FIREBASE_CLIENT_EMAIL);
   const privateKey = clean(process.env.FIREBASE_PRIVATE_KEY).replace(/\\n/g, "\n");
 
@@ -117,11 +165,25 @@ function getFirebaseCredentialConfig() {
 
 function ensureAdmin() {
   if (admin.apps.length) return admin.app();
+
   const credentialConfig = getFirebaseCredentialConfig();
+  const projectId = clean(
+    credentialConfig?.project_id ||
+      process.env.FIREBASE_PROJECT_ID ||
+      process.env.GCLOUD_PROJECT ||
+      process.env.GOOGLE_CLOUD_PROJECT ||
+      DEFAULT_PROJECT_ID
+  );
+
   if (credentialConfig) {
-    return admin.initializeApp({ credential: admin.credential.cert(credentialConfig) });
+    const serviceAccount = { ...credentialConfig, project_id: credentialConfig.project_id || projectId };
+    return admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      projectId,
+    });
   }
-  return admin.initializeApp();
+
+  return admin.initializeApp({ projectId });
 }
 
 function getRoot(db) {
@@ -129,18 +191,23 @@ function getRoot(db) {
 }
 
 async function readConfig(root, collectionName) {
-  const snap = await root.collection(collectionName).doc(SETTINGS_DOC_ID).get();
-  return snap.exists ? snap.data() || {} : {};
+  try {
+    const snap = await root.collection(collectionName).doc(SETTINGS_DOC_ID).get();
+    return snap.exists ? snap.data() || {} : {};
+  } catch (error) {
+    console.error(`No se pudo leer ${collectionName}:`, error);
+    return {};
+  }
 }
 
 async function readPaymentSettings(root) {
   const firestoreSettings = await readConfig(root, "payment_settings");
-  const clientId = clean(process.env.PAYPAL_CLIENT_ID || firestoreSettings.paypalClientId);
-  const clientSecret = clean(process.env.PAYPAL_CLIENT_SECRET || firestoreSettings.paypalClientSecret);
-  const mode = lower(process.env.PAYPAL_ENV || process.env.PAYPAL_MODE || firestoreSettings.paypalEnvironment || firestoreSettings.paypalMode || "live");
+  const clientId = clean(process.env.PAYPAL_CLIENT_ID || process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID || firestoreSettings.paypalClientId);
+  const clientSecret = clean(process.env.PAYPAL_CLIENT_SECRET || process.env.PAYPAL_SECRET || firestoreSettings.paypalClientSecret);
+  const mode = lower(process.env.PAYPAL_ENV || process.env.PAYPAL_MODE || process.env.PAYPAL_ENVIRONMENT || firestoreSettings.paypalEnvironment || firestoreSettings.paypalMode || "live");
 
   return {
-    bankAccount: clean(firestoreSettings.bankAccount),
+    bankAccount: clean(process.env.BANK_ACCOUNT || process.env.DRIVE_MX_BANK_ACCOUNT || firestoreSettings.bankAccount),
     clientId,
     clientSecret,
     mode: mode === "sandbox" ? "sandbox" : "live",
@@ -151,9 +218,9 @@ async function readPaymentSettings(root) {
 async function readMailSettings(root) {
   const firestoreSettings = await readConfig(root, "mail_settings");
   return {
-    senderEmail: clean(process.env.GMAIL_SENDER_EMAIL || firestoreSettings.senderEmail),
-    appPassword: clean(process.env.GMAIL_APP_PASSWORD || firestoreSettings.appPassword),
-    receiverEmail: clean(process.env.ORDER_RECEIVER_EMAIL || firestoreSettings.receiverEmail),
+    senderEmail: clean(process.env.MAIL_SENDER_EMAIL || process.env.GMAIL_SENDER_EMAIL || process.env.GMAIL_USER || process.env.SMTP_USER || firestoreSettings.senderEmail),
+    appPassword: clean(process.env.MAIL_APP_PASSWORD || process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASS || process.env.SMTP_PASS || firestoreSettings.appPassword).replace(/\s+/g, ""),
+    receiverEmail: clean(process.env.MAIL_RECEIVER_EMAIL || process.env.ORDER_RECEIVER_EMAIL || process.env.RECEIVER_EMAIL || firestoreSettings.receiverEmail),
   };
 }
 
@@ -295,7 +362,12 @@ async function normalizeOrderPayload(root, payload = {}) {
   for (const requested of requestedProducts) {
     const productId = clean(requested.id);
     const snap = await root.collection(PUBLIC_PRODUCTS_COLLECTION).doc(productId).get();
-    const source = snap.exists ? { id: snap.id, ...snap.data() } : { ...requested, id: productId };
+    if (!snap.exists) {
+      const error = new Error("No se encontró uno de los productos seleccionados.");
+      error.statusCode = 404;
+      throw error;
+    }
+    const source = { id: snap.id, ...snap.data() };
 
     if (!source.id || !clean(source.name)) {
       const error = new Error("No se encontró uno de los productos seleccionados.");
@@ -437,7 +509,7 @@ async function validateWalletsBeforePayment(root, products = []) {
 }
 
 async function getPayPalAccessToken(paypalSettings) {
-  const response = await fetch(`${paypalSettings.baseUrl}/v1/oauth2/token`, {
+  const response = await httpFetch(`${paypalSettings.baseUrl}/v1/oauth2/token`, {
     method: "POST",
     headers: {
       Authorization: `Basic ${basicAuth(paypalSettings.clientId, paypalSettings.clientSecret)}`,
@@ -458,7 +530,7 @@ async function getPayPalAccessToken(paypalSettings) {
 
 async function paypalRequest(paypalSettings, path, { method = "GET", body, headers = {} } = {}) {
   const accessToken = await getPayPalAccessToken(paypalSettings);
-  const response = await fetch(`${paypalSettings.baseUrl}${path}`, {
+  const response = await httpFetch(`${paypalSettings.baseUrl}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -1082,6 +1154,14 @@ function sendCors(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
+function getPublicErrorMessage(error) {
+  const message = error?.message || "No se pudo procesar PayPal.";
+  if (/project id|default credentials|application default credentials|google auth|could not load/i.test(message)) {
+    return "No se pudo conectar Firebase Admin para registrar el pedido. Configura FIREBASE_PROJECT_ID y las credenciales de servicio en el entorno de producción.";
+  }
+  return message;
+}
+
 module.exports = async function handler(req, res) {
   sendCors(req, res);
   if (req.method === "OPTIONS") return res.status(204).end();
@@ -1090,8 +1170,8 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    ensureAdmin();
-    const db = admin.firestore();
+    const app = ensureAdmin();
+    const db = admin.firestore(app);
     const root = getRoot(db);
 
     if (req.method === "GET" || req.body?.action === "config" || req.query?.action === "config") {
@@ -1115,7 +1195,8 @@ module.exports = async function handler(req, res) {
     console.error("PayPal order error:", error);
     return res.status(error.statusCode || 500).json({
       success: false,
-      error: error.message || "No se pudo procesar PayPal.",
+      error: getPublicErrorMessage(error),
     });
   }
 };
+
