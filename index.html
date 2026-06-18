@@ -1513,6 +1513,8 @@
                     });
                 return Array.from(byId.values()).sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
             })();
+            const pendingSalesTransfers = (Array.isArray(pendingTransfers) ? pendingTransfers : [])
+                .filter((transfer) => transfer.type !== 'wallet_recharge');
             const activeProducts = products.filter(p => p.active !== false);
             const findProductById = (productId) => products.find(p => String(p.id) === String(productId));
             const selectedProduct = findProductById(selectedProductId);
@@ -2461,8 +2463,14 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                             actor: sessionUser?.email || ADMIN_EMAIL,
                             settings: walletSettings
                         });
-                        await saveDoc('bank_transfers', transferId, { ...transfer, status: 'Pagado', paidAt, updatedAt: paidAt, paidBy: sessionUser?.email || '' });
-                        alert('Transferencia de recarga aprobada. El saldo fue abonado al usuario.');
+                        setPendingTransfers(prev => {
+                            const next = prev.filter(item => (item.id || item.transferId) !== transferId);
+                            writeLocal('driveMxPendingTransfers', next);
+                            return next;
+                        });
+                        const db = fbase.getFirestore();
+                        await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'bank_transfers', transferId));
+                        alert('Transferencia de recarga aprobada. El saldo fue abonado y quedó registrada únicamente en la cartera del usuario.');
                         return;
                     }
                     const payload = appendSaleNotificationToPayload({
@@ -2515,7 +2523,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 if (sessionUser?.role !== 'admin') return;
                 const transfer = findWalletRechargeTransfer(item);
                 if (!transfer) {
-                    alert('No se encontró la transferencia pendiente de esta recarga. Revisa la sección Transferencias Pendientes.');
+                    alert('No se encontró la transferencia pendiente de esta recarga en la información de cartera del usuario.');
                     return;
                 }
                 const itemId = item.id || item.rechargeId || item.referenceId || transfer.id || transfer.transferId;
@@ -3501,7 +3509,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         <div className="card-glass overflow-hidden">
                                             <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
                                                 <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Transferencias Pendientes</h2>
-                                                <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Las solicitudes pendientes no envían correo ni se procesan hasta marcar Pagado</p>
+                                                <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Solo ventas: las solicitudes pendientes no envían correo ni se procesan hasta marcar Pagado</p>
                                             </div>
                                             <div className="overflow-x-auto">
                                                 <table className="w-full text-left">
@@ -3516,7 +3524,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-slate-50">
-                                                        {pendingTransfers.map(t => (
+                                                        {pendingSalesTransfers.map(t => (
                                                             <tr key={t.id || t.transferId} className="text-[10px] font-bold text-slate-600 align-top">
                                                                 <td className="px-6 py-4 font-black text-slate-800">{t.holderName}</td>
                                                                 <td className="px-6 py-4">{t.createdAt ? new Date(t.createdAt).toLocaleString('es-MX') : '-'}</td>
@@ -3566,8 +3574,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                                 </td>
                                                             </tr>
                                                         ))}
-                                                        {pendingTransfers.length === 0 && (
-                                                            <tr><td colSpan="6" className="px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase">No hay transferencias pendientes registradas</td></tr>
+                                                        {pendingSalesTransfers.length === 0 && (
+                                                            <tr><td colSpan="6" className="px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase">No hay transferencias pendientes de ventas registradas</td></tr>
                                                         )}
                                                     </tbody>
                                                 </table>
