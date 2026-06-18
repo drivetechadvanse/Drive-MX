@@ -30,7 +30,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
         import "./search/search.js";
         import "./password-reset/password-reset.js";
@@ -46,7 +46,7 @@
         };
 
         window.firebaseConfig = firebaseConfig;
-        window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, getStorage, ref, uploadBytes, getDownloadURL };
+        window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getDocs, getStorage, ref, uploadBytes, getDownloadURL };
     </script>
     <script src="./wallet/wallet.js"></script>
 
@@ -1753,11 +1753,12 @@
 
             const getStaffProfile = async (user) => {
                 const db = fbase.getFirestore();
+                const normalizedEmail = String(user.email || '').trim().toLowerCase();
                 const profileRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, user.uid);
                 const profileSnap = await fbase.getDoc(profileRef);
                 if (profileSnap.exists()) return { id: user.uid, uid: user.uid, email: user.email, ...profileSnap.data() };
 
-                if ((user.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+                if (normalizedEmail === ADMIN_EMAIL.toLowerCase()) {
                     const adminProfile = {
                         uid: user.uid,
                         email: user.email,
@@ -1770,6 +1771,36 @@
                     };
                     await saveDoc(STAFF_USERS_COLLECTION, user.uid, adminProfile);
                     return { id: user.uid, ...adminProfile };
+                }
+
+                const localProfile = users.find(profile => getUserProfileEmail(profile) === normalizedEmail || getUserProfileId(profile) === user.uid);
+                if (localProfile) {
+                    return {
+                        ...localProfile,
+                        id: localProfile.id || user.uid,
+                        uid: user.uid,
+                        email: user.email || localProfile.email
+                    };
+                }
+
+                try {
+                    const userCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION);
+                    const emailQuery = fbase.query(userCol, fbase.where('email', '==', normalizedEmail));
+                    const emailSnap = await fbase.getDocs(emailQuery);
+                    let matchedProfile = null;
+                    emailSnap.forEach((docSnap) => {
+                        if (!matchedProfile) matchedProfile = { id: docSnap.id, ...docSnap.data() };
+                    });
+
+                    if (matchedProfile) {
+                        return {
+                            ...matchedProfile,
+                            uid: user.uid,
+                            email: user.email || matchedProfile.email
+                        };
+                    }
+                } catch(err) {
+                    console.error('Buscar perfil por correo:', err);
                 }
 
                 return null;
@@ -4001,6 +4032,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
