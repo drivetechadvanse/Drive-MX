@@ -7,10 +7,16 @@
   const WALLET_COMMISSIONS_COLLECTION = 'wallet_commissions';
   const MOVEMENTS_COLLECTION = 'movements';
   const SETTINGS_DOC_ID = 'config';
-  const MIN_FIRST_RECHARGE = 500;
-  const getMinimumRecharge = (settings = {}) => { const value = Number(settings.minimumFirstRecharge || settings.minimumRecharge || MIN_FIRST_RECHARGE); return Number.isFinite(value) && value > 0 ? Math.round((value + Number.EPSILON) * 100) / 100 : MIN_FIRST_RECHARGE; };
+  const MIN_FIRST_RECHARGE = 100;
+  const MIN_RECHARGE_AFTER_THREE_PRODUCTS = 500;
+  const PRODUCT_RECHARGE_THRESHOLD = 3;
+  const getMinimumRecharge = (settings = {}, productCount = 0) => {
+    const value = Number(settings.minimumFirstRecharge || settings.minimumRecharge || MIN_FIRST_RECHARGE);
+    const baseMinimum = Number.isFinite(value) && value > 0 ? Math.round((value + Number.EPSILON) * 100) / 100 : MIN_FIRST_RECHARGE;
+    return Number(productCount || 0) >= PRODUCT_RECHARGE_THRESHOLD ? Math.max(baseMinimum, MIN_RECHARGE_AFTER_THREE_PRODUCTS) : baseMinimum;
+  };
   const CURRENCY = 'MXN';
-  const PLATFORM_LEGEND = 'Las comisiones por uso de la plataforma y servicios serán descontadas automáticamente de tu saldo disponible. Recarga mínima: $500 MXN.';
+  const PLATFORM_LEGEND = 'Las comisiones por uso de la plataforma y servicios serán descontadas automáticamente de tu saldo disponible. Recarga mínima inicial: $100 MXN. Después de publicar 3 productos, la recarga obligatoria será de $500 MXN.';
   const INSUFFICIENT_MESSAGE = 'Tu saldo es insuficiente para continuar utilizando la plataforma. Realiza una nueva recarga para seguir publicando y vendiendo.';
 
   const clean = (value) => String(value ?? '').trim();
@@ -162,9 +168,9 @@
     return Boolean(sellerId || type === 'usuario' || type === 'user' || type === 'panel_usuario' || type === 'panel-usuario');
   }
 
-  function validateRechargeAmount(wallet = {}, amountValue = 0, settings = {}) {
+  function validateRechargeAmount(wallet = {}, amountValue = 0, settings = {}, productCount = 0) {
     const amount = parseAmount(amountValue);
-    const minimum = getMinimumRecharge(settings);
+    const minimum = getMinimumRecharge(settings, productCount);
     if (!Number.isFinite(amount) || amount <= 0) {
       return { ok: false, amount, message: 'Ingresa un monto válido para recargar.' };
     }
@@ -174,12 +180,15 @@
     return { ok: true, amount, message: '' };
   }
 
-  function validatePublication({ wallet, productPrice = 0, commissionPercent = 0, willBeActive = true } = {}) {
+  function validatePublication({ wallet, productPrice = 0, commissionPercent = 0, willBeActive = true, userProductCount = 0 } = {}) {
     if (!willBeActive) return { ok: true, commission: 0, message: '' };
     const normalizedWallet = normalizeWallet(wallet || {});
     const commission = calculateCommission(productPrice, commissionPercent);
     if (!isWalletActivated(normalizedWallet)) {
       return { ok: false, commission, message: INSUFFICIENT_MESSAGE };
+    }
+    if (Number(userProductCount || 0) >= PRODUCT_RECHARGE_THRESHOLD && roundMoney(normalizedWallet.totalRecharged || 0) < MIN_RECHARGE_AFTER_THREE_PRODUCTS) {
+      return { ok: false, commission, message: `Después de publicar 3 productos, debes realizar una recarga obligatoria de al menos ${formatMoney(MIN_RECHARGE_AFTER_THREE_PRODUCTS)} para seguir publicando.` };
     }
     if (commission > 0 && roundMoney(normalizedWallet.balance) < commission) {
       return { ok: false, commission, message: INSUFFICIENT_MESSAGE };
@@ -466,6 +475,8 @@
     MOVEMENTS_COLLECTION,
     SETTINGS_DOC_ID,
     MIN_FIRST_RECHARGE,
+    MIN_RECHARGE_AFTER_THREE_PRODUCTS,
+    PRODUCT_RECHARGE_THRESHOLD,
     getMinimumRecharge,
     CURRENCY,
     PLATFORM_LEGEND,
@@ -513,8 +524,9 @@
       const wallet = normalizeWallet(props.wallet || {}, props.user || {});
       const activated = isWalletActivated(wallet);
       const settings = normalizeSettings(props.settings || {});
-      const minimumRecharge = getMinimumRecharge(settings);
-      const rechargeValidation = validateRechargeAmount(wallet, props.rechargeAmount || 0, settings);
+      const userProductCount = Number(props.userProductCount || 0);
+      const minimumRecharge = getMinimumRecharge(settings, userProductCount);
+      const rechargeValidation = validateRechargeAmount(wallet, props.rechargeAmount || 0, settings, userProductCount);
 
       return h('div', { id: 'user-wallet-section', className: 'card-glass overflow-hidden' },
         h('div', { className: 'bg-gradient-to-br from-red-500 to-red-600 px-6 py-6 text-white' },
@@ -551,13 +563,13 @@
           props.showRecharge ? h('div', { className: 'rounded-2xl border border-slate-100 bg-slate-50 p-4 space-y-4 animate-slide' },
             h('div', { className: 'grid sm:grid-cols-[1fr_auto] gap-3 items-end' },
               h('div', null,
-                h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, activated ? 'Monto de recarga' : `Primera recarga mínima ${formatMoney(minimumRecharge)}`),
+                h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, activated ? (userProductCount >= PRODUCT_RECHARGE_THRESHOLD ? `Recarga obligatoria mínima ${formatMoney(minimumRecharge)}` : 'Monto de recarga') : `Primera recarga mínima ${formatMoney(minimumRecharge)}`),
                 h('input', {
                   type: 'number',
-                  min: activated ? '1' : String(minimumRecharge),
+                  min: String(minimumRecharge),
                   step: '0.01',
                   className: 'input-field',
-                  placeholder: activated ? 'Ej. 100' : `Mínimo ${minimumRecharge}`,
+                  placeholder: `Mínimo ${minimumRecharge}`,
                   value: props.rechargeAmount || '',
                   onChange: (event) => props.onRechargeAmountChange && props.onRechargeAmountChange(event.target.value)
                 })
@@ -652,7 +664,7 @@
               min: String(MIN_FIRST_RECHARGE),
               step: '0.01',
               className: 'input-field',
-              placeholder: 'Ej. 500',
+              placeholder: 'Ej. 100',
               value: props.minimumValue ?? settings.minimumFirstRecharge,
               onChange: (event) => props.onMinimumChange && props.onMinimumChange(event.target.value)
             })
@@ -755,6 +767,7 @@
   global.DriveMxWallet = Wallet;
   global.DriveMxWalletUI = createWalletUI(global.React);
 })(window);
+
 
 
 
