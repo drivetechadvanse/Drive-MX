@@ -1546,14 +1546,16 @@
             };
 
             const ensureUserPublicationWalletAllowed = ({ productPrice = 0, willBeActive = true } = {}) => {
+                const activeUserProductCount = getSessionOwnedProductsList().filter(product => product.active !== false).length;
                 const validation = Wallet.validatePublication({
                     wallet: currentUserWallet,
                     productPrice,
                     commissionPercent: walletCommissionPercent,
-                    willBeActive
+                    willBeActive,
+                    userProductCount: activeUserProductCount
                 });
                 if (!validation.ok) {
-                    alert(Wallet.INSUFFICIENT_MESSAGE);
+                    alert(validation.message || Wallet.INSUFFICIENT_MESSAGE);
                     return false;
                 }
                 return true;
@@ -2363,7 +2365,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     return;
                 }
                 const currentWallet = Wallet.findWalletForUser(wallets, sessionUser || {});
-                const validation = Wallet.validateRechargeAmount(currentWallet, walletRechargeAmount, walletSettings);
+                const activeUserProductCount = getSessionOwnedProductsList().filter(product => product.active !== false).length;
+                const validation = Wallet.validateRechargeAmount(currentWallet, walletRechargeAmount, walletSettings, activeUserProductCount);
                 if (!validation.ok) {
                     alert(validation.message);
                     return;
@@ -3950,6 +3953,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     bankAccount={paymentSettings.bankAccount}
                                     onCreatePendingRecharge={createPendingWalletRechargeTransfer}
                                     blockedMessage={currentUserWalletBlockedMessage}
+                                    userProductCount={currentUserProducts.filter(product => product.active !== false).length}
                                 />
 
                                 <WalletUI.WalletMovementsPanel movements={walletMovements} />
@@ -4040,6 +4044,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
