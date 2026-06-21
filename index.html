@@ -2548,42 +2548,30 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         appPassword: emailSettings.appPassword.trim(),
                         receiverEmail: emailSettings.receiverEmail.trim()
                     };
-                    const mailSettingsCandidates = [savedMailSettings, currentMailSettings]
-                        .map(settings => ({
-                            senderEmail: String(settings.senderEmail || '').trim(),
-                            appPassword: String(settings.appPassword || '').trim(),
-                            receiverEmail: String(settings.receiverEmail || '').trim()
-                        }))
-                        .filter(settings => settings.senderEmail && settings.appPassword && settings.receiverEmail)
-                        .filter((settings, index, list) => list.findIndex(item =>
-                            item.senderEmail === settings.senderEmail &&
-                            item.appPassword === settings.appPassword &&
-                            item.receiverEmail === settings.receiverEmail
-                        ) === index);
-                    const payloadBase = appendSaleNotificationToPayload({
+                    const payload = appendSaleNotificationToPayload({
                         ...transfer.order,
-                        mailSettings: mailSettingsCandidates[0] || currentMailSettings
-                    });
-                    const transferProducts = Array.isArray(payloadBase.products) && payloadBase.products.length > 0 ? payloadBase.products : (payloadBase.product ? [payloadBase.product] : []);
-                    if (!ensureCheckoutWalletsAllowed(transferProducts)) return;
-                    let payload = payloadBase;
-                    let lastEmailError = null;
-                    let emailSent = false;
-                    for (const candidate of mailSettingsCandidates) {
-                        try {
-                            payload = { ...payloadBase, mailSettings: candidate };
-                            await sendOrderEmail(payload);
-                            emailSent = true;
-                            break;
-                        } catch(emailErr) {
-                            lastEmailError = emailErr;
-                            console.error('Correo de transferencia pagada:', emailErr);
+                        mailSettings: {
+                            senderEmail: savedMailSettings.senderEmail || currentMailSettings.senderEmail,
+                            appPassword: savedMailSettings.appPassword || currentMailSettings.appPassword,
+                            receiverEmail: savedMailSettings.receiverEmail || currentMailSettings.receiverEmail
                         }
+                    });
+                    const transferProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
+                    if (!ensureCheckoutWalletsAllowed(transferProducts)) return;
+                    let emailSent = false;
+                    let emailErrorMessage = '';
+                    try {
+                        await sendOrderEmail(payload);
+                        emailSent = true;
+                    } catch(emailErr) {
+                        emailErrorMessage = emailErr?.message || 'No se pudo enviar el correo.';
+                        console.error('Correo de transferencia pagada:', emailErr);
                     }
-                    if (!emailSent) throw lastEmailError || new Error('No se pudo enviar el correo.');
                     await saveDoc('bank_transfers', transferId, { ...transfer, status: 'Pagado', paidAt, updatedAt: paidAt, paidBy: sessionUser?.email || '' });
                     await registerCompletedSale({ payload, paymentMethod: 'Transferencia bancaria', saleId: `transfer_${transferId}`, transferId, soldAt: paidAt });
-                    alert('Transferencia marcada como Pagado y correo enviado correctamente.');
+                    alert(emailSent
+                        ? 'Transferencia marcada como Pagado y correo enviado correctamente.'
+                        : 'Transferencia marcada como Pagado.');
                 } catch(err) {
                     console.error('Marcar transferencia pagada:', err);
                     alert('No se pudo confirmar la transferencia.');
@@ -4138,6 +4126,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
