@@ -2542,36 +2542,20 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         alert('Transferencia de recarga aprobada. El saldo fue abonado y quedó registrada únicamente en la cartera del usuario.');
                         return;
                     }
-                    const savedMailSettings = transfer.order?.mailSettings || {};
-                    const currentMailSettings = {
-                        senderEmail: emailSettings.senderEmail.trim(),
-                        appPassword: emailSettings.appPassword.trim(),
-                        receiverEmail: emailSettings.receiverEmail.trim()
-                    };
                     const payload = appendSaleNotificationToPayload({
                         ...transfer.order,
                         mailSettings: {
-                            senderEmail: savedMailSettings.senderEmail || currentMailSettings.senderEmail,
-                            appPassword: savedMailSettings.appPassword || currentMailSettings.appPassword,
-                            receiverEmail: savedMailSettings.receiverEmail || currentMailSettings.receiverEmail
+                            senderEmail: emailSettings.senderEmail.trim(),
+                            appPassword: emailSettings.appPassword.trim(),
+                            receiverEmail: emailSettings.receiverEmail.trim()
                         }
                     });
                     const transferProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
                     if (!ensureCheckoutWalletsAllowed(transferProducts)) return;
-                    let emailSent = false;
-                    let emailErrorMessage = '';
-                    try {
-                        await sendOrderEmail(payload);
-                        emailSent = true;
-                    } catch(emailErr) {
-                        emailErrorMessage = emailErr?.message || 'No se pudo enviar el correo.';
-                        console.error('Correo de transferencia pagada:', emailErr);
-                    }
+                    await sendOrderEmail(payload);
                     await saveDoc('bank_transfers', transferId, { ...transfer, status: 'Pagado', paidAt, updatedAt: paidAt, paidBy: sessionUser?.email || '' });
                     await registerCompletedSale({ payload, paymentMethod: 'Transferencia bancaria', saleId: `transfer_${transferId}`, transferId, soldAt: paidAt });
-                    alert(emailSent
-                        ? 'Transferencia marcada como Pagado y correo enviado correctamente.'
-                        : 'Transferencia marcada como Pagado.');
+                    alert('Transferencia marcada como Pagado y correo enviado correctamente.');
                 } catch(err) {
                     console.error('Marcar transferencia pagada:', err);
                     alert('No se pudo confirmar la transferencia.');
@@ -4126,6 +4110,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
+                   
 
 
 
