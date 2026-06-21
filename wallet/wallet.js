@@ -16,7 +16,7 @@
     return Number(productCount || 0) >= PRODUCT_RECHARGE_THRESHOLD ? Math.max(baseMinimum, MIN_RECHARGE_AFTER_THREE_PRODUCTS) : baseMinimum;
   };
   const CURRENCY = 'MXN';
-  const PLATFORM_LEGEND = 'Las comisiones por uso de la plataforma y servicios serán descontadas automáticamente de tu saldo disponible. Recarga mínima inicial: $100 MXN. Después de publicar 3 productos, la recarga obligatoria será de $500 MXN.';
+  const PLATFORM_LEGEND = 'Las comisiones por uso de la plataforma y servicios serán descontadas automáticamente de tu saldo disponible.';
   const INSUFFICIENT_MESSAGE = 'Tu saldo es insuficiente para continuar utilizando la plataforma. Realiza una nueva recarga para seguir publicando y vendiendo.';
 
   const clean = (value) => String(value ?? '').trim();
@@ -563,13 +563,13 @@
           props.showRecharge ? h('div', { className: 'rounded-2xl border border-slate-100 bg-slate-50 p-4 space-y-4 animate-slide' },
             h('div', { className: 'grid sm:grid-cols-[1fr_auto] gap-3 items-end' },
               h('div', null,
-                h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, activated ? (userProductCount >= PRODUCT_RECHARGE_THRESHOLD ? `Recarga obligatoria mínima ${formatMoney(minimumRecharge)}` : 'Monto de recarga') : `Primera recarga mínima ${formatMoney(minimumRecharge)}`),
+                h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, activated ? (userProductCount >= PRODUCT_RECHARGE_THRESHOLD ? 'Recarga obligatoria' : 'Monto de recarga') : `Primera recarga mínima ${formatMoney(minimumRecharge)}`),
                 h('input', {
                   type: 'number',
                   min: String(minimumRecharge),
                   step: '0.01',
                   className: 'input-field',
-                  placeholder: `Mínimo ${minimumRecharge}`,
+                  placeholder: userProductCount >= PRODUCT_RECHARGE_THRESHOLD ? 'Ingresa el monto' : `Mínimo ${minimumRecharge}`, 
                   value: props.rechargeAmount || '',
                   onChange: (event) => props.onRechargeAmountChange && props.onRechargeAmountChange(event.target.value)
                 })
@@ -767,6 +767,7 @@
   global.DriveMxWallet = Wallet;
   global.DriveMxWalletUI = createWalletUI(global.React);
 })(window);
+
 
 
 
