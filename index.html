@@ -2552,10 +2552,20 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     });
                     const transferProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
                     if (!ensureCheckoutWalletsAllowed(transferProducts)) return;
-                    await sendOrderEmail(payload);
+                    let emailSent = false;
+                    let emailErrorMessage = '';
+                    try {
+                        await sendOrderEmail(payload);
+                        emailSent = true;
+                    } catch(emailErr) {
+                        emailErrorMessage = emailErr?.message || 'No se pudo enviar el correo.';
+                        console.error('Correo de transferencia pagada:', emailErr);
+                    }
                     await saveDoc('bank_transfers', transferId, { ...transfer, status: 'Pagado', paidAt, updatedAt: paidAt, paidBy: sessionUser?.email || '' });
                     await registerCompletedSale({ payload, paymentMethod: 'Transferencia bancaria', saleId: `transfer_${transferId}`, transferId, soldAt: paidAt });
-                    alert('Transferencia marcada como Pagado y correo enviado correctamente.');
+                    alert(emailSent
+                        ? 'Transferencia marcada como Pagado y correo enviado correctamente.'
+                        : `Transferencia marcada como Pagado. Aviso: no se pudo enviar el correo (${emailErrorMessage}).`);
                 } catch(err) {
                     console.error('Marcar transferencia pagada:', err);
                     alert('No se pudo confirmar la transferencia.');
@@ -4110,6 +4120,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
+
 
 
 
