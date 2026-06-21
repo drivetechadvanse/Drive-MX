@@ -236,6 +236,7 @@
             const [loginForm, setLoginForm] = useState({ email: '', p: '' });
             const [pkgForm, setPkgForm] = useState({ id: '', o: '', d: '', op: '', productId: '' });
             const [userForm, setUserForm] = useState({ email: '', p: '', n: '', phone: '' });
+            const [userRegistrationSaving, setUserRegistrationSaving] = useState(false);
             const [editingRegisteredUserId, setEditingRegisteredUserId] = useState(null);
             const [registeredUsersPage, setRegisteredUsersPage] = useState(1);
             const [productForm, setProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], colors: [''], images: [], image: '', imageUrl: '', active: true });
@@ -1703,6 +1704,29 @@
                 return fbase.getAuth(window.secondaryAuthApp);
             };
 
+            const normalizeRegistrationEmail = (value = '') => String(value || '').replace(/\s+/g, '').toLowerCase();
+
+            const findRegisteredUserByEmail = async (email = '') => {
+                const normalizedEmail = normalizeRegistrationEmail(email);
+                if (!normalizedEmail) return null;
+
+                const localMatch = (Array.isArray(users) ? users : []).find((user) => normalizeRegistrationEmail(user.email) === normalizedEmail);
+                if (localMatch) return localMatch;
+
+                try {
+                    const db = fbase.getFirestore();
+                    const usersRef = fbase.collection(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION);
+                    const snap = await fbase.getDocs(fbase.query(usersRef, fbase.where('emailNormalized', '==', normalizedEmail)));
+                    if (!snap.empty) {
+                        const docSnap = snap.docs[0];
+                        return { id: docSnap.id, ...docSnap.data() };
+                    }
+                } catch(err) {
+                    console.error('Buscar usuario por correo normalizado:', err);
+                }
+
+                return null;
+            };
 
             const createOrUpdateUserWalletProfile = async (userData) => {
                 const userId = userData?.uid || userData?.id;
@@ -1961,94 +1985,136 @@
 
             const registerUser = async (e) => {
                 e.preventDefault();
+                if (userRegistrationSaving) return;
+
                 const trimmedName = userForm.n.trim();
-                const trimmedEmail = userForm.email.trim();
+                const normalizedEmail = normalizeRegistrationEmail(userForm.email);
                 const trimmedPhone = userForm.phone.trim();
 
                 if (editingRegisteredUserId) {
-                    if (!trimmedName || !trimmedEmail || !trimmedPhone) return;
-                    const currentUser = users.find(user => getUserProfileId(user) === editingRegisteredUserId || user.id === editingRegisteredUserId);
-                    if (!currentUser) {
-                        alert('No se encontró el usuario que deseas editar.');
-                        return;
+                    if (!trimmedName || !normalizedEmail || !trimmedPhone) return;
+                    setUserRegistrationSaving(true);
+                    try {
+                        const currentUser = users.find(user => getUserProfileId(user) === editingRegisteredUserId || user.id === editingRegisteredUserId);
+                        if (!currentUser) {
+                            alert('No se encontró el usuario que deseas editar.');
+                            return;
+                        }
+                        if (currentUser.role === 'admin') {
+                            alert('No se puede editar al administrador central desde este módulo.');
+                            return;
+                        }
+                        const now = Date.now();
+                        const nextUser = {
+                            ...currentUser,
+                            uid: currentUser.uid || currentUser.id || editingRegisteredUserId,
+                            email: currentUser.email || normalizedEmail,
+                            emailNormalized: normalizeRegistrationEmail(currentUser.email || normalizedEmail),
+                            name: trimmedName,
+                            phone: trimmedPhone,
+                            updatedAt: now,
+                            updatedBy: sessionUser?.email || ADMIN_EMAIL
+                        };
+                        await saveDoc(STAFF_USERS_COLLECTION, currentUser.id || editingRegisteredUserId, nextUser);
+                        await Wallet.ensureWalletDocument({ fbase, appId, user: { ...nextUser, id: currentUser.id || editingRegisteredUserId }, createdBy: sessionUser?.email || ADMIN_EMAIL }).catch((err) => console.error('Actualizar cartera de usuario:', err));
+                        closeRegisteredUserModal();
+                        alert('Usuario actualizado correctamente.');
+                    } finally {
+                        setUserRegistrationSaving(false);
                     }
-                    if (currentUser.role === 'admin') {
-                        alert('No se puede editar al administrador central desde este módulo.');
-                        return;
-                    }
-                    const now = Date.now();
-                    const nextUser = {
-                        ...currentUser,
-                        uid: currentUser.uid || currentUser.id || editingRegisteredUserId,
-                        email: currentUser.email || trimmedEmail,
-                        name: trimmedName,
-                        phone: trimmedPhone,
-                        updatedAt: now,
-                        updatedBy: sessionUser?.email || ADMIN_EMAIL
-                    };
-                    await saveDoc(STAFF_USERS_COLLECTION, currentUser.id || editingRegisteredUserId, nextUser);
-                    await Wallet.ensureWalletDocument({ fbase, appId, user: { ...nextUser, id: currentUser.id || editingRegisteredUserId }, createdBy: sessionUser?.email || ADMIN_EMAIL }).catch((err) => console.error('Actualizar cartera de usuario:', err));
-                    closeRegisteredUserModal();
-                    alert('Usuario actualizado correctamente.');
                     return;
                 }
 
-                if (!trimmedEmail || !userForm.p || !trimmedName || !trimmedPhone) return;
+                if (!normalizedEmail || !userForm.p || !trimmedName || !trimmedPhone) return;
+                setUserRegistrationSaving(true);
                 const secondaryAuth = getSecondaryAuth();
                 let credential = null;
                 let authUserCreated = false;
                 try {
-                    credential = await fbase.createUserWithEmailAndPassword(secondaryAuth, trimmedEmail, userForm.p);
-                    authUserCreated = Boolean(credential?.user?.uid);
-                } catch(err) {
-                    console.error('Crear usuario Firebase Auth:', err);
-                    alert(getFirebaseAuthErrorMessage(err));
-                    return;
-                }
+                    const existingUser = await findRegisteredUserByEmail(normalizedEmail);
+                    if (existingUser) {
+                        alert('El correo ya está registrado. Inicia sesión o usa otro correo.');
+                        return;
+                    }
 
-                const userId = credential.user.uid;
-                const userEmail = credential.user.email || trimmedEmail;
-                const now = Date.now();
-                const newUser = {
-                    uid: userId,
-                    email: userEmail,
-                    name: trimmedName,
-                    phone: trimmedPhone,
-                    saleNotificationEmail: userEmail,
-                    role: 'usuario',
-                    active: true,
-                    blocked: false,
-                    accountStatus: 'Activo',
-                    assignmentsAuthorized: false,
-                    createdAt: now,
-                    updatedAt: now
-                };
+                    try {
+                        credential = await fbase.createUserWithEmailAndPassword(secondaryAuth, normalizedEmail, userForm.p);
+                        authUserCreated = Boolean(credential?.user?.uid);
+                    } catch(err) {
+                        if (err?.code === 'auth/email-already-in-use') {
+                            console.warn('El correo ya existía en Firebase Auth; se intentará recuperar el registro si la contraseña coincide.', err);
+                            try {
+                                credential = await fbase.signInWithEmailAndPassword(secondaryAuth, normalizedEmail, userForm.p);
+                            } catch(signInErr) {
+                                console.error('Recuperar usuario existente Firebase Auth:', signInErr);
+                                alert(getFirebaseAuthErrorMessage(err));
+                                return;
+                            }
+                        } else {
+                            console.error('Crear usuario Firebase Auth:', err);
+                            alert(getFirebaseAuthErrorMessage(err));
+                            return;
+                        }
+                    }
 
-                try {
-                    await saveDoc(STAFF_USERS_COLLECTION, userId, newUser, { throwOnError: true });
+                    const userId = credential?.user?.uid;
+                    if (!userId) {
+                        alert('No se pudo completar el registro del usuario.');
+                        return;
+                    }
 
                     const db = fbase.getFirestore();
-                    const profileSnap = await fbase.getDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, userId));
-                    if (!profileSnap.exists()) {
-                        throw new Error('El perfil no se encontró en Firestore después de guardarlo.');
+                    const profileRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, userId);
+                    const existingProfileSnap = await fbase.getDoc(profileRef);
+                    if (existingProfileSnap.exists()) {
+                        alert('El correo ya está registrado. Inicia sesión o usa otro correo.');
+                        return;
                     }
 
-                    const walletResult = await createOrUpdateUserWalletProfile({ ...newUser, id: userId });
-                    if (!walletResult.success) {
-                        console.error('La cartera/perfil financiero no se pudo crear en este momento. El usuario podrá iniciar sesión y el sistema volverá a intentarlo automáticamente.', walletResult.error || walletResult.reason);
-                    }
+                    const userEmail = normalizeRegistrationEmail(credential.user.email || normalizedEmail);
+                    const now = Date.now();
+                    const newUser = {
+                        uid: userId,
+                        email: userEmail,
+                        emailNormalized: userEmail,
+                        name: trimmedName,
+                        phone: trimmedPhone,
+                        saleNotificationEmail: userEmail,
+                        role: 'usuario',
+                        active: true,
+                        blocked: false,
+                        accountStatus: 'Activo',
+                        assignmentsAuthorized: false,
+                        createdAt: now,
+                        updatedAt: now
+                    };
 
-                    closeRegisteredUserModal();
-                    alert('Usuario creado exitosamente.');
-                } catch(err) {
-                    console.error('Guardar perfil de usuario en Firestore:', err);
-                    if (authUserCreated) {
-                        alert(getFirestoreRegistrationErrorMessage(err));
-                    } else {
-                        alert('No se pudo completar el registro del usuario.');
+                    try {
+                        await saveDoc(STAFF_USERS_COLLECTION, userId, newUser, { throwOnError: true });
+
+                        const profileSnap = await fbase.getDoc(profileRef);
+                        if (!profileSnap.exists()) {
+                            throw new Error('El perfil no se encontró en Firestore después de guardarlo.');
+                        }
+
+                        const walletResult = await createOrUpdateUserWalletProfile({ ...newUser, id: userId });
+                        if (!walletResult.success) {
+                            console.error('La cartera/perfil financiero no se pudo crear en este momento. El usuario podrá iniciar sesión y el sistema volverá a intentarlo automáticamente.', walletResult.error || walletResult.reason);
+                        }
+
+                        closeRegisteredUserModal();
+                        alert('Usuario creado exitosamente.');
+                    } catch(err) {
+                        console.error('Guardar perfil de usuario en Firestore:', err);
+                        if (authUserCreated) {
+                            alert(getFirestoreRegistrationErrorMessage(err));
+                        } else {
+                            alert('No se pudo completar el registro del usuario.');
+                        }
                     }
                 } finally {
                     await fbase.signOut(secondaryAuth).catch(() => {});
+                    setUserRegistrationSaving(false);
                 }
             };
 
@@ -4030,8 +4096,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     {editingRegisteredUserId && <p className="text-[9px] font-bold text-slate-400 uppercase leading-relaxed">El correo de acceso no se modifica desde esta edición.</p>}
                                     <input required type="tel" className="input-field" placeholder="NÚMERO DE TELÉFONO" value={userForm.phone} onChange={e => setUserForm({...userForm, phone: e.target.value})} />
                                     {!editingRegisteredUserId && <input required type="password" minLength="6" className="input-field" placeholder="CONTRASEÑA" value={userForm.p} onChange={e => setUserForm({...userForm, p: e.target.value})} />}
-                                    <button type="submit" className="w-full btn-primary h-12">{editingRegisteredUserId ? 'Guardar Cambios' : 'Guardar Usuario'}</button>
-                                    <button type="button" onClick={closeRegisteredUserModal} className="w-full text-[9px] font-black text-slate-400 uppercase">Cancelar</button>
+                                    <button disabled={userRegistrationSaving} type="submit" className="w-full btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{userRegistrationSaving ? 'Guardando...' : (editingRegisteredUserId ? 'Guardar Cambios' : 'Guardar Usuario')}</button>
+                                    <button disabled={userRegistrationSaving} type="button" onClick={closeRegisteredUserModal} className="w-full text-[9px] font-black text-slate-400 uppercase disabled:opacity-50">Cancelar</button>
                                 </form>
                             </div>
                         </div>
@@ -4044,10 +4110,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     </script>
 </body>
 </html>
-
-
-
-
 
 
 
