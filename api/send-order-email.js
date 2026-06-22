@@ -96,6 +96,52 @@ function productsText(orderProducts = []) {
     .join("\n\n");
 }
 
+function normalizeAppPassword(value) {
+  return clean(value).replace(/\s+/g, "");
+}
+
+function resolveMailSettings(mailSettings = {}) {
+  return {
+    senderEmail: clean(
+      process.env.DRIVE_MX_SENDER_EMAIL ||
+        process.env.GMAIL_USER ||
+        process.env.EMAIL_USER ||
+        mailSettings.senderEmail
+    ),
+    appPassword: normalizeAppPassword(
+      process.env.DRIVE_MX_GMAIL_APP_PASSWORD ||
+        process.env.GMAIL_APP_PASSWORD ||
+        process.env.EMAIL_APP_PASSWORD ||
+        mailSettings.appPassword
+    ),
+    receiverEmail: clean(
+      process.env.DRIVE_MX_ORDER_RECEIVER_EMAIL ||
+        process.env.ORDER_RECEIVER_EMAIL ||
+        process.env.EMAIL_RECEIVER ||
+        mailSettings.receiverEmail
+    ),
+  };
+}
+
+function maskEmail(value) {
+  const email = clean(value);
+  const [local = "", domain = ""] = email.split("@");
+  if (!domain) return "correo-no-disponible";
+  const visible = local.slice(0, 2);
+  return `${visible}${local.length > 2 ? "***" : "*"}@${domain}`;
+}
+
+function mailErrorDetails(error = {}) {
+  return {
+    name: error?.name || "Error",
+    code: error?.code || "",
+    command: error?.command || "",
+    responseCode: error?.responseCode || null,
+    response: clean(error?.response).slice(0, 500),
+    message: error?.message || String(error || "Error desconocido"),
+  };
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -106,6 +152,14 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ success: false, error: "Método no permitido." });
   }
 
+  const requestBody = req.body || {};
+  const requestId = clean(
+    requestBody.requestId || requestBody.transferId || `email_${Date.now()}`
+  );
+  let stage = "validacion";
+  let baseEmailSent = false;
+  let baseMessageId = "";
+
   try {
     const {
       mailSettings = {},
@@ -115,16 +169,38 @@ module.exports = async function handler(req, res) {
       delivery = {},
       saleNotification = {},
       saleNotifications = [],
-    } = req.body || {};
+      transferId = "",
+      paymentStatus = "",
+    } = requestBody;
 
-    const senderEmail = clean(mailSettings.senderEmail);
-    const appPassword = clean(mailSettings.appPassword);
-    const receiverEmail = clean(mailSettings.receiverEmail);
+    const { senderEmail, appPassword, receiverEmail } = resolveMailSettings(mailSettings);
 
     if (!senderEmail || !appPassword || !receiverEmail) {
       return res.status(400).json({
         success: false,
-        error: "Falta configuración de correo: remitente, contraseña de aplicación o correo base receptor.",
+        requestId,
+        stage,
+        code: "MAIL_SETTINGS_MISSING",
+        error:
+          "Falta configuración de correo: remitente, contraseña de aplicación o correo base receptor.",
+      });
+    }
+    if (!isValidEmail(senderEmail)) {
+      return res.status(400).json({
+        success: false,
+        requestId,
+        stage,
+        code: "MAIL_SENDER_INVALID",
+        error: "El correo remitente configurado no es válido.",
+      });
+    }
+    if (!isValidEmail(receiverEmail)) {
+      return res.status(400).json({
+        success: false,
+        requestId,
+        stage,
+        code: "MAIL_RECEIVER_INVALID",
+        error: "El correo base receptor configurado no es válido.",
       });
     }
 
@@ -143,67 +219,59 @@ module.exports = async function handler(req, res) {
     const orderProducts = normalizeProducts(product, products);
 
     if (orderProducts.length === 0) {
-      return res.status(400).json({ success: false, error: "Faltan datos del producto." });
+      return res.status(400).json({
+        success: false,
+        requestId,
+        stage,
+        code: "ORDER_PRODUCTS_MISSING",
+        error: "Faltan datos del producto.",
+      });
     }
 
     if (orderProducts.length > 2) {
-      return res.status(400).json({ success: false, error: "El carrito permite máximo 2 productos por compra." });
+      return res.status(400).json({
+        success: false,
+        requestId,
+        stage,
+        code: "ORDER_PRODUCTS_LIMIT",
+        error: "El carrito permite máximo 2 productos por compra.",
+      });
     }
 
     for (const [key, label] of Object.entries(requiredDelivery)) {
       if (!clean(delivery[key])) {
-        return res.status(400).json({ success: false, error: `Falta el campo: ${label}.` });
+        return res.status(400).json({
+          success: false,
+          requestId,
+          stage,
+          code: "DELIVERY_FIELD_MISSING",
+          field: key,
+          error: `Falta el campo: ${label}.`,
+        });
       }
+    }
+    if (!isValidEmail(delivery.email)) {
+      return res.status(400).json({
+        success: false,
+        requestId,
+        stage,
+        code: "DELIVERY_EMAIL_INVALID",
+        error: "El correo electrónico del comprador no es válido.",
+      });
     }
 
     const SHIPPING_FEE = 150;
-    const orderSubtotal = orderProducts.reduce((total, item) => total + Number(item.price || 0), 0);
-    const orderShippingFee = Number(cart.shippingFee ?? (orderProducts.length > 0 ? SHIPPING_FEE : 0));
-    const orderTotal = Number(cart.total ?? (orderSubtotal + orderShippingFee));
+    const orderSubtotal = orderProducts.reduce(
+      (total, item) => total + Number(item.price || 0),
+      0
+    );
+    const orderShippingFee = Number(
+      cart.shippingFee ?? (orderProducts.length > 0 ? SHIPPING_FEE : 0)
+    );
+    const orderTotal = Number(cart.total ?? orderSubtotal + orderShippingFee);
     const itemCount = Number(cart.itemCount || orderProducts.length);
-    const productSubject = orderProducts.length > 1 ? `${orderProducts.length} productos` : orderProducts[0].name;
-
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: senderEmail,
-        pass: appPassword,
-      },
-    });
-
-    const html = `
-      <div style="font-family: Arial, sans-serif; color:#111827;">
-        <h2>Nueva solicitud de compra</h2>
-
-        <h3>Productos</h3>
-        ${productsHtml(orderProducts)}
-        <p><b>Subtotal productos:</b> $${money(orderSubtotal)}</p>
-        <p><b>Gastos de envío:</b> $${money(orderShippingFee)}</p>
-        <p><b>Total acumulado:</b> $${money(orderTotal)}</p>
-        <p><b>Cantidad de productos:</b> ${itemCount}</p>
-
-        <hr />
-
-        <h3>Datos de entrega</h3>
-        <p><b>Calle:</b> ${escapeHtml(delivery.street)}</p>
-        <p><b>Estado:</b> ${escapeHtml(delivery.state)}</p>
-        <p><b>Municipio:</b> ${escapeHtml(delivery.municipality)}</p>
-        <p><b>Colonia:</b> ${escapeHtml(delivery.neighborhood)}</p>
-        <p><b>Código Postal:</b> ${escapeHtml(delivery.zip)}</p>
-        <p><b>Nombre completo:</b> ${escapeHtml(delivery.fullName)}</p>
-        <p><b>Teléfono:</b> ${escapeHtml(delivery.phone)}</p>
-        <p><b>Correo electrónico:</b> ${escapeHtml(delivery.email)}</p>
-        <p><b>Referencias:</b> ${escapeHtml(delivery.references)}</p>
-      </div>
-    `;
-
-    await transporter.sendMail({
-      from: `"Drive MX" <${senderEmail}>`,
-      to: receiverEmail,
-      subject: `Nueva compra - ${productSubject}`,
-      html,
-      replyTo: clean(delivery.email),
-    });
+    const productSubject =
+      orderProducts.length > 1 ? `${orderProducts.length} productos` : orderProducts[0].name;
 
     const inferredTargets = orderProducts
       .map((item) => ({
@@ -252,23 +320,91 @@ module.exports = async function handler(req, res) {
 
     const targetsByEmail = new Map();
     [...explicitTargets, ...inferredTargets, ...legacyTargets].forEach((target) => {
-      if (!target.to || targetsByEmail.has(target.to.toLowerCase())) return;
-      targetsByEmail.set(target.to.toLowerCase(), target);
+      const targetKey = clean(target.to).toLowerCase();
+      if (!targetKey || targetsByEmail.has(targetKey)) return;
+      targetsByEmail.set(targetKey, target);
     });
 
-    let saleNotificationSent = false;
+    const invalidTargets = [...targetsByEmail.values()]
+      .filter((target) => !isValidEmail(target.to))
+      .map((target) => maskEmail(target.to));
+    if (invalidTargets.length > 0) {
+      return res.status(400).json({
+        success: false,
+        requestId,
+        stage,
+        code: "SALE_NOTIFICATION_EMAIL_INVALID",
+        invalidTargets,
+        error: "Existe uno o más correos de notificación de venta no válidos.",
+      });
+    }
+
+    console.info("[send-order-email] Solicitud validada.", {
+      requestId,
+      transferId: clean(transferId),
+      paymentStatus: clean(paymentStatus),
+      productCount: orderProducts.length,
+      receiver: maskEmail(receiverEmail),
+      saleNotificationTargets: targetsByEmail.size,
+    });
+
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: senderEmail,
+        pass: appPassword,
+      },
+    });
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; color:#111827;">
+        <h2>Nueva solicitud de compra</h2>
+
+        <h3>Productos</h3>
+        ${productsHtml(orderProducts)}
+        <p><b>Subtotal productos:</b> $${money(orderSubtotal)}</p>
+        <p><b>Gastos de envío:</b> $${money(orderShippingFee)}</p>
+        <p><b>Total acumulado:</b> $${money(orderTotal)}</p>
+        <p><b>Cantidad de productos:</b> ${itemCount}</p>
+
+        <hr />
+
+        <h3>Datos de entrega</h3>
+        <p><b>Calle:</b> ${escapeHtml(delivery.street)}</p>
+        <p><b>Estado:</b> ${escapeHtml(delivery.state)}</p>
+        <p><b>Municipio:</b> ${escapeHtml(delivery.municipality)}</p>
+        <p><b>Colonia:</b> ${escapeHtml(delivery.neighborhood)}</p>
+        <p><b>Código Postal:</b> ${escapeHtml(delivery.zip)}</p>
+        <p><b>Nombre completo:</b> ${escapeHtml(delivery.fullName)}</p>
+        <p><b>Teléfono:</b> ${escapeHtml(delivery.phone)}</p>
+        <p><b>Correo electrónico:</b> ${escapeHtml(delivery.email)}</p>
+        <p><b>Referencias:</b> ${escapeHtml(delivery.references)}</p>
+      </div>
+    `;
+
+    stage = "correo-base";
+    const baseInfo = await transporter.sendMail({
+      from: `"Drive MX" <${senderEmail}>`,
+      to: receiverEmail,
+      subject: `Nueva compra - ${productSubject}`,
+      html,
+      replyTo: clean(delivery.email),
+    });
+    baseEmailSent = true;
+    baseMessageId = clean(baseInfo?.messageId);
+    console.info("[send-order-email] Correo base enviado.", {
+      requestId,
+      receiver: maskEmail(receiverEmail),
+      messageId: baseMessageId,
+    });
+
     let saleNotificationCount = 0;
     const saleNotificationErrors = [];
-
     const saleProductsHtml = productsHtml(orderProducts);
     const saleProductsText = productsText(orderProducts);
 
+    stage = "notificaciones-venta";
     for (const target of targetsByEmail.values()) {
-      if (!isValidEmail(target.to)) {
-        saleNotificationErrors.push(`${target.to}: correo de notificación de venta no válido.`);
-        continue;
-      }
-
       const saleMessage = clean(target.message) || SALE_NOTIFICATION_MESSAGE;
       const saleHtml = `
         <div style="font-family: Arial, sans-serif; color:#111827;">
@@ -277,8 +413,8 @@ module.exports = async function handler(req, res) {
           <h3>Productos de la compra</h3>
           ${saleProductsHtml}
           <p><b>Subtotal productos:</b> $${money(orderSubtotal)}</p>
-        <p><b>Gastos de envío:</b> $${money(orderShippingFee)}</p>
-        <p><b>Total acumulado:</b> $${money(orderTotal)}</p>
+          <p><b>Gastos de envío:</b> $${money(orderShippingFee)}</p>
+          <p><b>Total acumulado:</b> $${money(orderTotal)}</p>
 
           <hr />
 
@@ -303,37 +439,79 @@ module.exports = async function handler(req, res) {
       )}\nCorreo: ${clean(delivery.email)}\nReferencias: ${clean(delivery.references)}`;
 
       try {
-        await transporter.sendMail({
+        const saleInfo = await transporter.sendMail({
           from: `"Drive MX" <${senderEmail}>`,
           to: target.to,
           subject: "Tu producto ha sido vendido - Drive MX",
           text: saleText,
           html: saleHtml,
         });
-        saleNotificationSent = true;
         saleNotificationCount += 1;
+        console.info("[send-order-email] Notificación de venta enviada.", {
+          requestId,
+          recipient: maskEmail(target.to),
+          messageId: clean(saleInfo?.messageId),
+        });
       } catch (saleError) {
-        console.error("Error enviando notificación de venta:", saleError);
-        saleNotificationErrors.push(
-          `${target.to}: ${saleError.message || "No se pudo enviar la notificación de venta."}`
-        );
+        const details = mailErrorDetails(saleError);
+        console.error("[send-order-email] Error enviando notificación de venta.", {
+          requestId,
+          recipient: maskEmail(target.to),
+          ...details,
+        }, saleError);
+        saleNotificationErrors.push({
+          recipient: maskEmail(target.to),
+          ...details,
+        });
       }
+    }
+
+    if (saleNotificationErrors.length > 0) {
+      return res.status(502).json({
+        success: false,
+        partialSuccess: true,
+        requestId,
+        stage,
+        code: "SALE_NOTIFICATION_PARTIAL_FAILURE",
+        baseEmailSent,
+        baseMessageId,
+        saleNotificationCount,
+        saleNotificationErrors,
+        error: "La compra fue notificada al correo base, pero falló una o más notificaciones de venta.",
+      });
     }
 
     return res.status(200).json({
       success: true,
-      saleNotificationSent,
+      requestId,
+      stage: "completado",
+      baseEmailSent,
+      baseMessageId,
+      saleNotificationSent: saleNotificationCount > 0,
       saleNotificationCount,
-      saleNotificationError: saleNotificationErrors.join(" | "),
+      saleNotificationError: "",
     });
   } catch (error) {
-    console.error("Error enviando correo:", error);
+    const details = mailErrorDetails(error);
+    console.error("[send-order-email] Error enviando correo.", {
+      requestId,
+      stage,
+      baseEmailSent,
+      ...details,
+    }, error);
     return res.status(500).json({
       success: false,
-      error: error.message || "No se pudo enviar el correo.",
+      partialSuccess: baseEmailSent,
+      requestId,
+      stage,
+      code: details.code || "EMAIL_SEND_ERROR",
+      baseEmailSent,
+      baseMessageId,
+      error: details.message || "No se pudo enviar el correo.",
     });
   }
 };
+
 
 
 
