@@ -331,82 +331,157 @@
 
   async function debitCommissionForSale({ fbase, appId, seller = {}, wallet = null, sale = {}, commissionPercent = 0, actor = '' } = {}) {
     const sellerId = getUserWalletId(seller) || getUserWalletId(sale.sellerId || sale.ownerId || sale.userId || '');
+    const percent = normalizePercent(commissionPercent);
     if (!sellerId) {
-      return { applies: false, commissionAmount: 0, balanceBefore: null, balanceAfter: null, percent: normalizePercent(commissionPercent) };
+      return { applies: false, commissionAmount: 0, balanceBefore: null, balanceAfter: null, percent };
     }
 
-    const current = await fetchWallet({ fbase, appId, user: { ...seller, uid: sellerId, id: sellerId }, wallet });
-    const percent = normalizePercent(commissionPercent);
+    if (!fbase || typeof fbase.runTransaction !== 'function') {
+      const error = new Error('Firebase runTransaction no está disponible para procesar la comisión de forma segura.');
+      error.code = 'FIRESTORE_TRANSACTION_UNAVAILABLE';
+      throw error;
+    }
+
     const saleAmount = Number(sale.productCost || sale.productPrice || sale.price || 0);
     const commissionAmount = calculateCommission(saleAmount, percent);
+    const saleId = safeDocId(clean(sale.saleId || sale.id || `sale_${now()}`));
+    const walletId = getUserWalletId(sellerId);
+    const movementId = safeDocId(`mov_commission_${walletId}_${saleId}`);
+    const commissionId = safeDocId(`commission_${walletId}_${saleId}`);
+    const db = fbase.getFirestore();
+    const walletRef = walletDocRef(fbase, appId, walletId);
+    const movementRef = movementDocRef(fbase, appId, walletId, movementId);
+    const commissionRef = docRef(fbase, appId, WALLET_COMMISSIONS_COLLECTION, commissionId);
 
-    if (!isWalletActivated(current)) {
-      const error = new Error(INSUFFICIENT_MESSAGE);
-      error.code = 'WALLET_NOT_ACTIVE';
+    // Conserva la creación automática existente cuando aún no hay documento de cartera.
+    await fetchWallet({
+      fbase,
+      appId,
+      user: { ...seller, uid: walletId, id: walletId },
+      wallet
+    });
+
+    try {
+      return await fbase.runTransaction(db, async (transaction) => {
+        const walletSnapshot = await transaction.get(walletRef);
+        if (!walletSnapshot.exists()) {
+          const error = new Error('No se encontró la cartera del vendedor en Firestore.');
+          error.code = 'WALLET_NOT_FOUND';
+          throw error;
+        }
+
+        const commissionSnapshot = await transaction.get(commissionRef);
+        const current = normalizeWallet({ id: walletSnapshot.id, ...walletSnapshot.data() }, seller);
+
+        // El identificador es determinista por venta. En reintentos devuelve el
+        // resultado ya aplicado y evita descontar dos veces el mismo cargo.
+        if (commissionSnapshot.exists()) {
+          const existingCommission = { id: commissionSnapshot.id, ...commissionSnapshot.data() };
+          return {
+            applies: true,
+            commissionAmount: Number(existingCommission.absoluteAmount || Math.abs(Number(existingCommission.amount || 0)) || 0),
+            balanceBefore: existingCommission.balanceBefore ?? null,
+            balanceAfter: existingCommission.balanceAfter ?? null,
+            percent: existingCommission.commissionPercent ?? percent,
+            movement: existingCommission,
+            commission: existingCommission,
+            wallet: current,
+            idempotent: true
+          };
+        }
+
+        if (!isWalletActivated(current)) {
+          const error = new Error(INSUFFICIENT_MESSAGE);
+          error.code = 'WALLET_NOT_ACTIVE';
+          throw error;
+        }
+
+        const balanceBefore = roundMoney(current.balance || 0);
+        if (commissionAmount <= 0) {
+          return {
+            applies: true,
+            commissionAmount: 0,
+            balanceBefore,
+            balanceAfter: balanceBefore,
+            percent,
+            wallet: current,
+            idempotent: false
+          };
+        }
+
+        if (balanceBefore < commissionAmount) {
+          const error = new Error(INSUFFICIENT_MESSAGE);
+          error.code = 'WALLET_INSUFFICIENT_FUNDS';
+          throw error;
+        }
+
+        const createdAt = now();
+        const balanceAfter = roundMoney(balanceBefore - commissionAmount);
+        const productName = clean(sale.productName || sale.name || 'producto vendido');
+        const nextWallet = {
+          ...current,
+          balance: balanceAfter,
+          totalCommissions: roundMoney(Number(current.totalCommissions || 0) + commissionAmount),
+          lastCommissionAt: createdAt,
+          updatedAt: createdAt,
+          updatedBy: actor || 'sistema',
+          status: balanceAfter > 0 ? 'Activa' : 'Sin saldo'
+        };
+        const movement = {
+          id: movementId,
+          movementId,
+          walletId,
+          userId: walletId,
+          userName: current.userName || seller.name || sale.sellerName || '',
+          userEmail: current.userEmail || seller.email || sale.sellerEmail || '',
+          type: 'commission',
+          direction: 'debit',
+          concept: `Comisión por venta: ${productName}`,
+          amount: -commissionAmount,
+          absoluteAmount: commissionAmount,
+          balanceBefore,
+          balanceAfter,
+          currency: CURRENCY,
+          commissionPercent: percent,
+          saleId,
+          productId: clean(sale.productId || ''),
+          productName,
+          createdAt,
+          createdBy: actor || 'sistema'
+        };
+        const commission = {
+          ...movement,
+          id: commissionId,
+          commissionId,
+          status: 'Descontada'
+        };
+
+        transaction.set(walletRef, nextWallet, { merge: true });
+        transaction.set(movementRef, movement);
+        transaction.set(commissionRef, commission);
+
+        return {
+          applies: true,
+          commissionAmount,
+          balanceBefore,
+          balanceAfter,
+          percent,
+          movement,
+          commission,
+          wallet: nextWallet,
+          idempotent: false
+        };
+      });
+    } catch (error) {
+      console.error('[Cartera][Comisión] No se pudo completar la transacción de comisión.', {
+        walletId,
+        saleId,
+        commissionId,
+        code: error?.code || '',
+        message: error?.message || String(error || 'Error desconocido')
+      }, error);
       throw error;
     }
-
-    if (commissionAmount <= 0) {
-      return { applies: true, commissionAmount: 0, balanceBefore: roundMoney(current.balance), balanceAfter: roundMoney(current.balance), percent };
-    }
-
-    const balanceBefore = roundMoney(current.balance || 0);
-    if (balanceBefore < commissionAmount) {
-      const error = new Error(INSUFFICIENT_MESSAGE);
-      error.code = 'WALLET_INSUFFICIENT_FUNDS';
-      throw error;
-    }
-
-    const createdAt = now();
-    const balanceAfter = roundMoney(balanceBefore - commissionAmount);
-    const walletId = getUserWalletId(current);
-    const saleId = clean(sale.saleId || sale.id || `sale_${createdAt}`);
-    const movementId = safeDocId(`mov_commission_${saleId}_${createdAt}`);
-    const commissionId = safeDocId(`commission_${walletId}_${saleId}_${createdAt}`);
-    const productName = clean(sale.productName || sale.name || 'producto vendido');
-    const nextWallet = {
-      ...current,
-      balance: balanceAfter,
-      totalCommissions: roundMoney(Number(current.totalCommissions || 0) + commissionAmount),
-      lastCommissionAt: createdAt,
-      updatedAt: createdAt,
-      updatedBy: actor || 'sistema',
-      status: balanceAfter > 0 ? 'Activa' : 'Sin saldo'
-    };
-    const movement = {
-      id: movementId,
-      movementId,
-      walletId,
-      userId: walletId,
-      userName: current.userName || seller.name || sale.sellerName || '',
-      userEmail: current.userEmail || seller.email || sale.sellerEmail || '',
-      type: 'commission',
-      direction: 'debit',
-      concept: `Comisión por venta: ${productName}`,
-      amount: -commissionAmount,
-      absoluteAmount: commissionAmount,
-      balanceBefore,
-      balanceAfter,
-      currency: CURRENCY,
-      commissionPercent: percent,
-      saleId,
-      productId: clean(sale.productId || ''),
-      productName,
-      createdAt,
-      createdBy: actor || 'sistema'
-    };
-    const commission = {
-      ...movement,
-      id: commissionId,
-      commissionId,
-      status: 'Descontada'
-    };
-
-    await fbase.setDoc(walletDocRef(fbase, appId, walletId), nextWallet, { merge: true });
-    await fbase.setDoc(movementDocRef(fbase, appId, walletId, movementId), movement);
-    await fbase.setDoc(docRef(fbase, appId, WALLET_COMMISSIONS_COLLECTION, commissionId), commission);
-
-    return { applies: true, commissionAmount, balanceBefore, balanceAfter, percent, movement, wallet: nextWallet };
   }
 
   function subscribeWallets({ fbase, appId, onChange } = {}) {
@@ -767,6 +842,7 @@
   global.DriveMxWallet = Wallet;
   global.DriveMxWalletUI = createWalletUI(global.React);
 })(window);
+
 
 
 
