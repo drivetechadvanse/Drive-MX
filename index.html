@@ -30,7 +30,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getDocs, runTransaction } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
         import "./search/search.js";
         import "./password-reset/password-reset.js";
@@ -46,7 +46,7 @@
         };
 
         window.firebaseConfig = firebaseConfig;
-        window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getDocs, getStorage, ref, uploadBytes, getDownloadURL };
+        window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getDocs, runTransaction, getStorage, ref, uploadBytes, getDownloadURL };
     </script>
     <script src="./wallet/wallet.js"></script>
 
@@ -735,8 +735,15 @@
                 return () => unsubUserSales();
             }, [fbUser, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role]);
 
+            const getOperationErrorDetails = (err = {}) => ({
+                name: err?.name || 'Error',
+                code: err?.code || '',
+                message: err?.message || String(err || 'Error desconocido'),
+                stack: err?.stack || ''
+            });
+
             const saveDoc = async (col, id, data, options = {}) => {
-                const { throwOnError = false, skipLocalUpdate = false } = options || {};
+                const { throwOnError = false, skipLocalUpdate = false, applyLocalOnError = true } = options || {};
                 const applyLocalUpdate = () => {
                     if (skipLocalUpdate) return;
                     if (col === 'packages') {
@@ -767,10 +774,85 @@
                     applyLocalUpdate();
                     return { success: true };
                 } catch(err) {
-                    console.error('Firestore guardar:', err);
+                    console.error('[Firestore][setDoc] No se pudo guardar el documento.', {
+                        collection: col,
+                        documentId: id,
+                        ...getOperationErrorDetails(err)
+                    }, err);
+                    if (applyLocalOnError) applyLocalUpdate();
                     if (throwOnError) throw err;
-                    applyLocalUpdate();
                     return { success: false, error: err };
+                }
+            };
+
+            const readBankTransferDocument = async (transferId) => {
+                const safeTransferId = String(transferId || '').trim();
+                if (!safeTransferId) {
+                    const error = new Error('No se recibió el identificador de la transferencia.');
+                    error.code = 'TRANSFER_ID_MISSING';
+                    throw error;
+                }
+                const db = fbase.getFirestore();
+                const transferRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'bank_transfers', safeTransferId);
+                try {
+                    const snapshot = await fbase.getDoc(transferRef);
+                    if (!snapshot.exists()) {
+                        const error = new Error('La transferencia ya no existe en Firestore.');
+                        error.code = 'TRANSFER_NOT_FOUND';
+                        throw error;
+                    }
+                    return { id: snapshot.id, ...snapshot.data() };
+                } catch(err) {
+                    console.error('[Transferencias][Firestore] No se pudo leer la transferencia.', {
+                        transferId: safeTransferId,
+                        ...getOperationErrorDetails(err)
+                    }, err);
+                    throw err;
+                }
+            };
+
+            const updateBankTransferDocument = async (transferId, patch = {}, options = {}) => {
+                const safeTransferId = String(transferId || '').trim();
+                const expected = options?.expected || {};
+                if (!safeTransferId) {
+                    const error = new Error('No se recibió el identificador de la transferencia.');
+                    error.code = 'TRANSFER_ID_MISSING';
+                    throw error;
+                }
+                const db = fbase.getFirestore();
+                const transferRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'bank_transfers', safeTransferId);
+                try {
+                    await fbase.setDoc(transferRef, { ...patch, transferId: safeTransferId }, { merge: true });
+                    const verifiedSnapshot = await fbase.getDoc(transferRef);
+                    if (!verifiedSnapshot.exists()) {
+                        const error = new Error('La transferencia no se encontró después de actualizarla.');
+                        error.code = 'TRANSFER_WRITE_NOT_VERIFIED';
+                        throw error;
+                    }
+                    const verifiedTransfer = { id: verifiedSnapshot.id, ...verifiedSnapshot.data() };
+                    for (const [field, expectedValue] of Object.entries(expected)) {
+                        if (verifiedTransfer[field] !== expectedValue) {
+                            const error = new Error(`Firestore no confirmó el campo ${field} de la transferencia.`);
+                            error.code = 'TRANSFER_WRITE_NOT_VERIFIED';
+                            error.field = field;
+                            throw error;
+                        }
+                    }
+                    setPendingTransfers(prev => {
+                        const next = [verifiedTransfer, ...prev.filter(item => (item.id || item.transferId) !== safeTransferId)]
+                            .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+                        writeLocal('driveMxPendingTransfers', next);
+                        return next;
+                    });
+                    return verifiedTransfer;
+                } catch(err) {
+                    console.error('[Transferencias][Firestore] No se pudo actualizar o verificar la transferencia.', {
+                        transferId: safeTransferId,
+                        patchFields: Object.keys(patch || {}),
+                        expected,
+                        ...getOperationErrorDetails(err)
+                    }, err);
+                    throw err;
                 }
             };
 
@@ -830,11 +912,12 @@
                     return next;
                 });
             };
-            const saveUserCompletedSaleMirror = async (sale = {}) => {
+            const saveUserCompletedSaleMirror = async (sale = {}, options = {}) => {
+                const { throwOnError = false } = options || {};
                 const saleId = getSaleRecordId(sale);
                 const ownerId = getSaleOwnerId(sale);
                 const userDocId = getSafeFirestoreDocId(ownerId);
-                if (!saleId || !userDocId) return;
+                if (!saleId || !userDocId) return null;
                 const normalizedSale = {
                     ...sale,
                     id: saleId,
@@ -849,8 +932,20 @@
                 }
                 try {
                     const db = fbase.getFirestore();
-                    await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_SALES_COLLECTION, userDocId, 'items', saleId), normalizedSale);
-                } catch(err) { console.error('Firestore espejo venta usuario:', err); }
+                    const mirrorRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_SALES_COLLECTION, userDocId, 'items', saleId);
+                    const existingMirror = await fbase.getDoc(mirrorRef);
+                    if (existingMirror.exists()) return { id: existingMirror.id, ...existingMirror.data() };
+                    await fbase.setDoc(mirrorRef, normalizedSale);
+                    return normalizedSale;
+                } catch(err) {
+                    console.error('[Ventas][Firestore] No se pudo guardar el espejo de la venta.', {
+                        saleId,
+                        userDocId,
+                        ...getOperationErrorDetails(err)
+                    }, err);
+                    if (throwOnError) throw err;
+                    return null;
+                }
             };
             const deleteUserCompletedSaleMirror = async (sale = {}) => {
                 const saleId = getSaleRecordId(sale);
@@ -2346,6 +2441,33 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 };
             };
 
+            const findExistingSaleCommission = async (saleId, sellerId = '') => {
+                const safeSaleId = String(saleId || '').trim();
+                const safeSellerId = Wallet.getUserWalletId(sellerId || '');
+                if (!safeSaleId || !safeSellerId) return null;
+                try {
+                    const db = fbase.getFirestore();
+                    const commissionsRef = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'wallet_commissions');
+                    const commissionsQuery = fbase.query(commissionsRef, fbase.where('saleId', '==', safeSaleId));
+                    const snapshot = await fbase.getDocs(commissionsQuery);
+                    let existingCommission = null;
+                    snapshot.forEach(docSnapshot => {
+                        if (existingCommission) return;
+                        const data = docSnapshot.data() || {};
+                        if (Wallet.getUserWalletId(data.walletId || data.userId || '') !== safeSellerId) return;
+                        existingCommission = { id: docSnapshot.id, ...data };
+                    });
+                    return existingCommission;
+                } catch(err) {
+                    console.error('[Ventas][Comisión] No se pudo verificar si la comisión ya estaba descontada.', {
+                        saleId: safeSaleId,
+                        sellerId: safeSellerId,
+                        ...getOperationErrorDetails(err)
+                    }, err);
+                    throw err;
+                }
+            };
+
             const registerCompletedSale = async ({ payload = {}, paymentMethod = '', saleId = '', transferId = '', soldAt = Date.now() }) => {
                 const payloadProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
                 const orderSubtotal = payloadProducts.reduce((total, product) => total + Number(product.price || 0), 0);
@@ -2353,6 +2475,13 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 const orderTotal = Number(payload.cart?.total ?? (orderSubtotal + orderShippingFee));
                 const baseId = String(saleId || `sale_${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '_');
                 const savedSales = [];
+                const db = fbase.getFirestore();
+
+                if (payloadProducts.length === 0) {
+                    const error = new Error('La transferencia no contiene productos válidos para registrar la venta.');
+                    error.code = 'SALE_PRODUCTS_MISSING';
+                    throw error;
+                }
 
                 for (const [index, payloadProduct] of payloadProducts.entries()) {
                     const sourceProduct = products.find(product => String(product.id) === String(payloadProduct.id)) || payloadProduct;
@@ -2384,15 +2513,46 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         createdAt: soldAt,
                         updatedAt: Date.now()
                     };
-                    const commissionResult = await Wallet.debitCommissionForSale({
+                    const saleRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'completed_sales', id);
+                    const existingSaleSnapshot = await fbase.getDoc(saleRef);
+                    if (existingSaleSnapshot.exists()) {
+                        const existingSale = { id: existingSaleSnapshot.id, ...existingSaleSnapshot.data() };
+                        await saveUserCompletedSaleMirror(existingSale, { throwOnError: true });
+                        savedSales.push(existingSale);
+                        console.info('[Ventas] La venta ya estaba registrada; se reutilizó sin volver a descontar comisión.', {
+                            saleId: id,
+                            transferId
+                        });
+                        continue;
+                    }
+
+                    const saleSellerId = seller.id || payloadProduct.ownerId || '';
+                    const existingCommission = await findExistingSaleCommission(id, saleSellerId);
+                    const commissionResult = existingCommission ? {
+                        applies: true,
+                        commissionAmount: Number(existingCommission.absoluteAmount || Math.abs(Number(existingCommission.amount || 0)) || 0),
+                        balanceBefore: existingCommission.balanceBefore ?? null,
+                        balanceAfter: existingCommission.balanceAfter ?? null,
+                        percent: existingCommission.commissionPercent ?? walletCommissionPercent,
+                        movement: existingCommission,
+                        commission: existingCommission,
+                        idempotent: true
+                    } : await Wallet.debitCommissionForSale({
                         fbase,
                         appId,
-                        seller: { ...seller, id: seller.id || payloadProduct.ownerId || '', uid: seller.id || payloadProduct.ownerId || '' },
-                        wallet: Wallet.getWalletById(wallets, seller.id || payloadProduct.ownerId || ''),
+                        seller: { ...seller, id: saleSellerId, uid: saleSellerId },
+                        wallet: Wallet.getWalletById(wallets, saleSellerId),
                         sale,
                         commissionPercent: walletCommissionPercent,
                         actor: sessionUser?.email || paymentMethod || 'sistema'
                     });
+                    if (existingCommission) {
+                        console.info('[Ventas][Comisión] Se reutilizó una comisión ya descontada para evitar un cargo duplicado.', {
+                            saleId: id,
+                            commissionId: existingCommission.id,
+                            sellerId: saleSellerId
+                        });
+                    }
                     const saleWithWallet = {
                         ...sale,
                         walletCommissionPercent: commissionResult.percent ?? walletCommissionPercent,
@@ -2401,27 +2561,93 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         walletBalanceBeforeCommission: commissionResult.balanceBefore,
                         walletBalanceAfterCommission: commissionResult.balanceAfter
                     };
-                    await saveDoc('completed_sales', id, saleWithWallet);
-                    await saveUserCompletedSaleMirror({ id, ...saleWithWallet });
-                    savedSales.push({ id, ...saleWithWallet });
+                    await saveDoc('completed_sales', id, saleWithWallet, { throwOnError: true, applyLocalOnError: false });
+                    const verifiedSaleSnapshot = await fbase.getDoc(saleRef);
+                    if (!verifiedSaleSnapshot.exists()) {
+                        const error = new Error('Firestore no confirmó el registro de la venta.');
+                        error.code = 'SALE_WRITE_NOT_VERIFIED';
+                        error.saleId = id;
+                        throw error;
+                    }
+                    const verifiedSale = { id: verifiedSaleSnapshot.id, ...verifiedSaleSnapshot.data() };
+                    await saveUserCompletedSaleMirror(verifiedSale, { throwOnError: true });
+                    savedSales.push(verifiedSale);
                 }
 
                 return savedSales.length === 1 ? savedSales[0] : savedSales;
             };
 
-            const sendOrderEmail = async (payload) => {
-                if (!payload.mailSettings.senderEmail || !payload.mailSettings.appPassword || !payload.mailSettings.receiverEmail) {
-                    throw new Error('Falta configurar el correo en el Panel Admin.');
+            const sendOrderEmail = async (payload = {}, options = {}) => {
+                const maxAttempts = Math.max(1, Math.min(3, Number(options.maxAttempts || 2)));
+                const requestId = String(payload.requestId || payload.transferId || `order_${Date.now()}`).trim();
+                let lastError = null;
+
+                for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 45000);
+                    try {
+                        console.info('[Transferencias][Correo] Solicitud al endpoint iniciada.', {
+                            requestId,
+                            transferId: payload.transferId || '',
+                            attempt,
+                            maxAttempts,
+                            productCount: Array.isArray(payload.products) ? payload.products.length : (payload.product ? 1 : 0)
+                        });
+                        const response = await fetch('/api/send-order-email', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ...payload, requestId }),
+                            signal: controller.signal
+                        });
+                        const rawResponse = await response.text();
+                        let data = {};
+                        if (rawResponse) {
+                            try { data = JSON.parse(rawResponse); }
+                            catch(parseError) { data = { error: rawResponse.slice(0, 500) }; }
+                        }
+                        if (!response.ok || !data.success) {
+                            const error = new Error(data.error || `El endpoint de correo respondió HTTP ${response.status}.`);
+                            error.code = data.code || `EMAIL_HTTP_${response.status}`;
+                            error.stage = data.stage || 'send-order-email';
+                            error.httpStatus = response.status;
+                            error.responseData = data;
+                            throw error;
+                        }
+                        if (data.saleNotificationError) console.warn('[Transferencias][Correo] Advertencia de notificación de venta:', data.saleNotificationError);
+                        console.info('[Transferencias][Correo] Correos enviados correctamente.', {
+                            requestId,
+                            baseEmailSent: data.baseEmailSent !== false,
+                            saleNotificationCount: Number(data.saleNotificationCount || 0)
+                        });
+                        return data;
+                    } catch(err) {
+                        const normalizedError = err?.name === 'AbortError'
+                            ? Object.assign(new Error('El envío de correo excedió el tiempo máximo de espera.'), { code: 'EMAIL_TIMEOUT', stage: 'send-order-email' })
+                            : err;
+                        lastError = normalizedError;
+                        const responseData = normalizedError?.responseData || {};
+                        const retryable = !responseData.partialSuccess && (
+                            !normalizedError?.httpStatus ||
+                            normalizedError.httpStatus === 408 ||
+                            normalizedError.httpStatus === 429 ||
+                            normalizedError.httpStatus >= 500
+                        );
+                        console.error('[Transferencias][Correo] Falló la solicitud de correo.', {
+                            requestId,
+                            attempt,
+                            retryable,
+                            stage: normalizedError?.stage || '',
+                            httpStatus: normalizedError?.httpStatus || null,
+                            ...getOperationErrorDetails(normalizedError)
+                        }, normalizedError);
+                        if (attempt >= maxAttempts || !retryable) throw normalizedError;
+                        await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+                    } finally {
+                        clearTimeout(timeoutId);
+                    }
                 }
-                const res = await fetch('/api/send-order-email', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok || !data.success) throw new Error(data.error || 'No se pudo enviar el correo.');
-                if (data.saleNotificationError) console.warn('Notificación de venta:', data.saleNotificationError);
-                return data;
+
+                throw lastError || new Error('No se pudo enviar el correo.');
             };
 
             const createPendingWalletRechargeTransfer = async () => {
@@ -2496,7 +2722,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         order: payload,
                         createdAt: Date.now(),
                         updatedAt: Date.now()
-                    });
+                    }, { throwOnError: true, applyLocalOnError: false });
                     alert('Transferencia registrada como Pendiente. Tu solicitud se procesará cuando el administrador confirme el pago.');
                     clearCompletedCartIfNeeded();
                     resetPublicFlow();
@@ -2509,25 +2735,50 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             };
 
             const markTransferPaid = async (transfer) => {
-                if (sessionUser?.role !== 'admin' || transfer.status !== 'Pendiente') return;
-                const transferId = transfer.id || transfer.transferId;
-                const paidAt = Date.now();
+                const transferId = String(transfer?.id || transfer?.transferId || '').trim();
+                const isSaleTransfer = transfer?.type !== 'wallet_recharge';
+                const canConfirmPending = transfer?.status === 'Pendiente';
+                const canRetrySaleEmail = isSaleTransfer && transfer?.status === 'Pagado' && transfer?.emailStatus !== 'Enviado';
+                if (sessionUser?.role !== 'admin' || (!canConfirmPending && !canRetrySaleEmail)) return;
+                if (!transferId) {
+                    alert('No se pudo identificar la transferencia.');
+                    return;
+                }
+
+                const requestedPaidAt = Number(transfer?.paidAt || Date.now());
+                let stage = 'inicio';
+                let paymentConfirmed = transfer?.status === 'Pagado';
+                let emailsSent = false;
+                let currentTransfer = transfer;
                 setOrderSending(true);
+                console.info('[Transferencias][Pagado] Inicio del procesamiento.', {
+                    transferId,
+                    currentStatus: transfer?.status || '',
+                    emailStatus: transfer?.emailStatus || '',
+                    actor: sessionUser?.email || ''
+                });
+
                 try {
-                    if (transfer.type === 'wallet_recharge') {
+                    stage = 'leer-transferencia';
+                    currentTransfer = await readBankTransferDocument(transferId);
+                    paymentConfirmed = currentTransfer.status === 'Pagado';
+
+                    if (currentTransfer.type === 'wallet_recharge') {
+                        if (currentTransfer.status !== 'Pendiente') return;
+                        stage = 'aprobar-recarga';
                         const targetUser = {
-                            uid: transfer.walletId || transfer.userId,
-                            id: transfer.walletId || transfer.userId,
-                            name: transfer.userName || transfer.holderName || 'Usuario',
-                            email: transfer.userEmail || '',
-                            phone: transfer.userPhone || ''
+                            uid: currentTransfer.walletId || currentTransfer.userId,
+                            id: currentTransfer.walletId || currentTransfer.userId,
+                            name: currentTransfer.userName || currentTransfer.holderName || 'Usuario',
+                            email: currentTransfer.userEmail || '',
+                            phone: currentTransfer.userPhone || ''
                         };
                         await Wallet.recordRecharge({
                             fbase,
                             appId,
                             user: targetUser,
-                            wallet: Wallet.getWalletById(wallets, transfer.walletId || transfer.userId),
-                            amount: transfer.amount,
+                            wallet: Wallet.getWalletById(wallets, currentTransfer.walletId || currentTransfer.userId),
+                            amount: currentTransfer.amount,
                             referenceId: transferId,
                             actor: sessionUser?.email || ADMIN_EMAIL,
                             settings: walletSettings
@@ -2542,23 +2793,155 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         alert('Transferencia de recarga aprobada. El saldo fue abonado y quedó registrada únicamente en la cartera del usuario.');
                         return;
                     }
+
+                    if (currentTransfer.status !== 'Pendiente' && currentTransfer.status !== 'Pagado') {
+                        const error = new Error(`La transferencia tiene un estado no procesable: ${currentTransfer.status || 'sin estado'}.`);
+                        error.code = 'TRANSFER_STATUS_INVALID';
+                        throw error;
+                    }
+                    if (currentTransfer.status === 'Pagado' && currentTransfer.emailStatus === 'Enviado') {
+                        alert('Transferencia confirmada correctamente');
+                        return;
+                    }
+                    if (!currentTransfer.order || typeof currentTransfer.order !== 'object') {
+                        const error = new Error('La transferencia no contiene los datos del pedido.');
+                        error.code = 'TRANSFER_ORDER_MISSING';
+                        throw error;
+                    }
+
+                    const storedMailSettings = currentTransfer.order.mailSettings || {};
                     const payload = appendSaleNotificationToPayload({
-                        ...transfer.order,
+                        ...currentTransfer.order,
+                        transferId,
+                        paidAt: Number(currentTransfer.paidAt || requestedPaidAt),
+                        paymentStatus: 'Pagado',
                         mailSettings: {
-                            senderEmail: emailSettings.senderEmail.trim(),
-                            appPassword: emailSettings.appPassword.trim(),
-                            receiverEmail: emailSettings.receiverEmail.trim()
+                            senderEmail: String(emailSettings.senderEmail || storedMailSettings.senderEmail || '').trim(),
+                            appPassword: String(emailSettings.appPassword || storedMailSettings.appPassword || '').trim(),
+                            receiverEmail: String(emailSettings.receiverEmail || storedMailSettings.receiverEmail || '').trim()
                         }
                     });
                     const transferProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
-                    if (!ensureCheckoutWalletsAllowed(transferProducts)) return;
-                    await sendOrderEmail(payload);
-                    await saveDoc('bank_transfers', transferId, { ...transfer, status: 'Pagado', paidAt, updatedAt: paidAt, paidBy: sessionUser?.email || '' });
-                    await registerCompletedSale({ payload, paymentMethod: 'Transferencia bancaria', saleId: `transfer_${transferId}`, transferId, soldAt: paidAt });
-                    alert('Transferencia marcada como Pagado y correo enviado correctamente.');
+                    if (transferProducts.length === 0) {
+                        const error = new Error('No se encontraron productos válidos en la transferencia.');
+                        error.code = 'TRANSFER_PRODUCTS_MISSING';
+                        throw error;
+                    }
+
+                    if (currentTransfer.status === 'Pendiente') {
+                        stage = 'validar-saldo-y-comision';
+                        if (!ensureCheckoutWalletsAllowed(transferProducts)) return;
+                    }
+
+                    stage = 'registrar-venta-y-comision';
+                    const registeredSaleResult = await registerCompletedSale({
+                        payload,
+                        paymentMethod: 'Transferencia bancaria',
+                        saleId: `transfer_${transferId}`,
+                        transferId,
+                        soldAt: Number(currentTransfer.paidAt || requestedPaidAt)
+                    });
+                    const registeredSales = Array.isArray(registeredSaleResult) ? registeredSaleResult : [registeredSaleResult].filter(Boolean);
+                    const saleIds = registeredSales.map(sale => sale?.id || sale?.saleId).filter(Boolean);
+
+                    stage = 'marcar-transferencia-pagada';
+                    currentTransfer = await updateBankTransferDocument(transferId, {
+                        status: 'Pagado',
+                        paidAt: Number(currentTransfer.paidAt || requestedPaidAt),
+                        paidBy: currentTransfer.paidBy || sessionUser?.email || ADMIN_EMAIL,
+                        updatedAt: Date.now(),
+                        paymentProcessingStatus: 'Completado',
+                        paymentError: '',
+                        saleIds,
+                        emailStatus: 'Pendiente',
+                        emailError: '',
+                        emailErrorCode: ''
+                    }, { expected: { status: 'Pagado' } });
+                    paymentConfirmed = true;
+                    console.info('[Transferencias][Pagado] Venta, comisión y estado de pago confirmados en Firestore.', {
+                        transferId,
+                        saleIds,
+                        paidAt: currentTransfer.paidAt
+                    });
+
+                    stage = 'enviar-correos';
+                    const mailResult = await sendOrderEmail({
+                        ...payload,
+                        transferId,
+                        paidAt: currentTransfer.paidAt,
+                        paymentStatus: 'Pagado',
+                        requestId: `transfer_${transferId}`
+                    });
+                    emailsSent = true;
+
+                    stage = 'guardar-resultado-correo';
+                    const emailSentAt = Date.now();
+                    currentTransfer = await updateBankTransferDocument(transferId, {
+                        status: 'Pagado',
+                        updatedAt: emailSentAt,
+                        emailStatus: 'Enviado',
+                        emailSentAt,
+                        emailLastAttemptAt: emailSentAt,
+                        emailError: '',
+                        emailErrorCode: '',
+                        emailRequestId: mailResult.requestId || `transfer_${transferId}`,
+                        emailBaseSent: mailResult.baseEmailSent !== false,
+                        emailSaleNotificationCount: Number(mailResult.saleNotificationCount || 0)
+                    }, { expected: { status: 'Pagado', emailStatus: 'Enviado' } });
+
+                    console.info('[Transferencias][Pagado] Flujo completado correctamente.', {
+                        transferId,
+                        saleIds,
+                        emailStatus: currentTransfer.emailStatus,
+                        saleNotificationCount: Number(mailResult.saleNotificationCount || 0)
+                    });
+                    alert('Transferencia confirmada correctamente');
                 } catch(err) {
-                    console.error('Marcar transferencia pagada:', err);
-                    alert('No se pudo confirmar la transferencia.');
+                    const details = getOperationErrorDetails(err);
+                    console.error('[Transferencias][Pagado] El flujo no pudo completarse.', {
+                        transferId,
+                        stage,
+                        paymentConfirmed,
+                        emailsSent,
+                        httpStatus: err?.httpStatus || null,
+                        responseData: err?.responseData || null,
+                        ...details
+                    }, err);
+
+                    if (!paymentConfirmed && ['marcar-transferencia-pagada', 'enviar-correos', 'guardar-resultado-correo'].includes(stage)) {
+                        try {
+                            const latestTransfer = await readBankTransferDocument(transferId);
+                            paymentConfirmed = latestTransfer.status === 'Pagado';
+                        } catch(verificationError) {
+                            console.error('[Transferencias][Pagado] No se pudo volver a verificar el estado después del error.', {
+                                transferId,
+                                ...getOperationErrorDetails(verificationError)
+                            }, verificationError);
+                        }
+                    }
+
+                    if (paymentConfirmed && !emailsSent) {
+                        try {
+                            await updateBankTransferDocument(transferId, {
+                                status: 'Pagado',
+                                updatedAt: Date.now(),
+                                emailStatus: 'Error',
+                                emailLastAttemptAt: Date.now(),
+                                emailError: String(details.message || 'No se pudo enviar el correo.').slice(0, 500),
+                                emailErrorCode: String(details.code || err?.stage || 'EMAIL_ERROR').slice(0, 120)
+                            }, { expected: { status: 'Pagado', emailStatus: 'Error' } });
+                        } catch(statusError) {
+                            console.error('[Transferencias][Pagado] Tampoco se pudo guardar el detalle del error de correo.', {
+                                transferId,
+                                ...getOperationErrorDetails(statusError)
+                            }, statusError);
+                        }
+                        alert(`La transferencia quedó pagada, pero no se pudieron enviar los correos. Detalle: ${details.message}`);
+                    } else if (paymentConfirmed && emailsSent) {
+                        alert(`La transferencia y los correos fueron procesados, pero no se pudo guardar la confirmación final. Detalle: ${details.message}`);
+                    } else {
+                        alert(`No se pudo confirmar la transferencia. Detalle: ${details.message}`);
+                    }
                 } finally {
                     setOrderSending(false);
                 }
@@ -3635,6 +4018,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                                     <div className="flex justify-end gap-2 flex-wrap">
                                                                         {sessionUser?.role === 'admin' && t.status === 'Pendiente' && (
                                                                             <button onClick={() => markTransferPaid(t)} disabled={orderSending} className="px-3 py-2 bg-green-50 text-green-600 rounded-xl text-[8px] font-black uppercase disabled:opacity-50">Pagado</button>
+                                                                        )}
+                                                                        {sessionUser?.role === 'admin' && t.status === 'Pagado' && t.emailStatus !== 'Enviado' && (
+                                                                            <button onClick={() => markTransferPaid(t)} disabled={orderSending} className="px-3 py-2 bg-amber-50 text-amber-700 rounded-xl text-[8px] font-black uppercase disabled:opacity-50">Reintentar correo</button>
                                                                         )}
                                                                         {sessionUser?.role === 'admin' && (
                                                                             <button type="button" onClick={() => deleteTransfer(t)} className="px-3 py-2 bg-red-50 text-red-500 hover:bg-red-500 hover:text-white rounded-xl text-[8px] font-black uppercase">Eliminar</button>
