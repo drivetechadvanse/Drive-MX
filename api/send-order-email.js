@@ -101,25 +101,64 @@ function normalizeAppPassword(value) {
 }
 
 function resolveMailSettings(mailSettings = {}) {
+  const requestSenderEmail = clean(mailSettings.senderEmail);
+  const requestAppPassword = normalizeAppPassword(mailSettings.appPassword);
+  const requestReceiverEmail = clean(mailSettings.receiverEmail);
+  const requestHasAuthValue = Boolean(requestSenderEmail || requestAppPassword);
+
+  // El sistema original administra estas credenciales desde el panel y Firestore.
+  // Cuando la solicitud contiene correo y contraseña, deben usarse como un par y
+  // nunca ser reemplazados ni mezclados con variables antiguas del servidor.
+  const environmentAuthCandidates = [
+    {
+      senderEmail: clean(process.env.DRIVE_MX_SENDER_EMAIL),
+      appPassword: normalizeAppPassword(process.env.DRIVE_MX_GMAIL_APP_PASSWORD),
+      source: "variables-entorno:DRIVE_MX",
+    },
+    {
+      senderEmail: clean(process.env.GMAIL_USER),
+      appPassword: normalizeAppPassword(process.env.GMAIL_APP_PASSWORD),
+      source: "variables-entorno:GMAIL",
+    },
+    {
+      senderEmail: clean(process.env.EMAIL_USER),
+      appPassword: normalizeAppPassword(process.env.EMAIL_APP_PASSWORD),
+      source: "variables-entorno:EMAIL",
+    },
+  ];
+  const environmentAuth = environmentAuthCandidates.find(
+    (candidate) => candidate.senderEmail && candidate.appPassword
+  );
+
+  let senderEmail = requestSenderEmail;
+  let appPassword = requestAppPassword;
+  let authSource = "panel";
+
+  // Solo se usa el respaldo del servidor cuando la solicitud no contiene ningún
+  // dato de autenticación. Si llega un par incompleto, la validación lo reporta
+  // en lugar de combinar credenciales de cuentas diferentes.
+  if (!requestHasAuthValue && environmentAuth) {
+    senderEmail = environmentAuth.senderEmail;
+    appPassword = environmentAuth.appPassword;
+    authSource = environmentAuth.source;
+  } else if (requestHasAuthValue && (!requestSenderEmail || !requestAppPassword)) {
+    authSource = "panel-incompleto";
+  }
+
+  const environmentReceiverCandidates = [
+    clean(process.env.DRIVE_MX_ORDER_RECEIVER_EMAIL),
+    clean(process.env.ORDER_RECEIVER_EMAIL),
+    clean(process.env.EMAIL_RECEIVER),
+  ];
+  const environmentReceiverEmail = environmentReceiverCandidates.find(Boolean) || "";
+  const receiverEmail = requestReceiverEmail || environmentReceiverEmail;
+
   return {
-    senderEmail: clean(
-      process.env.DRIVE_MX_SENDER_EMAIL ||
-        process.env.GMAIL_USER ||
-        process.env.EMAIL_USER ||
-        mailSettings.senderEmail
-    ),
-    appPassword: normalizeAppPassword(
-      process.env.DRIVE_MX_GMAIL_APP_PASSWORD ||
-        process.env.GMAIL_APP_PASSWORD ||
-        process.env.EMAIL_APP_PASSWORD ||
-        mailSettings.appPassword
-    ),
-    receiverEmail: clean(
-      process.env.DRIVE_MX_ORDER_RECEIVER_EMAIL ||
-        process.env.ORDER_RECEIVER_EMAIL ||
-        process.env.EMAIL_RECEIVER ||
-        mailSettings.receiverEmail
-    ),
+    senderEmail,
+    appPassword,
+    receiverEmail,
+    authSource,
+    receiverSource: requestReceiverEmail ? "panel" : environmentReceiverEmail ? "variables-entorno" : "sin-configurar",
   };
 }
 
@@ -159,6 +198,12 @@ module.exports = async function handler(req, res) {
   let stage = "validacion";
   let baseEmailSent = false;
   let baseMessageId = "";
+  let mailContext = {
+    authSource: "sin-resolver",
+    receiverSource: "sin-resolver",
+    sender: "correo-no-disponible",
+    receiver: "correo-no-disponible",
+  };
 
   try {
     const {
@@ -173,7 +218,19 @@ module.exports = async function handler(req, res) {
       paymentStatus = "",
     } = requestBody;
 
-    const { senderEmail, appPassword, receiverEmail } = resolveMailSettings(mailSettings);
+    const {
+      senderEmail,
+      appPassword,
+      receiverEmail,
+      authSource,
+      receiverSource,
+    } = resolveMailSettings(mailSettings);
+    mailContext = {
+      authSource,
+      receiverSource,
+      sender: maskEmail(senderEmail),
+      receiver: maskEmail(receiverEmail),
+    };
 
     if (!senderEmail || !appPassword || !receiverEmail) {
       return res.status(400).json({
@@ -181,6 +238,8 @@ module.exports = async function handler(req, res) {
         requestId,
         stage,
         code: "MAIL_SETTINGS_MISSING",
+        authSource,
+        receiverSource,
         error:
           "Falta configuración de correo: remitente, contraseña de aplicación o correo base receptor.",
       });
@@ -344,7 +403,10 @@ module.exports = async function handler(req, res) {
       transferId: clean(transferId),
       paymentStatus: clean(paymentStatus),
       productCount: orderProducts.length,
+      sender: maskEmail(senderEmail),
       receiver: maskEmail(receiverEmail),
+      authSource,
+      receiverSource,
       saleNotificationTargets: targetsByEmail.size,
     });
 
@@ -493,24 +555,43 @@ module.exports = async function handler(req, res) {
     });
   } catch (error) {
     const details = mailErrorDetails(error);
+    const authenticationRejected =
+      details.code === "EAUTH" ||
+      Number(details.responseCode) === 535 ||
+      /535(?:-|\s)|username and password not accepted|invalid login/i.test(
+        `${details.response} ${details.message}`
+      );
+    const responseStage = authenticationRejected ? "autenticacion-smtp" : stage;
+    const responseCode = authenticationRejected
+      ? "GMAIL_AUTH_REJECTED"
+      : details.code || "EMAIL_SEND_ERROR";
+    const responseMessage = authenticationRejected
+      ? `Google rechazó la autenticación SMTP del remitente ${mailContext.sender}. Se usaron las credenciales configuradas desde ${mailContext.authSource}. Verifica que el correo remitente y la contraseña de aplicación pertenezcan a la misma cuenta.`
+      : details.message || "No se pudo enviar el correo.";
+
     console.error("[send-order-email] Error enviando correo.", {
       requestId,
-      stage,
+      stage: responseStage,
       baseEmailSent,
+      ...mailContext,
       ...details,
     }, error);
-    return res.status(500).json({
+    return res.status(authenticationRejected ? 401 : 500).json({
       success: false,
       partialSuccess: baseEmailSent,
       requestId,
-      stage,
-      code: details.code || "EMAIL_SEND_ERROR",
+      stage: responseStage,
+      code: responseCode,
       baseEmailSent,
       baseMessageId,
-      error: details.message || "No se pudo enviar el correo.",
+      authSource: mailContext.authSource,
+      sender: mailContext.sender,
+      responseCode: details.responseCode,
+      error: responseMessage,
     });
   }
 };
+
 
 
 
