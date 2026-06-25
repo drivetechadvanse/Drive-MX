@@ -21,7 +21,34 @@
         .registered-users-card { max-height: min(72vh, 760px); display: flex; flex-direction: column; min-height: 0; }
         .registered-users-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
         .break-anywhere { overflow-wrap: anywhere; word-break: break-word; }
-        @media (max-width: 640px) { .registered-users-card { max-height: calc(100vh - 7rem); } }
+        .checkout-card { overflow: hidden; }
+        .checkout-title { min-width: 0; }
+        .checkout-product-label,
+        .checkout-id-label { overflow-wrap: anywhere; word-break: break-word; }
+        .checkout-fixed-actions { display: none; }
+        .checkout-submit-button { white-space: normal; text-align: center; }
+        @media (max-width: 640px) {
+            .registered-users-card { max-height: calc(100vh - 7rem); }
+            .checkout-screen.animate-slide { animation: none; transform: none !important; }
+            .checkout-screen { padding-top: 0.25rem; padding-bottom: calc(6.75rem + env(safe-area-inset-bottom)); }
+            .checkout-card { overflow: visible; border-radius: 1.25rem; }
+            .checkout-header { flex-direction: column; align-items: stretch; gap: 0.85rem; padding: 1rem; }
+            .checkout-title { width: 100%; min-width: 0; }
+            .checkout-actions { width: 100%; flex-shrink: 1; justify-content: stretch; align-items: stretch; }
+            .checkout-actions > button { flex: 1 1 0; min-width: 0; min-height: 2.75rem; }
+            .checkout-actions > .btn-primary { min-height: 3rem; padding-left: 1rem; padding-right: 1rem; }
+            .checkout-form { padding: 1rem; padding-bottom: 1.25rem; }
+            .checkout-summary-row { align-items: flex-start; }
+            .checkout-summary-row > span:first-child { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+            .checkout-submit-bar { align-items: stretch; gap: 1rem; padding: 1rem; }
+            .checkout-submit-button { width: 100%; min-height: 3.25rem; padding-left: 1rem; padding-right: 1rem; }
+            .checkout-fixed-actions { display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 90; padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom)); background: rgba(255, 255, 255, 0.96); border-top: 1px solid #e2e8f0; box-shadow: 0 -12px 28px rgba(15, 23, 42, 0.14); backdrop-filter: blur(10px); }
+            .checkout-fixed-actions .btn-primary { width: 100%; min-height: 3.25rem; box-shadow: 0 10px 20px rgba(239, 68, 68, 0.22); }
+        }
+        @media (max-width: 420px) {
+            .checkout-actions { flex-direction: column; }
+            .checkout-actions > button { width: 100%; }
+        }
     </style>
 </head>
 <body>
@@ -3704,29 +3731,29 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         )}
 
                         {view === 'delivery-data' && checkoutProducts.length > 0 && (
-                            <div className="w-full max-w-5xl py-6 animate-slide">
+                            <div className="w-full max-w-5xl py-6 animate-slide checkout-screen">
                                 <button onClick={() => { resetDeliveryForm(); if (checkoutProductIds.length > 0) { setView('home'); setIsCartOpen(true); } else { setView('product-detail'); } }} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← {checkoutProductIds.length > 0 ? 'Volver al carrito' : 'Volver al detalle'}</button>
-                                <div className="card-glass overflow-hidden">
-                                    <div className="bg-white border-b border-slate-100 px-6 py-5 flex items-center justify-between gap-4">
-                                        <div>
-                                            <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-1">{checkoutProducts.length > 1 ? 'Productos seleccionados' : 'Producto seleccionado'}: {checkoutProductNames}</p>
+                                <div className="card-glass checkout-card">
+                                    <div className="bg-white border-b border-slate-100 px-6 py-5 flex items-center justify-between gap-4 checkout-header">
+                                        <div className="checkout-title">
+                                            <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-1 checkout-product-label">{checkoutProducts.length > 1 ? 'Productos seleccionados' : 'Producto seleccionado'}: {checkoutProductNames}</p>
                                             <h1 className="text-2xl sm:text-3xl font-black tracking-tight">Datos de entrega</h1>
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">ID{checkoutProducts.length > 1 ? 's' : ''} conservado{checkoutProducts.length > 1 ? 's' : ''}: {checkoutProductIdsLabel}</p>
+                                            <p className="text-[9px] font-bold text-slate-400 uppercase mt-1 checkout-id-label">ID{checkoutProducts.length > 1 ? 's' : ''} conservado{checkoutProducts.length > 1 ? 's' : ''}: {checkoutProductIdsLabel}</p>
                                         </div>
-                                        <div className="flex items-center gap-3 shrink-0">
+                                        <div className="flex items-center gap-3 shrink-0 checkout-actions">
                                             <button type="button" onClick={resetPublicFlow} className="text-[9px] font-black uppercase text-slate-400 hover:text-red-500">Cancelar</button>
-                                            <button type="button" onClick={handleDeliveryContinue} disabled={orderSending} className="btn-primary h-11 disabled:opacity-50 disabled:cursor-not-allowed">{orderSending ? 'Procesando...' : 'Continuar'}</button>
+                                            <button type="button" onClick={handleDeliveryContinue} disabled={orderSending} className="btn-primary h-11 disabled:opacity-50 disabled:cursor-not-allowed checkout-submit-button">{orderSending ? 'Procesando...' : 'Continuar'}</button>
                                         </div>
                                     </div>
 
-                                    <form onSubmit={(e) => { e.preventDefault(); handleDeliveryContinue(); }} className="p-6 lg:p-8 space-y-6">
+                                    <form onSubmit={(e) => { e.preventDefault(); handleDeliveryContinue(); }} className="p-6 lg:p-8 space-y-6 checkout-form">
                                         <div className="bg-slate-50 rounded-2xl p-4 space-y-3">
                                             <div className="flex items-center justify-between gap-4">
                                                 <p className="text-[9px] font-black text-slate-400 uppercase">Resumen de compra</p>
                                                 <p className="text-[9px] font-black text-red-500 uppercase">{checkoutProducts.length}/{CART_MAX_ITEMS} productos</p>
                                             </div>
                                             {checkoutProducts.map(product => (
-                                                <div key={product.id} className="flex items-center justify-between gap-3 text-sm font-bold">
+                                                <div key={product.id} className="flex items-center justify-between gap-3 text-sm font-bold checkout-summary-row">
                                                     <span className="text-slate-700">{product.name}</span>
                                                     <span className="text-red-500 font-black">${Number(product.price || 0).toFixed(2)}</span>
                                                 </div>
@@ -3782,24 +3809,29 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         </div>
                                     </form>
                                 </div>
+                                <div className="checkout-fixed-actions sm:hidden" role="region" aria-label="Acciones de datos de entrega">
+                                    <button type="button" onClick={handleDeliveryContinue} disabled={orderSending} className="btn-primary w-full h-12 disabled:opacity-50 disabled:cursor-not-allowed checkout-submit-button">{orderSending ? 'Procesando...' : 'Continuar'}</button>
+                                </div>
                             </div>
                         )}
 
 
                         {view === 'payment-method' && checkoutProducts.length > 0 && (
-                            <div className="w-full max-w-4xl py-6 animate-slide">
+                            <div className="w-full max-w-4xl py-6 animate-slide checkout-screen">
                                 <button onClick={resetAfterIncompletePayment} className="mb-6 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">← Cancelar pago y volver al inicio</button>
-                                <div className="card-glass overflow-hidden">
-                                    <div className="bg-white border-b border-slate-100 px-6 py-5">
-                                        <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-1">{checkoutProducts.length > 1 ? 'Productos seleccionados' : 'Producto seleccionado'}: {checkoutProductNames}</p>
-                                        <h1 className="text-2xl sm:text-3xl font-black tracking-tight">Método de pago</h1>
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">ID{checkoutProducts.length > 1 ? 's' : ''} conservado{checkoutProducts.length > 1 ? 's' : ''}: {checkoutProductIdsLabel}</p>
+                                <div className="card-glass checkout-card">
+                                    <div className="bg-white border-b border-slate-100 px-6 py-5 checkout-header">
+                                        <div className="checkout-title">
+                                            <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mb-1 checkout-product-label">{checkoutProducts.length > 1 ? 'Productos seleccionados' : 'Producto seleccionado'}: {checkoutProductNames}</p>
+                                            <h1 className="text-2xl sm:text-3xl font-black tracking-tight">Método de pago</h1>
+                                            <p className="text-[9px] font-bold text-slate-400 uppercase mt-1 checkout-id-label">ID{checkoutProducts.length > 1 ? 's' : ''} conservado{checkoutProducts.length > 1 ? 's' : ''}: {checkoutProductIdsLabel}</p>
+                                        </div>
                                     </div>
                                     <div className="p-6 lg:p-8 space-y-5">
                                         <div className="bg-slate-50 rounded-2xl p-4 space-y-3">
                                             <p className="text-[9px] font-black text-slate-400 uppercase">Resumen de compra</p>
                                             {checkoutProducts.map(product => (
-                                                <div key={product.id} className="flex items-center justify-between gap-3 text-sm font-bold">
+                                                <div key={product.id} className="flex items-center justify-between gap-3 text-sm font-bold checkout-summary-row">
                                                     <span className="text-slate-700">{product.name}</span>
                                                     <span className="text-red-500 font-black">${Number(product.price || 0).toFixed(2)}</span>
                                                 </div>
@@ -3833,16 +3865,19 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             </div>
                                         )}
 
-                                        <div className="bg-slate-50 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                                        <div className="bg-slate-50 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 checkout-submit-bar">
                                             <div>
                                                 <p className="text-[9px] font-black text-slate-400 uppercase">Total</p>
                                                 <p className="text-[10px] font-bold text-slate-400 uppercase">Productos: ${Number(checkoutSubtotal || 0).toFixed(2)} · Envío: ${Number(checkoutShippingFee || 0).toFixed(2)}</p>
                                                 <p className="text-3xl font-black text-red-500">${Number(checkoutTotal || 0).toFixed(2)}</p>
                                             </div>
-                                            <button type="button" onClick={createPendingTransfer} disabled={orderSending || !paymentSettings.bankAccount} className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{orderSending ? 'Registrando...' : 'Registrar transferencia pendiente'}</button>
+                                            <button type="button" onClick={createPendingTransfer} disabled={orderSending || !paymentSettings.bankAccount} className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed checkout-submit-button">{orderSending ? 'Registrando...' : 'Registrar transferencia pendiente'}</button>
                                         </div>
                                         <button type="button" onClick={resetAfterIncompletePayment} className="w-full text-[9px] font-black text-slate-400 uppercase hover:text-red-500">Cancelar método de pago y restablecer pantalla</button>
                                     </div>
+                                </div>
+                                <div className="checkout-fixed-actions sm:hidden" role="region" aria-label="Acciones de método de pago">
+                                    <button type="button" onClick={createPendingTransfer} disabled={orderSending || !paymentSettings.bankAccount} className="btn-primary w-full h-12 disabled:opacity-50 disabled:cursor-not-allowed checkout-submit-button">{orderSending ? 'Registrando...' : 'Registrar transferencia pendiente'}</button>
                                 </div>
                             </div>
                         )}
