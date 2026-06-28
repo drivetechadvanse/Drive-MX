@@ -1,0 +1,11 @@
+.drive-mx-panel-section-title {
+  letter-spacing: 0.12em;
+}
+
+.drive-mx-panel-table-wrap {
+  -webkit-overflow-scrolling: touch;
+}
+
+.drive-mx-panel-product-thumb {
+  background: #f1f5f9;
+}
