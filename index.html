@@ -59,6 +59,7 @@
         import "./search/search.js";
         import "./password-reset/password-reset.js";
         import "./ads-manager/ads-manager.js";
+        import "./home-products/home-products.js";
         import "./panel-control/panel-control.js";
         
         const firebaseConfig = {
@@ -84,6 +85,7 @@
         const WalletUI = window.DriveMxWalletUI;
         const UsersUI = window.DriveMxUsersUI;
         const AdsManager = window.DriveMxAdsManager;
+        const HomeProducts = window.DriveMxHomeProducts || {};
         const PanelControlUI = window.DriveMxPanelControlUI;
         
         const Icons = {
@@ -3551,7 +3553,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     {cartItems.length > 0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center">{cartItems.length}</span>}
                                 </button>
                                 <button onClick={openSupportFromCover} className="px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-red-50 hover:text-red-600">Soporte Técnico</button>
-                                <button onClick={() => { resetPublicFlow(); setLoginForm({ email: '', p: '' }); setView('login'); }} className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Acceso Staff</button>
+                                <button onClick={() => { resetPublicFlow(); setLoginForm({ email: '', p: '' }); setView('login'); }} className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Registrarse</button>
                             </div>
                         )}
                     </header>
@@ -3633,22 +3635,13 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             {guideResult && <TrackingStatusCard pkg={guideResult} />}
                                         </section>
 
-                                        {activeProducts.length > 0 && (
-                                            <section className="w-full">
-                                                <div className="flex items-end justify-between gap-4 mb-5">
-                                                    <div>
-                                                        <p className="text-[10px] text-red-500 font-black uppercase tracking-widest">Inventario disponible</p>
-                                                        <h2 className="text-2xl font-black tracking-tight">Productos <span className="text-red-500">Drive MX</span></h2>
-                                                    </div>
-                                                    <p className="hidden sm:block text-[9px] font-bold text-slate-400 uppercase tracking-widest">Actualizado automáticamente</p>
-                                                </div>
-                                                <AdsManager.PublicInventoryGrid
-                                                    products={activeProducts}
-                                                    ads={activeAds}
-                                                    getProductGallery={getProductGallery}
-                                                    onProductClick={(product) => { setSelectedProductId(product.id); setCurrentImageIndex(0); setView('product-detail'); }}
-                                                />
-                                            </section>
+                                        {HomeProducts.HomeProductsSection && (
+                                            <HomeProducts.HomeProductsSection
+                                                products={activeProducts}
+                                                ads={ads}
+                                                getProductGallery={getProductGallery}
+                                                onProductClick={(product) => { setSelectedProductId(product.id); setCurrentImageIndex(0); setView('product-detail'); }}
+                                            />
                                         )}
                                     </div>
                                 
