@@ -40,6 +40,21 @@
     return roundMoney((Number(amount || 0) * normalizePercent(percent)) / 100);
   }
 
+  function normalizeSaleQuantity(value = 1) {
+    const quantity = Math.floor(Number(value || 1));
+    return Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
+  }
+
+  function getSaleUnitPrice(item = {}) {
+    return Number(item.unitPrice ?? item.productUnitPrice ?? item.productPrice ?? item.price ?? 0);
+  }
+
+  function getSaleLineTotal(item = {}) {
+    const quantity = normalizeSaleQuantity(item.quantity || item.productQuantity || item.selectedQuantity || 1);
+    const unitPrice = getSaleUnitPrice(item);
+    return roundMoney(item.lineTotal ?? item.totalPrice ?? item.productTotal ?? item.productCost ?? unitPrice * quantity);
+  }
+
   function getUserWalletId(userOrId = {}) {
     if (typeof userOrId === 'string') return safeDocId(userOrId);
     return safeDocId(userOrId.uid || userOrId.id || userOrId.userId || '');
@@ -207,7 +222,7 @@
       const walletId = getUserWalletId(sellerId);
       if (!walletId) return;
       const previous = groupedBySeller.get(walletId) || { sellerId, walletId, total: 0, products: [] };
-      previous.total = roundMoney(previous.total + Number(product.price || product.productCost || 0));
+      previous.total = roundMoney(previous.total + getSaleLineTotal(product));
       previous.products.push(product);
       groupedBySeller.set(walletId, previous);
     });
@@ -342,7 +357,7 @@
       throw error;
     }
 
-    const saleAmount = Number(sale.productCost || sale.productPrice || sale.price || 0);
+    const saleAmount = getSaleLineTotal(sale);
     const commissionAmount = calculateCommission(saleAmount, percent);
     const saleId = safeDocId(clean(sale.saleId || sale.id || `sale_${now()}`));
     const walletId = getUserWalletId(sellerId);
@@ -564,6 +579,9 @@
     formatMoney,
     normalizePercent,
     calculateCommission,
+    normalizeSaleQuantity,
+    getSaleUnitPrice,
+    getSaleLineTotal,
     getUserWalletId,
     getUserName,
     getUserEmail,
