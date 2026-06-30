@@ -69,6 +69,8 @@ function ChevronRightIcon() {
 
 function ProductCard({ product, onProductClick, getProductGallery }) {
   const image = getProductImage(product, getProductGallery);
+  const stock = Math.max(0, Math.floor(Number(product?.stock ?? product?.availableStock ?? 0)));
+  const isSoldOut = stock <= 0;
   return h('article', {
     key: product?.id,
     onClick: () => typeof onProductClick === 'function' && onProductClick(product),
@@ -93,7 +95,7 @@ function ProductCard({ product, onProductClick, getProductGallery }) {
       ),
       h('div', { className: 'flex items-center justify-between gap-3' },
         h('p', { className: 'text-xl font-black text-red-500' }, `$${Number(product?.price || 0).toFixed(2)}`),
-        h('span', { className: 'px-3 py-1 bg-slate-50 rounded-full text-[9px] font-black text-slate-500 uppercase' }, `Stock: ${Number(product?.stock || 0)}`)
+        h('span', { className: `px-3 py-1 rounded-full text-[9px] font-black uppercase ${isSoldOut ? 'bg-red-50 text-red-600' : 'bg-slate-50 text-slate-500'}` }, isSoldOut ? 'Agotado' : `Stock: ${stock}`)
       )
     )
   );
@@ -241,3 +243,4 @@ globalThis.DriveMxHomeProducts = {
   getAdForBlock,
   HomeProductsSection
 };
+
