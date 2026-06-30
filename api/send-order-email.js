@@ -24,6 +24,15 @@ function money(value) {
   return Number(value || 0).toFixed(2);
 }
 
+function roundMoney(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
+function normalizeQuantity(value) {
+  const numeric = Math.floor(Number(value || 1));
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 1;
+}
+
 const PRODUCT_SIZE_OPTIONS = ['Chica', 'Mediana', 'Grande', 'XL'];
 
 function normalizeProductSizes(sizes = []) {
@@ -53,21 +62,35 @@ function normalizeProducts(product = {}, products = []) {
   const source = Array.isArray(products) && products.length > 0 ? products : [product];
   return source
     .filter(Boolean)
-    .map((item) => ({
-      id: clean(item.id),
-      name: clean(item.name),
-      price: Number(item.price || 0),
-      sizes: normalizeProductSizes(item.sizes || item.medidas),
-      colors: normalizeProductColors(item.colors || item.colores),
-      ownerId: clean(item.ownerId),
-      ownerName: clean(item.ownerName),
-      ownerEmail: clean(item.ownerEmail),
-      ownerPhone: clean(item.ownerPhone),
-      sellerNotificationEmail: clean(item.sellerNotificationEmail),
-      saleNotificationEmail: clean(item.saleNotificationEmail),
-      notificationEmail: clean(item.notificationEmail),
-      ownerNotificationEmail: clean(item.ownerNotificationEmail),
-    }))
+    .map((item) => {
+      const quantity = normalizeQuantity(item.quantity || item.productQuantity || item.selectedQuantity || 1);
+      const unitPrice = Number(item.unitPrice ?? item.productUnitPrice ?? item.price ?? 0);
+      const lineTotal = roundMoney(
+        item.lineTotal ?? item.totalPrice ?? item.productTotal ?? item.productCost ?? unitPrice * quantity
+      );
+      return {
+        id: clean(item.id),
+        name: clean(item.name),
+        price: unitPrice,
+        unitPrice,
+        productUnitPrice: unitPrice,
+        quantity,
+        productQuantity: quantity,
+        lineTotal,
+        totalPrice: lineTotal,
+        productTotal: lineTotal,
+        sizes: normalizeProductSizes(item.sizes || item.medidas),
+        colors: normalizeProductColors(item.colors || item.colores),
+        ownerId: clean(item.ownerId),
+        ownerName: clean(item.ownerName),
+        ownerEmail: clean(item.ownerEmail),
+        ownerPhone: clean(item.ownerPhone),
+        sellerNotificationEmail: clean(item.sellerNotificationEmail),
+        saleNotificationEmail: clean(item.saleNotificationEmail),
+        notificationEmail: clean(item.notificationEmail),
+        ownerNotificationEmail: clean(item.ownerNotificationEmail),
+      };
+    })
     .filter((item) => item.id && item.name);
 }
 
@@ -79,7 +102,9 @@ function productsHtml(orderProducts = []) {
           <p><b>Producto ${index + 1}</b></p>
           <p><b>ID:</b> ${escapeHtml(item.id)}</p>
           <p><b>Nombre:</b> ${escapeHtml(item.name)}</p>
-          <p><b>Precio:</b> $${money(item.price)}</p>
+          <p><b>Cantidad comprada:</b> ${Number(item.quantity || 1)}</p>
+          <p><b>Precio unitario:</b> $${money(item.unitPrice ?? item.price)}</p>
+          <p><b>Total del producto:</b> $${money(item.lineTotal ?? item.totalPrice ?? item.productTotal)}</p>
           ${productOptionsHtml(item)}
         </div>
       `
@@ -91,7 +116,7 @@ function productsText(orderProducts = []) {
   return orderProducts
     .map(
       (item, index) =>
-        `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nPrecio: $${money(item.price)}${productOptionsText(item) ? `\n${productOptionsText(item)}` : ''}`
+        `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nCantidad comprada: ${Number(item.quantity || 1)}\nPrecio unitario: $${money(item.unitPrice ?? item.price)}\nTotal del producto: $${money(item.lineTotal ?? item.totalPrice ?? item.productTotal)}${productOptionsText(item) ? `\n${productOptionsText(item)}` : ''}`
     )
     .join("\n\n");
 }
@@ -321,14 +346,15 @@ module.exports = async function handler(req, res) {
 
     const SHIPPING_FEE = 150;
     const orderSubtotal = orderProducts.reduce(
-      (total, item) => total + Number(item.price || 0),
+      (total, item) => total + Number(item.lineTotal ?? item.totalPrice ?? item.productTotal ?? item.price ?? 0),
       0
     );
     const orderShippingFee = Number(
       cart.shippingFee ?? (orderProducts.length > 0 ? SHIPPING_FEE : 0)
     );
     const orderTotal = Number(cart.total ?? orderSubtotal + orderShippingFee);
-    const itemCount = Number(cart.itemCount || orderProducts.length);
+    const totalQuantity = orderProducts.reduce((total, item) => total + Number(item.quantity || 1), 0);
+    const itemCount = Number(cart.totalQuantity || cart.quantityTotal || totalQuantity || cart.itemCount || orderProducts.length);
     const productSubject =
       orderProducts.length > 1 ? `${orderProducts.length} productos` : orderProducts[0].name;
 
@@ -494,9 +520,11 @@ module.exports = async function handler(req, res) {
         </div>
       `;
 
-      const saleText = `${saleMessage}\n\nProductos de la compra:\n${saleProductsText}\n\nTotal acumulado: $${money(
+      const saleText = `${saleMessage}\n\nProductos de la compra:\n${saleProductsText}\n\nSubtotal productos: $${money(
+        orderSubtotal
+      )}\nGastos de envío: $${money(orderShippingFee)}\nTotal acumulado: $${money(
         orderTotal
-      )}\n\nComprador:\nNombre: ${clean(delivery.fullName)}\nTeléfono: ${clean(
+      )}\nCantidad total comprada: ${itemCount}\n\nComprador:\nNombre: ${clean(delivery.fullName)}\nTeléfono: ${clean(
         delivery.phone
       )}\nCorreo: ${clean(delivery.email)}\nReferencias: ${clean(delivery.references)}`;
 
