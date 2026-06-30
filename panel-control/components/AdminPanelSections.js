@@ -11,6 +11,21 @@ function getOrderProducts(transfer = {}) {
   return [];
 }
 
+function normalizeOrderQuantity(item = {}) {
+  const quantity = Math.floor(Number(item.quantity || item.productQuantity || item.selectedQuantity || 1));
+  return Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
+}
+
+function getOrderUnitPrice(item = {}) {
+  return Number(item.unitPrice ?? item.productUnitPrice ?? item.productPrice ?? item.price ?? 0);
+}
+
+function getOrderLineTotal(item = {}) {
+  const quantity = normalizeOrderQuantity(item);
+  const unitPrice = getOrderUnitPrice(item);
+  return Number((Number(item.lineTotal ?? item.totalPrice ?? item.productTotal ?? item.productCost ?? unitPrice * quantity) || 0).toFixed(2));
+}
+
 export function AdminHeader(props = {}) {
   if (!h) return null;
   const Icons = props.Icons || {};
@@ -181,13 +196,19 @@ export function PendingTransfersCard(props = {}) {
                       h('p', { className: 'text-slate-400' }, transfer.userPhone || '')
                     )
                   : h(globalThis.React.Fragment, null,
-                      transferProducts.map((product, index) => h('div', { key: `${transferId}_${product.id || index}`, className: index > 0 ? 'mt-2 pt-2 border-t border-slate-100' : '' },
-                        h('p', { className: 'font-black' }, product.name),
-                        h('p', { className: 'text-red-600 font-black' }, `$${Number(product.price || 0).toFixed(2)}`),
-                        productOptionsLines(product).map((line) => h('p', { key: line, className: 'text-slate-400 uppercase' }, line))
-                      )),
+                      transferProducts.map((product, index) => {
+                        const quantity = normalizeOrderQuantity(product);
+                        const unitPrice = getOrderUnitPrice(product);
+                        const lineTotal = getOrderLineTotal(product);
+                        return h('div', { key: `${transferId}_${product.id || index}`, className: index > 0 ? 'mt-2 pt-2 border-t border-slate-100' : '' },
+                          h('p', { className: 'font-black' }, product.name),
+                          h('p', { className: 'text-slate-500 font-bold' }, `Cantidad: ${quantity} · Unitario: $${unitPrice.toFixed(2)}`),
+                          h('p', { className: 'text-red-600 font-black' }, `Total producto: $${lineTotal.toFixed(2)}`),
+                          productOptionsLines(product).map((line) => h('p', { key: line, className: 'text-slate-400 uppercase' }, line))
+                        );
+                      }),
                       h('p', { className: 'text-slate-500 font-bold mt-2' }, `Gastos de envio: $${Number(transfer.order?.cart?.shippingFee ?? 150).toFixed(2)}`),
-                      h('p', { className: 'text-slate-800 font-black' }, `Total: $${Number(transfer.order?.cart?.total || (transferProducts.reduce((total, product) => total + Number(product.price || 0), 0) + Number(transfer.order?.cart?.shippingFee ?? 150))).toFixed(2)}`),
+                      h('p', { className: 'text-slate-800 font-black' }, `Total: $${Number(transfer.order?.cart?.total || (transferProducts.reduce((total, product) => total + getOrderLineTotal(product), 0) + Number(transfer.order?.cart?.shippingFee ?? 150))).toFixed(2)}`),
                       h('p', { className: 'text-slate-400' }, `${transfer.order?.delivery?.phone || ''} · ${transfer.order?.delivery?.email || ''}`)
                     )
               ),
@@ -245,6 +266,9 @@ export function CompletedSalesCard(props = {}) {
           sales.map((sale) => {
             const sizes = normalizeProductSizes(sale.productSizes);
             const colors = normalizeProductColors(sale.productColors);
+            const quantity = normalizeOrderQuantity(sale);
+            const unitPrice = getOrderUnitPrice(sale);
+            const lineTotal = getOrderLineTotal(sale);
             return h('tr', { key: sale.id || sale.saleId, className: 'text-[10px] font-bold text-slate-600 align-top' },
               h('td', { className: 'px-6 py-4' },
                 h('p', { className: 'font-black text-slate-800' }, sale.sellerName || '-'),
@@ -254,7 +278,10 @@ export function CompletedSalesCard(props = {}) {
               ),
               h('td', { className: 'px-6 py-4 font-mono text-slate-400' }, sale.sellerEmail || '-'),
               h('td', { className: 'px-6 py-4 font-mono text-slate-400' }, sale.sellerPhone || '-'),
-              h('td', { className: 'px-6 py-4 text-red-600 font-black' }, `$${Number(sale.productCost || 0).toFixed(2)}`),
+              h('td', { className: 'px-6 py-4' },
+                h('p', { className: 'text-red-600 font-black' }, `$${lineTotal.toFixed(2)}`),
+                h('p', { className: 'text-[8px] text-slate-400 uppercase' }, `Cantidad: ${quantity} · Unitario: $${unitPrice.toFixed(2)}`)
+              ),
               h('td', { className: 'px-6 py-4' }, sale.soldAt ? new Date(sale.soldAt).toLocaleString('es-MX') : '-'),
               h('td', { className: 'px-6 py-4 text-right' }, h('button', { type: 'button', onClick: () => props.deleteCompletedSale?.(sale), className: 'px-3 py-2 bg-red-50 text-red-500 hover:bg-red-500 hover:text-white rounded-xl text-[8px] font-black uppercase inline-flex items-center gap-1' }, h(TrashIcon, { size: 11 }), ' Eliminar'))
             );
@@ -361,27 +388,34 @@ export function ProductsAdminPanel(props = {}) {
           )
         ),
         h('tbody', { className: 'divide-y divide-slate-50' },
-          controlProducts.map((product) => h('tr', { key: product.id, className: 'text-[10px] font-bold text-slate-600' },
-            h('td', { className: 'px-6 py-4' },
-              h('div', { className: 'w-12 h-12 rounded-xl bg-slate-100 overflow-hidden drive-mx-panel-product-thumb' },
-                getProductGallery(product)[0] ? h('img', { src: getProductGallery(product)[0], alt: product.name, className: 'w-full h-full object-cover' }) : null
+          controlProducts.map((product) => {
+            const stock = Math.max(0, Math.floor(Number(product.stock ?? product.availableStock ?? 0)));
+            const isSoldOut = stock <= 0;
+            const statusLabel = isSoldOut ? 'Agotado' : (product.active !== false ? 'Activo' : 'Inactivo');
+            const statusClass = isSoldOut ? 'bg-red-50 text-red-600' : (product.active !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400');
+            return h('tr', { key: product.id, className: 'text-[10px] font-bold text-slate-600' },
+              h('td', { className: 'px-6 py-4' },
+                h('div', { className: 'w-12 h-12 rounded-xl bg-slate-100 overflow-hidden drive-mx-panel-product-thumb' },
+                  getProductGallery(product)[0] ? h('img', { src: getProductGallery(product)[0], alt: product.name, className: 'w-full h-full object-cover' }) : null
+                )
+              ),
+              h('td', { className: 'px-6 py-4' }, h('p', { className: 'font-black text-slate-800' }, product.name), h('p', { className: 'font-mono text-[8px] text-slate-400' }, product.id)),
+              h('td', { className: 'px-6 py-4 text-red-600 font-black' }, `$${Number(product.price || 0).toFixed(2)}`),
+              h('td', { className: 'px-6 py-4' }, stock),
+              h('td', { className: 'px-6 py-4' }, h('span', { className: `px-2 py-1 rounded-full text-[8px] uppercase ${statusClass}` }, statusLabel)),
+              h('td', { className: 'px-6 py-4 text-right' },
+                h('div', { className: 'flex justify-end gap-2 flex-wrap' },
+                  h('button', { onClick: () => props.editProduct?.(product), className: 'px-2 py-1 bg-slate-100 rounded-lg text-[8px] font-black uppercase' }, 'Editar'),
+                  h('button', { onClick: () => props.toggleProduct?.(product), className: 'px-2 py-1 bg-slate-100 rounded-lg text-[8px] font-black uppercase' }, product.active !== false ? 'Desactivar' : 'Activar'),
+                  h('button', { onClick: () => props.deleteProduct?.(product.id), className: 'text-slate-300 hover:text-red-500' }, h(TrashIcon))
+                )
               )
-            ),
-            h('td', { className: 'px-6 py-4' }, h('p', { className: 'font-black text-slate-800' }, product.name), h('p', { className: 'font-mono text-[8px] text-slate-400' }, product.id)),
-            h('td', { className: 'px-6 py-4 text-red-600 font-black' }, `$${Number(product.price || 0).toFixed(2)}`),
-            h('td', { className: 'px-6 py-4' }, Number(product.stock || 0)),
-            h('td', { className: 'px-6 py-4' }, h('span', { className: `px-2 py-1 rounded-full text-[8px] uppercase ${product.active !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400'}` }, product.active !== false ? 'Activo' : 'Inactivo')),
-            h('td', { className: 'px-6 py-4 text-right' },
-              h('div', { className: 'flex justify-end gap-2 flex-wrap' },
-                h('button', { onClick: () => props.editProduct?.(product), className: 'px-2 py-1 bg-slate-100 rounded-lg text-[8px] font-black uppercase' }, 'Editar'),
-                h('button', { onClick: () => props.toggleProduct?.(product), className: 'px-2 py-1 bg-slate-100 rounded-lg text-[8px] font-black uppercase' }, product.active !== false ? 'Desactivar' : 'Activar'),
-                h('button', { onClick: () => props.deleteProduct?.(product.id), className: 'text-slate-300 hover:text-red-500' }, h(TrashIcon))
-              )
-            )
-          )),
+            );
+          }),
           controlProducts.length === 0 ? h('tr', null, h('td', { colSpan: '6', className: 'px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase' }, 'Aún no hay productos registrados')) : null
         )
       )
     )
   );
 }
+
