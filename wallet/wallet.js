@@ -112,6 +112,8 @@
       globalCommissionPercent: 0,
       minimumFirstRecharge: MIN_FIRST_RECHARGE,
       currency: CURRENCY,
+      stripePublicKey: '',
+      stripeSecretKey: '',
       updatedAt: null,
       updatedBy: ''
     };
@@ -123,7 +125,9 @@
       ...settings,
       globalCommissionPercent: normalizePercent(settings.globalCommissionPercent ?? settings.commissionPercent ?? 0),
       minimumFirstRecharge: getMinimumRecharge(settings),
-      currency: settings.currency || CURRENCY
+      currency: settings.currency || CURRENCY,
+      stripePublicKey: clean(settings.stripePublicKey || ''),
+      stripeSecretKey: clean(settings.stripeSecretKey || '')
     };
   }
 
@@ -368,7 +372,6 @@
     const movementRef = movementDocRef(fbase, appId, walletId, movementId);
     const commissionRef = docRef(fbase, appId, WALLET_COMMISSIONS_COLLECTION, commissionId);
 
-    // Conserva la creación automática existente cuando aún no hay documento de cartera.
     await fetchWallet({
       fbase,
       appId,
@@ -388,8 +391,6 @@
         const commissionSnapshot = await transaction.get(commissionRef);
         const current = normalizeWallet({ id: walletSnapshot.id, ...walletSnapshot.data() }, seller);
 
-        // El identificador es determinista por venta. En reintentos devuelve el
-        // resultado ya aplicado y evita descontar dos veces el mismo cargo.
         if (commissionSnapshot.exists()) {
           const existingCommission = { id: commissionSnapshot.id, ...commissionSnapshot.data() };
           return {
@@ -679,13 +680,22 @@
                 h('p', { className: 'text-[8px] font-black uppercase text-slate-400 mb-1' }, 'Pagar solo con Banco Azteca, el nombre del titular de la cuenta debe coincidir con el usuario registrado en el panel para que la tranferencia sea aprobada'),
                 h('p', { className: 'text-sm font-black text-slate-900 break-all' }, props.bankAccount)
               ) : h('p', { className: 'text-[10px] font-black text-red-500 uppercase' }, 'El administrador aún no configuró la cuenta bancaria.'),
+              
               h('button', {
                 type: 'button',
                 onClick: props.onCreatePendingRecharge,
                 disabled: props.rechargeProcessing || !props.bankAccount || !props.rechargeAmount || !rechargeValidation.ok,
                 className: 'btn-primary h-12 w-full disabled:opacity-50 disabled:cursor-not-allowed'
               }, props.rechargeProcessing ? 'Registrando...' : 'Registrar transferencia pendiente'),
-              h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed' }, 'La recarga se abonará a tu cartera cuando el administrador confirme la transferencia.')
+              
+              settings.stripePublicKey ? h('button', {
+                type: 'button',
+                onClick: props.onStripeRecharge,
+                disabled: props.rechargeProcessing || !props.rechargeAmount || !rechargeValidation.ok,
+                className: 'w-full h-12 rounded-xl bg-blue-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed mt-2'
+              }, props.stripeProcessing ? 'Procesando pago...' : 'Pagar con Stripe') : null,
+
+              h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed mt-2' }, 'La recarga por transferencia se abonará a tu cartera cuando el administrador la confirme. Los pagos con Stripe se procesan de inmediato.')
             )
           ) : null
         )
@@ -731,10 +741,10 @@
       const settings = normalizeSettings(props.settings || {});
       return h('div', { className: 'card-glass overflow-hidden' },
         h('div', { className: 'bg-slate-50 border-b border-slate-100 px-6 py-4' },
-          h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400' }, 'Configuración de Comisiones'),
-          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Porcentaje global aplicado automáticamente a cada venta de usuarios')
+          h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400' }, 'Configuración de Comisiones y Pagos'),
+          h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Porcentaje global, recarga mínima y claves de acceso para Stripe')
         ),
-        h('form', { onSubmit: props.onSubmit, className: 'p-6 grid md:grid-cols-[1fr_1fr_auto] gap-3 items-end' },
+        h('form', { onSubmit: props.onSubmit, className: 'p-6 grid md:grid-cols-2 gap-4 items-end' },
           h('div', null,
             h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, 'Porcentaje de comisión global'),
             h('input', {
@@ -743,7 +753,7 @@
               min: '0',
               max: '100',
               step: '0.01',
-              className: 'input-field',
+              className: 'input-field w-full',
               placeholder: 'Ej. 10',
               value: props.value ?? settings.globalCommissionPercent,
               onChange: (event) => props.onChange && props.onChange(event.target.value)
@@ -756,13 +766,35 @@
               type: 'number',
               min: String(MIN_FIRST_RECHARGE),
               step: '0.01',
-              className: 'input-field',
+              className: 'input-field w-full',
               placeholder: 'Ej. 100',
               value: props.minimumValue ?? settings.minimumFirstRecharge,
               onChange: (event) => props.onMinimumChange && props.onMinimumChange(event.target.value)
             })
           ),
-          h('button', { disabled: props.saving, type: 'submit', className: 'btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed' }, props.saving ? 'Guardando...' : 'Guardar configuración')
+          h('div', null,
+            h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, 'Stripe - Clave Publicable'),
+            h('input', {
+              type: 'text',
+              className: 'input-field w-full',
+              placeholder: 'pk_test_...',
+              value: props.stripePublicKey ?? settings.stripePublicKey ?? '',
+              onChange: (event) => props.onStripePublicKeyChange && props.onStripePublicKeyChange(event.target.value)
+            })
+          ),
+          h('div', null,
+            h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, 'Stripe - Clave Secreta'),
+            h('input', {
+              type: 'password',
+              className: 'input-field w-full',
+              placeholder: 'sk_test_...',
+              value: props.stripeSecretKey ?? settings.stripeSecretKey ?? '',
+              onChange: (event) => props.onStripeSecretKeyChange && props.onStripeSecretKeyChange(event.target.value)
+            })
+          ),
+          h('div', { className: 'md:col-span-2 mt-2' },
+            h('button', { disabled: props.saving, type: 'submit', className: 'btn-primary h-12 w-full disabled:opacity-50 disabled:cursor-not-allowed' }, props.saving ? 'Guardando...' : 'Guardar configuración')
+          )
         )
       );
     }
