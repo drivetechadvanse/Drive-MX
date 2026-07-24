@@ -615,12 +615,55 @@
     const SmallLabel = ({ children }) => h('p', { className: 'text-[8px] font-black uppercase tracking-widest text-slate-300 mb-1' }, children);
 
     function UserWalletCard(props = {}) {
+      const [stripeProcessing, setStripeProcessing] = global.React.useState(false);
+
       const wallet = normalizeWallet(props.wallet || {}, props.user || {});
       const activated = isWalletActivated(wallet);
       const settings = normalizeSettings(props.settings || {});
       const userProductCount = Number(props.userProductCount || 0);
       const minimumRecharge = getMinimumRecharge(settings, userProductCount);
       const rechargeValidation = validateRechargeAmount(wallet, props.rechargeAmount || 0, settings, userProductCount);
+
+      const handleStripeRecharge = async () => {
+        if (!settings.stripePublicKey) {
+          alert('Stripe no está configurado en el panel de administración.');
+          return;
+        }
+
+        if (!rechargeValidation.ok) {
+          alert(rechargeValidation.message);
+          return;
+        }
+
+        setStripeProcessing(true);
+        try {
+          const response = await fetch('/api/process-stripe-recharge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              amount: rechargeValidation.amount, 
+              userId: wallet.userId 
+            })
+          });
+          
+          const data = await response.json();
+          if (!response.ok || !data.success) throw new Error(data.error || 'Error al conectar con la API de pago.');
+
+          const stripeClient = Stripe(settings.stripePublicKey);
+          
+          if (data.sessionId) {
+            const { error } = await stripeClient.redirectToCheckout({ sessionId: data.sessionId });
+            if (error) throw new Error(error.message);
+          } else {
+             alert('No se pudo generar la sesión de pago.');
+          }
+        } catch (err) {
+          console.error('Error con Stripe:', err);
+          alert('Hubo un problema al procesar el pago con Stripe: ' + err.message);
+        } finally {
+          setStripeProcessing(false);
+        }
+      };
 
       return h('div', { id: 'user-wallet-section', className: 'card-glass overflow-hidden' },
         h('div', { className: 'bg-gradient-to-br from-red-500 to-red-600 px-6 py-6 text-white' },
@@ -690,10 +733,10 @@
               
               settings.stripePublicKey ? h('button', {
                 type: 'button',
-                onClick: props.onStripeRecharge,
-                disabled: props.rechargeProcessing || !props.rechargeAmount || !rechargeValidation.ok,
+                onClick: handleStripeRecharge,
+                disabled: props.rechargeProcessing || stripeProcessing || !props.rechargeAmount || !rechargeValidation.ok,
                 className: 'w-full h-12 rounded-xl bg-blue-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed mt-2'
-              }, props.stripeProcessing ? 'Procesando pago...' : 'Pagar con Stripe') : null,
+              }, stripeProcessing ? 'Procesando pago...' : 'Pagar con Stripe') : null,
 
               h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed mt-2' }, 'La recarga por transferencia se abonará a tu cartera cuando el administrador la confirme. Los pagos con Stripe se procesan de inmediato.')
             )
