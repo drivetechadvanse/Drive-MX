@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Drive MX - Logística</title>
-    <script src="https://js.stripe.com/v3/"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -1758,9 +1757,6 @@
                 e.preventDefault();
                 const percent = Number(walletSettings.globalCommissionPercent || 0);
                 const minimumFirstRecharge = Number(walletSettings.minimumFirstRecharge || 0);
-                const stripePublicKey = String(walletSettings.stripePublicKey || '').trim();
-                const stripeSecretKey = String(walletSettings.stripeSecretKey || '').trim();
-
                 if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
                     alert('Ingresa un porcentaje de comisión global entre 0 y 100.');
                     return;
@@ -1774,7 +1770,7 @@
                     const next = await Wallet.saveSettings({
                         fbase,
                         appId,
-                        settings: { ...walletSettings, globalCommissionPercent: percent, minimumFirstRecharge, stripePublicKey, stripeSecretKey },
+                        settings: { ...walletSettings, globalCommissionPercent: percent, minimumFirstRecharge },
                         actor: sessionUser?.email || ADMIN_EMAIL
                     });
                     setWalletSettings(next);
