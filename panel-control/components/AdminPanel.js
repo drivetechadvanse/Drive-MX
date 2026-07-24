@@ -58,6 +58,13 @@ export function AdminPanel(props = {}) {
           onChange: (value) => props.setWalletSettings?.((prev) => ({ ...prev, globalCommissionPercent: value })),
           minimumValue: props.walletSettings?.minimumFirstRecharge,
           onMinimumChange: (value) => props.setWalletSettings?.((prev) => ({ ...prev, minimumFirstRecharge: value })),
+          
+          // Aquí están las funciones que "desbloquean" los campos de Stripe para que puedas escribir
+          stripePublicKey: props.walletSettings?.stripePublicKey,
+          onStripePublicKeyChange: (value) => props.setWalletSettings?.((prev) => ({ ...prev, stripePublicKey: value })),
+          stripeSecretKey: props.walletSettings?.stripeSecretKey,
+          onStripeSecretKeyChange: (value) => props.setWalletSettings?.((prev) => ({ ...prev, stripeSecretKey: value })),
+          
           onSubmit: props.saveWalletCommissionSettings,
           saving: props.walletSettingsSaving
         }) : null,
@@ -131,3 +138,4 @@ export function AdminPanel(props = {}) {
     )
   );
 }
+          
