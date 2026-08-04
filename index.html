@@ -2479,6 +2479,7 @@
                         stockAtPurchase: getProductStock(product || {}),
                         sizes: normalizeProductSizes(product?.sizes || product?.medidas),
                         colors: normalizeProductColors(product?.colors || product?.colores),
+                        ...Supermercado.getCategoryFields(product || {}),
                         ownerId: seller.id,
                         ownerName: seller.name,
                         ownerEmail: seller.email,
@@ -2761,6 +2762,100 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     throw error;
                 }
                 return { result, buyerPayload, buyerEmail: buyerPayload.buyerEmail };
+            };
+
+
+            const getPaidTransferBuyerEmail = (transfer = {}, payload = {}) => {
+                const candidates = [
+                    payload?.delivery?.email,
+                    transfer?.order?.delivery?.email,
+                    transfer?.buyerEmail,
+                    transfer?.customerEmail,
+                    transfer?.buyer?.email,
+                    transfer?.customer?.email
+                ];
+                return String(candidates.find(value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim())) || '').trim();
+            };
+
+            const isSupermarketPaidOrder = (transfer = {}, payload = {}) => {
+                const sourceOrder = transfer?.order && typeof transfer.order === 'object' ? transfer.order : payload;
+                const sourceProducts = Array.isArray(sourceOrder?.products) && sourceOrder.products.length > 0
+                    ? sourceOrder.products
+                    : (sourceOrder?.product ? [sourceOrder.product] : []);
+                return sourceProducts.some(item => {
+                    const liveProduct = products.find(product => String(product.id) === String(item?.id));
+                    return Supermercado.isSupermarketProduct(liveProduct || item || {});
+                });
+            };
+
+            // Supermercado usa el mismo checkout, pero algunos pedidos anteriores pueden
+            // conservar el correo del comprador en el documento de transferencia y no en
+            // order.delivery.email. Este payload reconstruye únicamente el correo del
+            // comprador y elimina por completo los destinatarios del vendedor.
+            const buildSupermarketBuyerPaidSource = (transfer = {}, payload = {}, buyerEmail = '') => {
+                const sourceOrder = transfer?.order && typeof transfer.order === 'object' ? transfer.order : payload;
+                const sourceProducts = Array.isArray(sourceOrder?.products) && sourceOrder.products.length > 0
+                    ? sourceOrder.products
+                    : (sourceOrder?.product ? [sourceOrder.product] : []);
+                const normalizedProducts = sourceProducts.map(item => {
+                    const liveProduct = products.find(product => String(product.id) === String(item?.id)) || {};
+                    const source = { ...liveProduct, ...item };
+                    const quantity = Math.max(1, Math.floor(Number(source.quantity || source.productQuantity || 1)) || 1);
+                    const unitPrice = Number(source.unitPrice ?? source.productUnitPrice ?? source.price ?? 0);
+                    const lineTotal = Number((unitPrice * quantity).toFixed(2));
+                    return stripSellerNotificationFields({
+                        id: String(source.id || '').trim(),
+                        name: String(source.name || '').trim(),
+                        price: unitPrice,
+                        unitPrice,
+                        productUnitPrice: unitPrice,
+                        quantity,
+                        productQuantity: quantity,
+                        lineTotal,
+                        totalPrice: lineTotal,
+                        productTotal: lineTotal,
+                        stockAtPurchase: Number(source.stockAtPurchase ?? source.stock ?? source.availableStock ?? 0),
+                        sizes: normalizeProductSizes(source.sizes || source.medidas),
+                        colors: normalizeProductColors(source.colors || source.colores),
+                        ...Supermercado.getCategoryFields(source)
+                    });
+                }).filter(item => item.id && item.name);
+                const subtotal = normalizedProducts.reduce((total, item) => total + Number(item.lineTotal || 0), 0);
+                const shippingFee = Number(sourceOrder?.cart?.shippingFee ?? (normalizedProducts.length > 0 ? GLOBAL_SHIPPING_FEE : 0));
+                const total = Number(sourceOrder?.cart?.total ?? (subtotal + shippingFee));
+                const totalQuantity = normalizedProducts.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+
+                return {
+                    ...sourceOrder,
+                    product: normalizedProducts[0] || {},
+                    products: normalizedProducts,
+                    cart: {
+                        ...(sourceOrder?.cart || {}),
+                        itemCount: normalizedProducts.length,
+                        totalQuantity,
+                        quantityTotal: totalQuantity,
+                        subtotal,
+                        shippingFee,
+                        total,
+                        maxItems: CART_MAX_ITEMS
+                    },
+                    delivery: {
+                        ...(sourceOrder?.delivery || payload?.delivery || {}),
+                        fullName: sourceOrder?.delivery?.fullName || transfer?.holderName || payload?.delivery?.fullName || '',
+                        email: buyerEmail
+                    },
+                    buyerEmail,
+                    customerEmail: buyerEmail,
+                    mailSettings: {
+                        ...(payload?.mailSettings || sourceOrder?.mailSettings || {}),
+                        receiverEmail: buyerEmail
+                    },
+                    saleNotification: undefined,
+                    saleNotifications: [],
+                    paymentStatus: 'Pagado',
+                    orderStatus: 'Pagado',
+                    transferId: String(transfer?.id || transfer?.transferId || payload?.transferId || '').trim()
+                };
             };
 
             const findExistingSaleCommission = async (saleId, sellerId = '') => {
@@ -3349,7 +3444,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                             ? 'Compra registrada correctamente. La confirmación fue enviada al correo del comprador.'
                             : 'Compra registrada y comprador notificado. Alguna notificación administrativa o del vendedor quedó pendiente.');
                     } else {
-                        alert(`La compra quedó registrada como Pendiente, pero no se pudo enviar la confirmación al correo del comprador. Detalle: ${buyerError?.message || 'el servidor no confirmó el envío'}`);
+                        alert('La compra quedó registrada como Pendiente, pero no fue posible enviar el correo de confirmación. Revisa que el correo capturado sea correcto o comunícate con soporte.');
                     }
 
                     clearCompletedCartIfNeeded();
@@ -3357,7 +3452,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 } catch(err) {
                     const details = getOperationErrorDetails(err);
                     console.error('Registrar transferencia:', details, err);
-                    alert(`No se pudo completar el registro o la notificación de la transferencia. Detalle: ${details.message}`);
+                    alert('No se pudo completar tu solicitud en este momento. Revisa tu conexión e intenta nuevamente.');
                 } finally {
                     setOrderSending(false);
                 }
@@ -3513,20 +3608,31 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         console.error('[Transferencias][Pagado][Correo administrativo/vendedor] Error:', getOperationErrorDetails(err), err);
                     }
 
-                    const paidBuyerEmail = String(payload?.delivery?.email || currentTransfer?.buyerEmail || '').trim();
+                    const paidBuyerEmail = getPaidTransferBuyerEmail(currentTransfer, payload);
                     const paidBuyerSameAsBaseReceiver = normalizeNotificationEmail(paidBuyerEmail) === normalizeNotificationEmail(payload?.mailSettings?.receiverEmail);
                     if (paidBuyerSameAsBaseReceiver && mailResult?.baseEmailSent !== false && !mainEmailError) {
                         buyerPaidResult = { result: mailResult, buyerEmail: paidBuyerEmail, sharedWithBaseReceiver: true };
                     } else {
                         try {
-                            buyerPaidResult = await sendBuyerOrderEmail({
-                                payload: {
+                            const buyerPaidSource = isSupermarketPaidOrder(currentTransfer, payload)
+                                ? buildSupermarketBuyerPaidSource(currentTransfer, payload, paidBuyerEmail)
+                                : {
                                     ...payload,
+                                    buyerEmail: paidBuyerEmail,
+                                    customerEmail: paidBuyerEmail,
+                                    delivery: {
+                                        ...(payload?.delivery || {}),
+                                        email: paidBuyerEmail
+                                    },
                                     paidAt: currentTransfer.paidAt
-                                },
+                                };
+                            buyerPaidResult = await sendBuyerOrderEmail({
+                                payload: buyerPaidSource,
                                 status: 'Pagado',
                                 transferId,
-                                requestId: `buyer_paid_${transferId}`
+                                requestId: isSupermarketPaidOrder(currentTransfer, payload)
+                                    ? `buyer_paid_supermercado_${transferId}`
+                                    : `buyer_paid_${transferId}`
                             });
                         } catch(err) {
                             buyerPaidError = err;
