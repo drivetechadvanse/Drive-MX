@@ -2524,6 +2524,40 @@
                 };
             };
 
+            const appendBuyerNotificationToPayload = (payload = {}, status = 'Pendiente') => {
+                const buyerEmail = String(payload?.delivery?.email || payload?.buyerEmail || payload?.customerEmail || '').trim();
+                const buyerName = String(payload?.delivery?.fullName || payload?.buyerName || payload?.customerName || '').trim();
+                const productList = Array.isArray(payload?.products) && payload.products.length > 0 ? payload.products : (payload?.product ? [payload.product] : []);
+                const productSummary = productList.map(product => `${product.name || product.id || 'Producto'} x${Number(product.quantity || product.productQuantity || 1)}`).join(', ');
+                const total = Number(payload?.cart?.total || 0);
+                const statusLabel = status === 'Pagado' ? 'Pago confirmado' : 'Solicitud recibida';
+                return {
+                    ...payload,
+                    buyerEmail,
+                    customerEmail: buyerEmail,
+                    buyerName,
+                    customerName: buyerName,
+                    orderStatus: status,
+                    notificationType: status === 'Pagado' ? 'buyer_payment_confirmation' : 'buyer_order_pending',
+                    buyerNotification: buyerEmail ? {
+                        to: buyerEmail,
+                        email: buyerEmail,
+                        name: buyerName,
+                        subject: status === 'Pagado' ? 'Pago confirmado - Drive MX' : 'Solicitud de compra recibida - Drive MX',
+                        message: `${statusLabel}.\n\nProductos: ${productSummary || 'Producto registrado'}\nTotal: $${total.toFixed(2)} MXN\n\nConserva este correo como comprobante de tu solicitud.`
+                    } : undefined,
+                    customerNotification: buyerEmail ? {
+                        to: buyerEmail,
+                        email: buyerEmail,
+                        name: buyerName,
+                        status,
+                        total,
+                        products: productList
+                    } : undefined,
+                    notificationRecipients: buyerEmail ? [buyerEmail] : []
+                };
+            };
+
             const appendSaleNotificationToPayload = (payload = {}) => {
                 const payloadProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
                 const enrichedProducts = payloadProducts.map(payloadProduct => {
@@ -3068,20 +3102,61 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
                 setOrderSending(true);
                 try {
-                    const payload = buildOrderPayload();
+                    const basePayload = buildOrderPayload();
                     const id = `TR-${Date.now()}`;
+                    const payload = appendBuyerNotificationToPayload({
+                        ...basePayload,
+                        transferId: id,
+                        paymentStatus: 'Pendiente',
+                        requestId: `pending_${id}`
+                    }, 'Pendiente');
                     await saveDoc('bank_transfers', id, {
                         transferId: id,
                         paymentMethod: 'Transferencia bancaria',
                         bankAccount: paymentSettings.bankAccount.trim(),
                         bankLegend: PAYMENT_BANK_AZTECA_ORDER_TEXT,
                         holderName: payload.delivery.fullName,
+                        buyerEmail: payload.buyerEmail || payload.delivery.email || '',
                         status: 'Pendiente',
+                        emailStatus: 'Pendiente',
                         order: payload,
                         createdAt: Date.now(),
                         updatedAt: Date.now()
                     }, { throwOnError: true, applyLocalOnError: false });
-                    alert('Transferencia registrada como Pendiente. Tu solicitud se procesará cuando el administrador confirme el pago.');
+
+                    try {
+                        const mailResult = await sendOrderEmail({
+                            ...payload,
+                            saleNotification: undefined,
+                            saleNotifications: [],
+                            requestId: `pending_${id}`
+                        }, { maxAttempts: 2 });
+                        await updateBankTransferDocument(id, {
+                            emailStatus: 'Enviado',
+                            emailSentAt: Date.now(),
+                            emailLastAttemptAt: Date.now(),
+                            emailError: '',
+                            emailErrorCode: '',
+                            emailRequestId: mailResult.requestId || `pending_${id}`,
+                            buyerNotificationSent: true
+                        });
+                        alert('Transferencia registrada como Pendiente. Enviamos la confirmación al correo del comprador.');
+                    } catch(mailError) {
+                        const details = getOperationErrorDetails(mailError);
+                        console.error('[Compra][Correo comprador] No se pudo enviar la confirmación del pedido pendiente.', details, mailError);
+                        try {
+                            await updateBankTransferDocument(id, {
+                                emailStatus: 'Error',
+                                emailLastAttemptAt: Date.now(),
+                                emailError: String(details.message || 'No se pudo enviar el correo al comprador.').slice(0, 500),
+                                emailErrorCode: String(details.code || 'BUYER_EMAIL_ERROR').slice(0, 120),
+                                buyerNotificationSent: false
+                            });
+                        } catch(statusError) {
+                            console.error('[Compra][Correo comprador] No se pudo guardar el estado del correo.', statusError);
+                        }
+                        alert('Transferencia registrada como Pendiente, pero no se pudo enviar el correo de confirmación. Verifica la configuración de correo en el Panel Admin.');
+                    }
                     clearCompletedCartIfNeeded();
                     resetPublicFlow();
                 } catch(err) {
@@ -3168,7 +3243,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     }
 
                     const storedMailSettings = currentTransfer.order.mailSettings || {};
-                    const payload = appendSaleNotificationToPayload({
+                    const payload = appendSaleNotificationToPayload(appendBuyerNotificationToPayload({
                         ...currentTransfer.order,
                         transferId,
                         paidAt: Number(currentTransfer.paidAt || requestedPaidAt),
@@ -3178,7 +3253,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                             appPassword: String(emailSettings.appPassword || storedMailSettings.appPassword || '').trim(),
                             receiverEmail: String(emailSettings.receiverEmail || storedMailSettings.receiverEmail || '').trim()
                         }
-                    });
+                    }, 'Pagado'));
                     const transferProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
                     if (transferProducts.length === 0) {
                         const error = new Error('No se encontraron productos válidos en la transferencia.');
