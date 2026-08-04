@@ -304,7 +304,7 @@ export function ProductsAdminPanel(props = {}) {
   const normalizeProductSizes = props.normalizeProductSizes || (() => []);
   const normalizeProductColors = props.normalizeProductColors || (() => []);
   const getProductGallery = props.getProductGallery || (() => []);
-  const Supermercado = globalThis.DriveMxSupermercadoModule || {};
+  const Supermercado = globalThis.DriveMxSupermercado || {};
 
   return h('div', { className: 'card-glass overflow-hidden' },
     h('div', { className: 'bg-slate-50 border-b border-slate-100 px-6 py-4 flex items-center justify-between gap-3' },
@@ -342,7 +342,10 @@ export function ProductsAdminPanel(props = {}) {
             h('button', { type: 'button', onClick: () => props.removeNewProductImage?.(index), className: 'absolute inset-x-2 bottom-2 bg-red-500 text-white rounded-lg px-2 py-1 text-[7px] font-black uppercase' }, 'Quitar')
           ))
         ) : null,
-        Supermercado.ProductCategorySelector ? h(Supermercado.ProductCategorySelector, { id: 'drive-mx-admin-product-category', form: productForm, setForm: setProductForm }) : null,
+        Supermercado.ProductCategorySelect ? h(Supermercado.ProductCategorySelect, {
+          value: productForm.category || '',
+          onChange: (category) => setProductForm((previous) => ({ ...previous, category }))
+        }) : null,
         h('input', { required: true, className: 'input-field md:col-span-2', placeholder: 'NOMBRE', value: productForm.name || '', onChange: (e) => setProductForm({ ...productForm, name: e.target.value }) }),
         h('input', { required: true, type: 'number', min: '0', step: '0.01', className: 'input-field', placeholder: 'PRECIO', value: productForm.price ?? '', onChange: (e) => setProductForm({ ...productForm, price: e.target.value }) }),
         h('input', { required: true, type: 'number', min: '0', step: '1', className: 'input-field', placeholder: 'INVENTARIO', value: productForm.stock ?? '', onChange: (e) => setProductForm({ ...productForm, stock: e.target.value }) }),
