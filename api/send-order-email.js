@@ -1,4 +1,5 @@
 const nodemailer = require("nodemailer");
+const SupermercadoEmail = require("../supermercado-module/supermercado-email.js");
 
 const SALE_NOTIFICATION_MESSAGE =
   "Tu producto ha sido vendido. Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.";
@@ -68,7 +69,7 @@ function normalizeProducts(product = {}, products = []) {
       const lineTotal = roundMoney(
         item.lineTotal ?? item.totalPrice ?? item.productTotal ?? item.productCost ?? unitPrice * quantity
       );
-      return {
+      return SupermercadoEmail.copyCategory({
         id: clean(item.id),
         name: clean(item.name),
         price: unitPrice,
@@ -89,7 +90,7 @@ function normalizeProducts(product = {}, products = []) {
         saleNotificationEmail: clean(item.saleNotificationEmail),
         notificationEmail: clean(item.notificationEmail),
         ownerNotificationEmail: clean(item.ownerNotificationEmail),
-      };
+      }, item);
     })
     .filter((item) => item.id && item.name);
 }
@@ -556,18 +557,79 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    if (saleNotificationErrors.length > 0) {
+    const supermarketBuyerNotification = SupermercadoEmail.buildBuyerNotification({
+      orderProducts,
+      delivery,
+      cart: {
+        ...cart,
+        subtotal: orderSubtotal,
+        shippingFee: orderShippingFee,
+        total: orderTotal,
+      },
+      transferId,
+      paymentStatus,
+    });
+    const supermarketBuyerNotificationRequired = Boolean(supermarketBuyerNotification);
+    let supermarketBuyerNotificationSent = false;
+    let supermarketBuyerNotificationCount = 0;
+    let supermarketBuyerNotificationError = null;
+
+    if (supermarketBuyerNotification) {
+      stage = "notificacion-comprador-supermercado";
+      try {
+        const buyerInfo = await transporter.sendMail({
+          from: `"Drive MX" <${senderEmail}>`,
+          to: supermarketBuyerNotification.to,
+          subject: supermarketBuyerNotification.subject,
+          text: supermarketBuyerNotification.text,
+          html: supermarketBuyerNotification.html,
+          replyTo: receiverEmail,
+        });
+        supermarketBuyerNotificationSent = true;
+        supermarketBuyerNotificationCount = 1;
+        console.info("[send-order-email] Confirmación de Supermercado enviada al comprador.", {
+          requestId,
+          recipient: maskEmail(supermarketBuyerNotification.to),
+          productCount: supermarketBuyerNotification.productCount,
+          messageId: clean(buyerInfo?.messageId),
+        });
+      } catch (buyerError) {
+        supermarketBuyerNotificationError = mailErrorDetails(buyerError);
+        console.error("[send-order-email] Error enviando confirmación de Supermercado al comprador.", {
+          requestId,
+          recipient: maskEmail(supermarketBuyerNotification.to),
+          ...supermarketBuyerNotificationError,
+        }, buyerError);
+      }
+    }
+
+    if (saleNotificationErrors.length > 0 || supermarketBuyerNotificationError) {
+      const bothFailed = saleNotificationErrors.length > 0 && Boolean(supermarketBuyerNotificationError);
+      const code = bothFailed
+        ? "SALE_AND_SUPERMARKET_BUYER_NOTIFICATION_PARTIAL_FAILURE"
+        : saleNotificationErrors.length > 0
+          ? "SALE_NOTIFICATION_PARTIAL_FAILURE"
+          : "SUPERMARKET_BUYER_NOTIFICATION_FAILURE";
+      const error = bothFailed
+        ? "La compra fue notificada al correo base, pero fallaron notificaciones de venta y la confirmación de Supermercado al comprador."
+        : saleNotificationErrors.length > 0
+          ? "La compra fue notificada al correo base, pero falló una o más notificaciones de venta."
+          : "La compra fue notificada al correo base y a los vendedores, pero falló la confirmación de Supermercado al comprador.";
       return res.status(502).json({
         success: false,
         partialSuccess: true,
         requestId,
         stage,
-        code: "SALE_NOTIFICATION_PARTIAL_FAILURE",
+        code,
         baseEmailSent,
         baseMessageId,
         saleNotificationCount,
         saleNotificationErrors,
-        error: "La compra fue notificada al correo base, pero falló una o más notificaciones de venta.",
+        supermarketBuyerNotificationRequired,
+        supermarketBuyerNotificationSent,
+        supermarketBuyerNotificationCount,
+        supermarketBuyerNotificationError,
+        error,
       });
     }
 
@@ -580,6 +642,10 @@ module.exports = async function handler(req, res) {
       saleNotificationSent: saleNotificationCount > 0,
       saleNotificationCount,
       saleNotificationError: "",
+      supermarketBuyerNotificationRequired,
+      supermarketBuyerNotificationSent,
+      supermarketBuyerNotificationCount,
+      supermarketBuyerNotificationError: null,
     });
   } catch (error) {
     const details = mailErrorDetails(error);
