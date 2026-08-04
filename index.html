@@ -2524,40 +2524,6 @@
                 };
             };
 
-            const appendBuyerNotificationToPayload = (payload = {}, status = 'Pendiente') => {
-                const buyerEmail = String(payload?.delivery?.email || payload?.buyerEmail || payload?.customerEmail || '').trim();
-                const buyerName = String(payload?.delivery?.fullName || payload?.buyerName || payload?.customerName || '').trim();
-                const productList = Array.isArray(payload?.products) && payload.products.length > 0 ? payload.products : (payload?.product ? [payload.product] : []);
-                const productSummary = productList.map(product => `${product.name || product.id || 'Producto'} x${Number(product.quantity || product.productQuantity || 1)}`).join(', ');
-                const total = Number(payload?.cart?.total || 0);
-                const statusLabel = status === 'Pagado' ? 'Pago confirmado' : 'Solicitud recibida';
-                return {
-                    ...payload,
-                    buyerEmail,
-                    customerEmail: buyerEmail,
-                    buyerName,
-                    customerName: buyerName,
-                    orderStatus: status,
-                    notificationType: status === 'Pagado' ? 'buyer_payment_confirmation' : 'buyer_order_pending',
-                    buyerNotification: buyerEmail ? {
-                        to: buyerEmail,
-                        email: buyerEmail,
-                        name: buyerName,
-                        subject: status === 'Pagado' ? 'Pago confirmado - Drive MX' : 'Solicitud de compra recibida - Drive MX',
-                        message: `${statusLabel}.\n\nProductos: ${productSummary || 'Producto registrado'}\nTotal: $${total.toFixed(2)} MXN\n\nConserva este correo como comprobante de tu solicitud.`
-                    } : undefined,
-                    customerNotification: buyerEmail ? {
-                        to: buyerEmail,
-                        email: buyerEmail,
-                        name: buyerName,
-                        status,
-                        total,
-                        products: productList
-                    } : undefined,
-                    notificationRecipients: buyerEmail ? [buyerEmail] : []
-                };
-            };
-
             const appendSaleNotificationToPayload = (payload = {}) => {
                 const payloadProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
                 const enrichedProducts = payloadProducts.map(payloadProduct => {
@@ -2629,6 +2595,54 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     cart: { ...(payload.cart || {}), itemCount: enrichedProducts.length, totalQuantity: enrichedQuantityTotal, quantityTotal: enrichedQuantityTotal, subtotal: enrichedSubtotal, shippingFee: enrichedShippingFee, total: enrichedTotal, maxItems: CART_MAX_ITEMS },
                     saleNotification: saleNotifications[0] || undefined,
                     saleNotifications
+                };
+            };
+
+
+            const appendPendingPurchaseNotificationsToPayload = (payload = {}, transferId = '') => {
+                const enrichedPayload = appendSaleNotificationToPayload({
+                    ...payload,
+                    transferId: transferId || payload.transferId || '',
+                    paymentStatus: 'Pendiente',
+                    orderStatus: 'Pendiente',
+                    notificationType: 'purchase_pending'
+                });
+                const buyerName = String(enrichedPayload?.delivery?.fullName || '').trim();
+                const buyerEmail = String(enrichedPayload?.delivery?.email || '').trim();
+                const buyerPhone = String(enrichedPayload?.delivery?.phone || '').trim();
+                const baseReceiver = String(enrichedPayload?.mailSettings?.receiverEmail || '').trim().toLowerCase();
+                const seenRecipients = new Set();
+                const pendingNotifications = (Array.isArray(enrichedPayload.products) ? enrichedPayload.products : [])
+                    .map(product => {
+                        const to = String(product.sellerNotificationEmail || product.saleNotificationEmail || product.ownerEmail || '').trim();
+                        const normalizedTo = to.toLowerCase();
+                        if (!to || normalizedTo === baseReceiver || seenRecipients.has(normalizedTo)) return null;
+                        seenRecipients.add(normalizedTo);
+                        const quantity = Math.max(1, Math.floor(Number(product.quantity || product.productQuantity || 1)) || 1);
+                        const unitPrice = Number(product.unitPrice ?? product.productUnitPrice ?? product.price ?? 0);
+                        const lineTotal = Number(product.lineTotal ?? product.totalPrice ?? product.productTotal ?? (unitPrice * quantity) ?? 0);
+                        const options = productOptionsLines(product);
+                        return {
+                            to,
+                            subject: 'Nueva solicitud de compra pendiente - Drive MX',
+                            message: `Se ha realizado una nueva solicitud de compra pendiente de pago.\n\nProducto: ${product.name || ''}\nCantidad: ${quantity}\nPrecio unitario: $${unitPrice.toFixed(2)}\nTotal producto: $${lineTotal.toFixed(2)}${options.length ? `\n${options.join('\n')}` : ''}\n\nComprador: ${buyerName || 'Sin nombre'}\nCorreo: ${buyerEmail || 'Sin correo'}\nTeléfono: ${buyerPhone || 'Sin teléfono'}\nID de transferencia: ${transferId || enrichedPayload.transferId || ''}\n\nNo entregues el producto hasta que el administrador confirme el pago.`,
+                            sellerName: product.ownerName || '',
+                            productName: product.name || '',
+                            productId: product.id || '',
+                            productQuantity: quantity,
+                            productUnitPrice: unitPrice,
+                            productTotal: lineTotal,
+                            productPrice: lineTotal,
+                            notificationType: 'purchase_pending'
+                        };
+                    })
+                    .filter(Boolean);
+                return {
+                    ...enrichedPayload,
+                    saleNotification: pendingNotifications[0] || undefined,
+                    saleNotifications: pendingNotifications,
+                    pendingPurchaseNotification: true,
+                    pendingPurchaseNotificationCount: pendingNotifications.length
                 };
             };
 
@@ -3104,59 +3118,91 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 try {
                     const basePayload = buildOrderPayload();
                     const id = `TR-${Date.now()}`;
-                    const payload = appendBuyerNotificationToPayload({
+                    const payload = {
                         ...basePayload,
                         transferId: id,
                         paymentStatus: 'Pendiente',
+                        orderStatus: 'Pendiente',
                         requestId: `pending_${id}`
-                    }, 'Pendiente');
+                    };
                     await saveDoc('bank_transfers', id, {
                         transferId: id,
                         paymentMethod: 'Transferencia bancaria',
                         bankAccount: paymentSettings.bankAccount.trim(),
                         bankLegend: PAYMENT_BANK_AZTECA_ORDER_TEXT,
                         holderName: payload.delivery.fullName,
-                        buyerEmail: payload.buyerEmail || payload.delivery.email || '',
+                        buyerEmail: payload.delivery.email || '',
                         status: 'Pendiente',
                         emailStatus: 'Pendiente',
+                        pendingEmailStatus: 'Pendiente',
                         order: payload,
                         createdAt: Date.now(),
                         updatedAt: Date.now()
                     }, { throwOnError: true, applyLocalOnError: false });
 
                     try {
+                        const configuredMail = payload.mailSettings || {};
+                        if (!configuredMail.senderEmail || !configuredMail.appPassword || !configuredMail.receiverEmail) {
+                            const configurationError = new Error('Falta configurar el correo remitente, la contraseña de aplicación o el correo receptor en el Panel Admin.');
+                            configurationError.code = 'EMAIL_SETTINGS_INCOMPLETE';
+                            throw configurationError;
+                        }
+
+                        const pendingEmailPayload = appendPendingPurchaseNotificationsToPayload(payload, id);
                         const mailResult = await sendOrderEmail({
-                            ...payload,
-                            saleNotification: undefined,
-                            saleNotifications: [],
+                            ...pendingEmailPayload,
                             requestId: `pending_${id}`
                         }, { maxAttempts: 2 });
-                        await updateBankTransferDocument(id, {
-                            emailStatus: 'Enviado',
-                            emailSentAt: Date.now(),
-                            emailLastAttemptAt: Date.now(),
-                            emailError: '',
-                            emailErrorCode: '',
-                            emailRequestId: mailResult.requestId || `pending_${id}`,
-                            buyerNotificationSent: true
-                        });
-                        alert('Transferencia registrada como Pendiente. Enviamos la confirmación al correo del comprador.');
+                        const expectedSellerNotifications = pendingEmailPayload.saleNotifications.length;
+                        const sentSellerNotifications = Number(mailResult.saleNotificationCount || 0);
+                        const partialNotification = Boolean(mailResult.saleNotificationError) || sentSellerNotifications < expectedSellerNotifications;
+                        const emailSentAt = Date.now();
+                        let emailStatusSaved = true;
+
+                        try {
+                            await updateBankTransferDocument(id, {
+                                emailStatus: partialNotification ? 'Parcial' : 'Enviado',
+                                pendingEmailStatus: partialNotification ? 'Parcial' : 'Enviado',
+                                emailSentAt,
+                                pendingEmailSentAt: emailSentAt,
+                                emailLastAttemptAt: emailSentAt,
+                                emailError: partialNotification ? String(mailResult.saleNotificationError || 'El correo principal fue enviado, pero una notificación al vendedor no pudo confirmarse.').slice(0, 500) : '',
+                                emailErrorCode: partialNotification ? 'PENDING_SELLER_NOTIFICATION_PARTIAL' : '',
+                                emailRequestId: mailResult.requestId || `pending_${id}`,
+                                emailBaseSent: mailResult.baseEmailSent !== false,
+                                emailSaleNotificationCount: sentSellerNotifications,
+                                pendingSellerNotificationExpected: expectedSellerNotifications,
+                                pendingSellerNotificationSent: sentSellerNotifications
+                            });
+                        } catch(statusError) {
+                            emailStatusSaved = false;
+                            console.error('[Compra][Correo] Gmail fue enviado, pero no se pudo guardar su estado en Firestore.', statusError);
+                        }
+
+                        if (!emailStatusSaved) {
+                            alert('Compra registrada y notificación por Gmail enviada, pero no se pudo guardar el estado del correo en Firestore.');
+                        } else {
+                            alert(partialNotification
+                                ? 'Compra registrada y correo principal enviado, pero una notificación al vendedor quedó pendiente.'
+                                : 'Compra registrada correctamente. La notificación por Gmail fue enviada.');
+                        }
                     } catch(mailError) {
                         const details = getOperationErrorDetails(mailError);
-                        console.error('[Compra][Correo comprador] No se pudo enviar la confirmación del pedido pendiente.', details, mailError);
+                        console.error('[Compra][Correo] No se pudo enviar la notificación de la compra pendiente.', details, mailError);
                         try {
                             await updateBankTransferDocument(id, {
                                 emailStatus: 'Error',
+                                pendingEmailStatus: 'Error',
                                 emailLastAttemptAt: Date.now(),
-                                emailError: String(details.message || 'No se pudo enviar el correo al comprador.').slice(0, 500),
-                                emailErrorCode: String(details.code || 'BUYER_EMAIL_ERROR').slice(0, 120),
-                                buyerNotificationSent: false
+                                emailError: String(details.message || 'No se pudo enviar la notificación por Gmail.').slice(0, 500),
+                                emailErrorCode: String(details.code || 'PENDING_PURCHASE_EMAIL_ERROR').slice(0, 120)
                             });
                         } catch(statusError) {
-                            console.error('[Compra][Correo comprador] No se pudo guardar el estado del correo.', statusError);
+                            console.error('[Compra][Correo] No se pudo guardar el estado del error de Gmail.', statusError);
                         }
-                        alert('Transferencia registrada como Pendiente, pero no se pudo enviar el correo de confirmación. Verifica la configuración de correo en el Panel Admin.');
+                        alert(`La compra quedó registrada como Pendiente, pero no se pudo enviar la notificación por Gmail. Detalle: ${details.message}`);
                     }
+
                     clearCompletedCartIfNeeded();
                     resetPublicFlow();
                 } catch(err) {
@@ -3243,7 +3289,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     }
 
                     const storedMailSettings = currentTransfer.order.mailSettings || {};
-                    const payload = appendSaleNotificationToPayload(appendBuyerNotificationToPayload({
+                    const payload = appendSaleNotificationToPayload({
                         ...currentTransfer.order,
                         transferId,
                         paidAt: Number(currentTransfer.paidAt || requestedPaidAt),
@@ -3253,7 +3299,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                             appPassword: String(emailSettings.appPassword || storedMailSettings.appPassword || '').trim(),
                             receiverEmail: String(emailSettings.receiverEmail || storedMailSettings.receiverEmail || '').trim()
                         }
-                    }, 'Pagado'));
+                    });
                     const transferProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
                     if (transferProducts.length === 0) {
                         const error = new Error('No se encontraron productos válidos en la transferencia.');
