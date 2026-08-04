@@ -60,6 +60,7 @@
         import "./password-reset/password-reset.js";
         import "./ads-manager/ads-manager.js";
         import "./home-products/home-products.js";
+        import "./supermercado-module/supermercado-module.js";
         import "./product-details/product-details.js";
         import "./panel-control/panel-control.js";
         
@@ -87,6 +88,7 @@
         const UsersUI = window.DriveMxUsersUI;
         const AdsManager = window.DriveMxAdsManager;
         const HomeProducts = window.DriveMxHomeProducts || {};
+        const Supermercado = window.DriveMxSupermercadoModule;
         const ProductDetails = window.DriveMxProductDetails || {};
         const PanelControlUI = window.DriveMxPanelControlUI;
         
@@ -290,7 +292,7 @@
             const [userRegistrationSaving, setUserRegistrationSaving] = useState(false);
             const [editingRegisteredUserId, setEditingRegisteredUserId] = useState(null);
             const [registeredUsersPage, setRegisteredUsersPage] = useState(1);
-            const [productForm, setProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], colors: [''], images: [], image: '', imageUrl: '', active: true });
+            const [productForm, setProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], colors: [''], images: [], image: '', imageUrl: '', active: true, ...Supermercado.getCategoryFields() });
             const [productImageFiles, setProductImageFiles] = useState([]);
             const [productUploading, setProductUploading] = useState(false);
             const [editingProductId, setEditingProductId] = useState(null);
@@ -323,7 +325,7 @@
             const [assignmentsUnlocking, setAssignmentsUnlocking] = useState(false);
             const [saleNotificationEmail, setSaleNotificationEmail] = useState('');
             const [saleNotificationSaving, setSaleNotificationSaving] = useState(false);
-            const [userProductForm, setUserProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], colors: [''], images: [], image: '', imageUrl: '', active: true });
+            const [userProductForm, setUserProductForm] = useState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], colors: [''], images: [], image: '', imageUrl: '', active: true, ...Supermercado.getCategoryFields() });
             const [userProductImageFiles, setUserProductImageFiles] = useState([]);
             const [userProductUploading, setUserProductUploading] = useState(false);
             const [editingUserProductId, setEditingUserProductId] = useState(null);
@@ -1244,7 +1246,7 @@
             };
 
             const resetProductForm = () => {
-                setProductForm({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], colors: [''], images: [], image: '', imageUrl: '', active: true });
+                setProductForm({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], colors: [''], images: [], image: '', imageUrl: '', active: true, ...Supermercado.getCategoryFields() });
                 productImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
                 setProductImageFiles([]);
                 setProductUploading(false);
@@ -1252,7 +1254,7 @@
             };
 
             const resetUserProductForm = () => {
-                setUserProductForm({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], colors: [''], images: [], image: '', imageUrl: '', active: true });
+                setUserProductForm({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], colors: [''], images: [], image: '', imageUrl: '', active: true, ...Supermercado.getCategoryFields() });
                 userProductImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
                 setUserProductImageFiles([]);
                 setUserProductUploading(false);
@@ -1358,6 +1360,7 @@
                         image: mainImage,
                         imageUrl: mainImage,
                         active: Boolean(productForm.active),
+                        ...Supermercado.getCategoryFields(productForm),
                         publicationType: PRODUCT_ORIGIN_CONTROL,
                         sourcePanel: PRODUCT_ORIGIN_CONTROL,
                         ownerId: '',
@@ -1399,7 +1402,8 @@
                     images,
                     image: images[0] || '',
                     imageUrl: images[0] || '',
-                    active: product.active !== false
+                    active: product.active !== false,
+                    ...Supermercado.getCategoryFields(product)
                 });
                 productImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
                 setProductImageFiles([]);
@@ -1535,6 +1539,7 @@
                         image: mainImage,
                         imageUrl: mainImage,
                         active: Boolean(userProductForm.active),
+                        ...Supermercado.getCategoryFields(userProductForm),
                         ownerId,
                         ownerName: sessionUser?.name || '',
                         ownerEmail: sessionUser?.email || '',
@@ -1578,7 +1583,8 @@
                     images,
                     image: images[0] || '',
                     imageUrl: images[0] || '',
-                    active: product.active !== false
+                    active: product.active !== false,
+                    ...Supermercado.getCategoryFields(product)
                 });
                 userProductImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
                 setUserProductImageFiles([]);
@@ -1661,6 +1667,7 @@
             const pendingSalesTransfers = (Array.isArray(pendingTransfers) ? pendingTransfers : [])
                 .filter((transfer) => transfer.type !== 'wallet_recharge');
             const activeProducts = products.filter(p => p.active !== false);
+            const homeProductGroups = Supermercado.partitionProducts(activeProducts);
             const activeAds = AdsManager.getActiveAds(ads);
             const findProductById = (productId) => products.find(p => String(p.id) === String(productId));
             const selectedProduct = findProductById(selectedProductId);
@@ -3786,6 +3793,12 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     </div>
                                 )}
 
+                                <Supermercado.ProductCategorySelector
+                                    id="drive-mx-user-product-category"
+                                    form={userProductForm}
+                                    setForm={setUserProductForm}
+                                />
+
                                 <input required className="input-field md:col-span-2" placeholder="NOMBRE" value={userProductForm.name} onChange={e => setUserProductForm({...userProductForm, name: e.target.value})} />
                                 <input required type="number" min="0" step="0.01" className="input-field" placeholder="PRECIO" value={userProductForm.price} onChange={e => setUserProductForm({...userProductForm, price: e.target.value})} />
                                 <input required type="number" min="0" step="1" className="input-field" placeholder="INVENTARIO" value={userProductForm.stock} onChange={e => setUserProductForm({...userProductForm, stock: e.target.value})} />
@@ -3978,12 +3991,18 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
 
                                         {HomeProducts.HomeProductsSection && (
                                             <HomeProducts.HomeProductsSection
-                                                products={activeProducts}
+                                                products={homeProductGroups.standard}
                                                 ads={ads}
                                                 getProductGallery={getProductGallery}
                                                 onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(1); setCurrentImageIndex(0); setView('product-detail'); }}
                                             />
                                         )}
+
+                                        <Supermercado.SupermarketSection
+                                            products={homeProductGroups.supermarket}
+                                            getProductGallery={getProductGallery}
+                                            onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(1); setCurrentImageIndex(0); setView('product-detail'); }}
+                                        />
                                     </div>
                                 
                             </div>
