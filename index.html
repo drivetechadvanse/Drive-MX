@@ -2646,6 +2646,123 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 };
             };
 
+            const normalizeNotificationEmail = (value = '') => String(value || '').trim().toLowerCase();
+
+            // El endpoint antiguo de /api/send-order-email obtiene automáticamente los
+            // destinatarios de vendedor desde cada producto. Para un correo exclusivo al
+            // comprador deben limpiarse esos campos; de lo contrario un correo de vendedor
+            // inválido puede cancelar el envío antes de que Gmail contacte al comprador.
+            const stripSellerNotificationFields = (product = {}) => ({
+                ...(product || {}),
+                sellerNotificationEmail: '',
+                saleNotificationEmail: '',
+                notificationEmail: '',
+                ownerNotificationEmail: ''
+            });
+
+            const buildBuyerEmailPayload = (payload = {}, options = {}) => {
+                const status = String(options.status || payload.paymentStatus || payload.orderStatus || 'Pendiente');
+                const transferId = String(options.transferId || payload.transferId || '').trim();
+                const requestId = String(options.requestId || payload.requestId || `${status.toLowerCase() === 'pagado' ? 'buyer_paid' : 'buyer_pending'}_${transferId || Date.now()}`).trim();
+                const buyerEmail = String(payload?.delivery?.email || payload?.buyerEmail || payload?.customerEmail || '').trim();
+                const buyerName = String(payload?.delivery?.fullName || payload?.buyerName || payload?.customerName || '').trim();
+                const buyerPhone = String(payload?.delivery?.phone || payload?.buyerPhone || payload?.customerPhone || '').trim();
+                const sourceMailSettings = payload?.mailSettings || {};
+                const sourceProducts = Array.isArray(payload?.products) && payload.products.length > 0
+                    ? payload.products
+                    : (payload?.product ? [payload.product] : []);
+                const buyerProducts = sourceProducts.map(stripSellerNotificationFields);
+                const buyerProduct = buyerProducts[0] || stripSellerNotificationFields(payload?.product || {});
+                const total = Number(payload?.cart?.total || 0);
+                const productSummary = buyerProducts
+                    .map(product => `${product.name || product.id || 'Producto'} x${Math.max(1, Math.floor(Number(product.quantity || product.productQuantity || 1)) || 1)}`)
+                    .join(', ');
+
+                if (!buyerEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(buyerEmail)) {
+                    const error = new Error('El correo electrónico del comprador no es válido.');
+                    error.code = 'BUYER_EMAIL_INVALID';
+                    throw error;
+                }
+                if (!String(sourceMailSettings.senderEmail || '').trim() || !String(sourceMailSettings.appPassword || '').trim()) {
+                    const error = new Error('Falta configurar el Gmail remitente o la contraseña de aplicación en el Panel Admin.');
+                    error.code = 'EMAIL_SETTINGS_INCOMPLETE';
+                    throw error;
+                }
+                if (buyerProducts.length === 0 || !buyerProduct?.id || !buyerProduct?.name) {
+                    const error = new Error('No se encontraron productos válidos para generar el correo del comprador.');
+                    error.code = 'BUYER_EMAIL_PRODUCTS_MISSING';
+                    throw error;
+                }
+
+                const paid = status.toLowerCase() === 'pagado';
+                const subject = paid ? 'Pago confirmado - Drive MX' : 'Solicitud de compra recibida - Drive MX';
+                const message = paid
+                    ? `Hola ${buyerName || 'cliente'}, tu pago fue confirmado.\n\nProductos: ${productSummary || 'Producto registrado'}\nTotal: $${total.toFixed(2)} MXN\nID de transferencia: ${transferId}\n\nConserva este correo como comprobante de tu compra.`
+                    : `Hola ${buyerName || 'cliente'}, recibimos tu solicitud de compra.\n\nProductos: ${productSummary || 'Producto registrado'}\nTotal: $${total.toFixed(2)} MXN\nID de transferencia: ${transferId}\nEstado: Pendiente de confirmación de pago.\n\nConserva este correo como comprobante de tu solicitud.`;
+
+                return {
+                    ...payload,
+                    product: buyerProduct,
+                    products: buyerProducts,
+                    transferId,
+                    requestId,
+                    paymentStatus: status,
+                    orderStatus: status,
+                    notificationType: paid ? 'buyer_payment_confirmation' : 'buyer_order_pending',
+                    emailAudience: 'buyer',
+                    buyerEmail,
+                    customerEmail: buyerEmail,
+                    buyerName,
+                    customerName: buyerName,
+                    buyerPhone,
+                    customerPhone: buyerPhone,
+                    // Se incluyen varios nombres por compatibilidad con las versiones del endpoint.
+                    to: buyerEmail,
+                    email: buyerEmail,
+                    recipientEmail: buyerEmail,
+                    receiverEmail: buyerEmail,
+                    originalReceiverEmail: String(sourceMailSettings.receiverEmail || '').trim(),
+                    mailSettings: {
+                        ...sourceMailSettings,
+                        receiverEmail: buyerEmail
+                    },
+                    buyerNotification: {
+                        to: buyerEmail,
+                        email: buyerEmail,
+                        name: buyerName,
+                        subject,
+                        message
+                    },
+                    customerNotification: {
+                        to: buyerEmail,
+                        email: buyerEmail,
+                        name: buyerName,
+                        subject,
+                        message,
+                        status,
+                        total,
+                        products: buyerProducts
+                    },
+                    notificationRecipients: [buyerEmail],
+                    // El envío al comprador es independiente; no deben heredarse destinatarios
+                    // de venta porque el endpoint también los infiere desde los productos.
+                    saleNotification: undefined,
+                    saleNotifications: []
+                };
+            };
+
+            const sendBuyerOrderEmail = async ({ payload = {}, status = 'Pendiente', transferId = '', requestId = '' } = {}) => {
+                const buyerPayload = buildBuyerEmailPayload(payload, { status, transferId, requestId });
+                const result = await sendOrderEmail(buyerPayload, { maxAttempts: 2 });
+                if (!result || result.success === false || result.baseEmailSent === false) {
+                    const error = new Error('El servidor respondió, pero no confirmó el envío del correo al comprador.');
+                    error.code = 'BUYER_EMAIL_NOT_CONFIRMED';
+                    error.responseData = result || {};
+                    throw error;
+                }
+                return { result, buyerPayload, buyerEmail: buyerPayload.buyerEmail };
+            };
+
             const findExistingSaleCommission = async (saleId, sellerId = '') => {
                 const safeSaleId = String(saleId || '').trim();
                 const safeSellerId = Wallet.getUserWalletId(sellerId || '');
@@ -3125,89 +3242,122 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         orderStatus: 'Pendiente',
                         requestId: `pending_${id}`
                     };
+                    const buyerEmail = String(payload?.delivery?.email || '').trim();
                     await saveDoc('bank_transfers', id, {
                         transferId: id,
                         paymentMethod: 'Transferencia bancaria',
                         bankAccount: paymentSettings.bankAccount.trim(),
                         bankLegend: PAYMENT_BANK_AZTECA_ORDER_TEXT,
                         holderName: payload.delivery.fullName,
-                        buyerEmail: payload.delivery.email || '',
+                        buyerEmail,
                         status: 'Pendiente',
                         emailStatus: 'Pendiente',
                         pendingEmailStatus: 'Pendiente',
+                        buyerEmailStatus: 'Pendiente',
+                        buyerNotificationSent: false,
                         order: payload,
                         createdAt: Date.now(),
                         updatedAt: Date.now()
                     }, { throwOnError: true, applyLocalOnError: false });
 
-                    try {
-                        const configuredMail = payload.mailSettings || {};
-                        if (!configuredMail.senderEmail || !configuredMail.appPassword || !configuredMail.receiverEmail) {
-                            const configurationError = new Error('Falta configurar el correo remitente, la contraseña de aplicación o el correo receptor en el Panel Admin.');
-                            configurationError.code = 'EMAIL_SETTINGS_INCOMPLETE';
-                            throw configurationError;
-                        }
+                    const configuredMail = payload.mailSettings || {};
+                    if (!configuredMail.senderEmail || !configuredMail.appPassword || !configuredMail.receiverEmail) {
+                        const configurationError = new Error('Falta configurar el correo remitente, la contraseña de aplicación o el correo receptor en el Panel Admin.');
+                        configurationError.code = 'EMAIL_SETTINGS_INCOMPLETE';
+                        throw configurationError;
+                    }
 
-                        const pendingEmailPayload = appendPendingPurchaseNotificationsToPayload(payload, id);
-                        const mailResult = await sendOrderEmail({
+                    const pendingEmailPayload = appendPendingPurchaseNotificationsToPayload(payload, id);
+                    let adminSellerResult = null;
+                    let adminSellerError = null;
+                    let buyerResult = null;
+                    let buyerError = null;
+
+                    try {
+                        adminSellerResult = await sendOrderEmail({
                             ...pendingEmailPayload,
                             requestId: `pending_${id}`
                         }, { maxAttempts: 2 });
-                        const expectedSellerNotifications = pendingEmailPayload.saleNotifications.length;
-                        const sentSellerNotifications = Number(mailResult.saleNotificationCount || 0);
-                        const partialNotification = Boolean(mailResult.saleNotificationError) || sentSellerNotifications < expectedSellerNotifications;
-                        const emailSentAt = Date.now();
-                        let emailStatusSaved = true;
+                    } catch(err) {
+                        adminSellerError = err;
+                        console.error('[Compra][Correo administrativo/vendedor] No se pudo completar el envío.', getOperationErrorDetails(err), err);
+                    }
 
+                    const buyerSameAsBaseReceiver = normalizeNotificationEmail(buyerEmail) === normalizeNotificationEmail(configuredMail.receiverEmail);
+                    if (buyerSameAsBaseReceiver && adminSellerResult?.baseEmailSent !== false && !adminSellerError) {
+                        buyerResult = { result: adminSellerResult, buyerEmail, sharedWithBaseReceiver: true };
+                    } else {
                         try {
-                            await updateBankTransferDocument(id, {
-                                emailStatus: partialNotification ? 'Parcial' : 'Enviado',
-                                pendingEmailStatus: partialNotification ? 'Parcial' : 'Enviado',
-                                emailSentAt,
-                                pendingEmailSentAt: emailSentAt,
-                                emailLastAttemptAt: emailSentAt,
-                                emailError: partialNotification ? String(mailResult.saleNotificationError || 'El correo principal fue enviado, pero una notificación al vendedor no pudo confirmarse.').slice(0, 500) : '',
-                                emailErrorCode: partialNotification ? 'PENDING_SELLER_NOTIFICATION_PARTIAL' : '',
-                                emailRequestId: mailResult.requestId || `pending_${id}`,
-                                emailBaseSent: mailResult.baseEmailSent !== false,
-                                emailSaleNotificationCount: sentSellerNotifications,
-                                pendingSellerNotificationExpected: expectedSellerNotifications,
-                                pendingSellerNotificationSent: sentSellerNotifications
+                            buyerResult = await sendBuyerOrderEmail({
+                                payload,
+                                status: 'Pendiente',
+                                transferId: id,
+                                requestId: `buyer_pending_${id}`
                             });
-                        } catch(statusError) {
-                            emailStatusSaved = false;
-                            console.error('[Compra][Correo] Gmail fue enviado, pero no se pudo guardar su estado en Firestore.', statusError);
+                        } catch(err) {
+                            buyerError = err;
+                            console.error('[Compra][Correo comprador] No se pudo enviar la confirmación al comprador.', getOperationErrorDetails(err), err);
                         }
+                    }
 
-                        if (!emailStatusSaved) {
-                            alert('Compra registrada y notificación por Gmail enviada, pero no se pudo guardar el estado del correo en Firestore.');
-                        } else {
-                            alert(partialNotification
-                                ? 'Compra registrada y correo principal enviado, pero una notificación al vendedor quedó pendiente.'
-                                : 'Compra registrada correctamente. La notificación por Gmail fue enviada.');
-                        }
-                    } catch(mailError) {
-                        const details = getOperationErrorDetails(mailError);
-                        console.error('[Compra][Correo] No se pudo enviar la notificación de la compra pendiente.', details, mailError);
-                        try {
-                            await updateBankTransferDocument(id, {
-                                emailStatus: 'Error',
-                                pendingEmailStatus: 'Error',
-                                emailLastAttemptAt: Date.now(),
-                                emailError: String(details.message || 'No se pudo enviar la notificación por Gmail.').slice(0, 500),
-                                emailErrorCode: String(details.code || 'PENDING_PURCHASE_EMAIL_ERROR').slice(0, 120)
-                            });
-                        } catch(statusError) {
-                            console.error('[Compra][Correo] No se pudo guardar el estado del error de Gmail.', statusError);
-                        }
-                        alert(`La compra quedó registrada como Pendiente, pero no se pudo enviar la notificación por Gmail. Detalle: ${details.message}`);
+                    const expectedSellerNotifications = pendingEmailPayload.saleNotifications.length;
+                    const sentSellerNotifications = Number(adminSellerResult?.saleNotificationCount || 0);
+                    const adminBaseSent = Boolean(adminSellerResult && adminSellerResult.baseEmailSent !== false && !adminSellerError);
+                    const sellerNotificationsComplete = !adminSellerError
+                        && !adminSellerResult?.saleNotificationError
+                        && sentSellerNotifications >= expectedSellerNotifications;
+                    const buyerNotificationSent = Boolean(buyerResult && !buyerError && buyerResult.result?.baseEmailSent !== false);
+                    const anyEmailSent = adminBaseSent || sentSellerNotifications > 0 || buyerNotificationSent;
+                    const allEmailsSent = adminBaseSent && sellerNotificationsComplete && buyerNotificationSent;
+                    const emailStatus = allEmailsSent ? 'Enviado' : (anyEmailSent ? 'Parcial' : 'Error');
+                    const emailSentAt = anyEmailSent ? Date.now() : null;
+                    const emailErrors = [];
+                    if (adminSellerError) emailErrors.push(`Administración/vendedor: ${getOperationErrorDetails(adminSellerError).message}`);
+                    if (!sellerNotificationsComplete && expectedSellerNotifications > sentSellerNotifications) emailErrors.push(`Notificaciones de vendedor: ${sentSellerNotifications}/${expectedSellerNotifications}`);
+                    if (buyerError) emailErrors.push(`Comprador: ${getOperationErrorDetails(buyerError).message}`);
+                    if (!buyerNotificationSent && !buyerError) emailErrors.push('Comprador: el servidor no confirmó el envío');
+
+                    try {
+                        await updateBankTransferDocument(id, {
+                            emailStatus,
+                            pendingEmailStatus: emailStatus,
+                            emailSentAt,
+                            pendingEmailSentAt: emailSentAt,
+                            emailLastAttemptAt: Date.now(),
+                            emailError: emailErrors.join(' | ').slice(0, 500),
+                            emailErrorCode: emailStatus === 'Enviado' ? '' : (buyerNotificationSent ? 'PENDING_EMAIL_PARTIAL' : 'BUYER_EMAIL_NOT_SENT'),
+                            emailRequestId: adminSellerResult?.requestId || `pending_${id}`,
+                            emailBaseSent: adminBaseSent,
+                            emailSaleNotificationCount: sentSellerNotifications,
+                            pendingSellerNotificationExpected: expectedSellerNotifications,
+                            pendingSellerNotificationSent: sentSellerNotifications,
+                            buyerEmail,
+                            buyerEmailStatus: buyerNotificationSent ? 'Enviado' : 'Error',
+                            buyerNotificationStatus: buyerNotificationSent ? 'Enviado' : 'Error',
+                            buyerNotificationSent,
+                            buyerNotificationSentAt: buyerNotificationSent ? Date.now() : null,
+                            buyerEmailRequestId: buyerResult?.result?.requestId || (buyerSameAsBaseReceiver ? adminSellerResult?.requestId : `buyer_pending_${id}`),
+                            buyerEmailError: buyerNotificationSent ? '' : String(buyerError?.message || 'El servidor no confirmó el correo al comprador.').slice(0, 500),
+                            updatedAt: Date.now()
+                        });
+                    } catch(statusError) {
+                        console.error('[Compra][Correo] Los correos fueron procesados, pero no se pudo guardar su estado en Firestore.', statusError);
+                    }
+
+                    if (buyerNotificationSent) {
+                        alert(allEmailsSent
+                            ? 'Compra registrada correctamente. La confirmación fue enviada al correo del comprador.'
+                            : 'Compra registrada y comprador notificado. Alguna notificación administrativa o del vendedor quedó pendiente.');
+                    } else {
+                        alert(`La compra quedó registrada como Pendiente, pero no se pudo enviar la confirmación al correo del comprador. Detalle: ${buyerError?.message || 'el servidor no confirmó el envío'}`);
                     }
 
                     clearCompletedCartIfNeeded();
                     resetPublicFlow();
                 } catch(err) {
-                    console.error('Registrar transferencia:', err);
-                    alert('No se pudo registrar la transferencia pendiente.');
+                    const details = getOperationErrorDetails(err);
+                    console.error('Registrar transferencia:', details, err);
+                    alert(`No se pudo completar el registro o la notificación de la transferencia. Detalle: ${details.message}`);
                 } finally {
                     setOrderSending(false);
                 }
@@ -3344,37 +3494,94 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     });
 
                     stage = 'enviar-correos';
-                    const mailResult = await sendOrderEmail({
-                        ...payload,
-                        transferId,
-                        paidAt: currentTransfer.paidAt,
-                        paymentStatus: 'Pagado',
-                        requestId: `transfer_${transferId}`
-                    });
-                    emailsSent = true;
+                    let mailResult = null;
+                    let mainEmailError = null;
+                    let buyerPaidResult = null;
+                    let buyerPaidError = null;
+
+                    try {
+                        mailResult = await sendOrderEmail({
+                            ...payload,
+                            transferId,
+                            paidAt: currentTransfer.paidAt,
+                            paymentStatus: 'Pagado',
+                            orderStatus: 'Pagado',
+                            requestId: `transfer_${transferId}`
+                        });
+                    } catch(err) {
+                        mainEmailError = err;
+                        console.error('[Transferencias][Pagado][Correo administrativo/vendedor] Error:', getOperationErrorDetails(err), err);
+                    }
+
+                    const paidBuyerEmail = String(payload?.delivery?.email || currentTransfer?.buyerEmail || '').trim();
+                    const paidBuyerSameAsBaseReceiver = normalizeNotificationEmail(paidBuyerEmail) === normalizeNotificationEmail(payload?.mailSettings?.receiverEmail);
+                    if (paidBuyerSameAsBaseReceiver && mailResult?.baseEmailSent !== false && !mainEmailError) {
+                        buyerPaidResult = { result: mailResult, buyerEmail: paidBuyerEmail, sharedWithBaseReceiver: true };
+                    } else {
+                        try {
+                            buyerPaidResult = await sendBuyerOrderEmail({
+                                payload: {
+                                    ...payload,
+                                    paidAt: currentTransfer.paidAt
+                                },
+                                status: 'Pagado',
+                                transferId,
+                                requestId: `buyer_paid_${transferId}`
+                            });
+                        } catch(err) {
+                            buyerPaidError = err;
+                            console.error('[Transferencias][Pagado][Correo comprador] Error:', getOperationErrorDetails(err), err);
+                        }
+                    }
+
+                    const paidAdminBaseSent = Boolean(mailResult && mailResult.baseEmailSent !== false && !mainEmailError);
+                    const paidSellerExpected = Array.isArray(payload.saleNotifications) ? payload.saleNotifications.length : 0;
+                    const paidSellerSent = Number(mailResult?.saleNotificationCount || 0);
+                    const paidSellerComplete = !mainEmailError
+                        && !mailResult?.saleNotificationError
+                        && paidSellerSent >= paidSellerExpected;
+                    const buyerPaidEmailSent = Boolean(buyerPaidResult && !buyerPaidError && buyerPaidResult.result?.baseEmailSent !== false);
+                    const anyPaidEmailSent = paidAdminBaseSent || paidSellerSent > 0 || buyerPaidEmailSent;
+                    const allPaidEmailsSent = paidAdminBaseSent && paidSellerComplete && buyerPaidEmailSent;
+                    const finalEmailStatus = allPaidEmailsSent ? 'Enviado' : (anyPaidEmailSent ? 'Parcial' : 'Error');
+                    const paidEmailErrors = [];
+                    if (mainEmailError) paidEmailErrors.push(`Administración/vendedor: ${getOperationErrorDetails(mainEmailError).message}`);
+                    if (!paidSellerComplete && paidSellerExpected > paidSellerSent) paidEmailErrors.push(`Notificaciones de vendedor: ${paidSellerSent}/${paidSellerExpected}`);
+                    if (buyerPaidError) paidEmailErrors.push(`Comprador: ${getOperationErrorDetails(buyerPaidError).message}`);
+                    if (!buyerPaidEmailSent && !buyerPaidError) paidEmailErrors.push('Comprador: el servidor no confirmó el envío');
+                    emailsSent = anyPaidEmailSent;
 
                     stage = 'guardar-resultado-correo';
                     const emailSentAt = Date.now();
                     currentTransfer = await updateBankTransferDocument(transferId, {
                         status: 'Pagado',
                         updatedAt: emailSentAt,
-                        emailStatus: 'Enviado',
-                        emailSentAt,
+                        emailStatus: finalEmailStatus,
+                        emailSentAt: anyPaidEmailSent ? emailSentAt : null,
                         emailLastAttemptAt: emailSentAt,
-                        emailError: '',
-                        emailErrorCode: '',
-                        emailRequestId: mailResult.requestId || `transfer_${transferId}`,
-                        emailBaseSent: mailResult.baseEmailSent !== false,
-                        emailSaleNotificationCount: Number(mailResult.saleNotificationCount || 0)
-                    }, { expected: { status: 'Pagado', emailStatus: 'Enviado' } });
+                        emailError: paidEmailErrors.join(' | ').slice(0, 500),
+                        emailErrorCode: finalEmailStatus === 'Enviado' ? '' : (buyerPaidEmailSent ? 'PAID_EMAIL_PARTIAL' : 'BUYER_PAID_EMAIL_NOT_SENT'),
+                        emailRequestId: mailResult?.requestId || `transfer_${transferId}`,
+                        emailBaseSent: paidAdminBaseSent,
+                        emailSaleNotificationCount: paidSellerSent,
+                        buyerEmail: paidBuyerEmail,
+                        buyerPaidEmailStatus: buyerPaidEmailSent ? 'Enviado' : 'Error',
+                        buyerPaidNotificationSent: buyerPaidEmailSent,
+                        buyerPaidEmailSentAt: buyerPaidEmailSent ? emailSentAt : null,
+                        buyerPaidEmailRequestId: buyerPaidResult?.result?.requestId || (paidBuyerSameAsBaseReceiver ? mailResult?.requestId : `buyer_paid_${transferId}`),
+                        buyerPaidEmailError: buyerPaidEmailSent ? '' : String(buyerPaidError?.message || 'El servidor no confirmó el correo de pago al comprador.').slice(0, 500)
+                    }, { expected: { status: 'Pagado', emailStatus: finalEmailStatus } });
 
-                    console.info('[Transferencias][Pagado] Flujo completado correctamente.', {
+                    console.info('[Transferencias][Pagado] Flujo de correo completado.', {
                         transferId,
                         saleIds,
                         emailStatus: currentTransfer.emailStatus,
-                        saleNotificationCount: Number(mailResult.saleNotificationCount || 0)
+                        saleNotificationCount: paidSellerSent,
+                        buyerPaidEmailSent
                     });
-                    alert('Transferencia confirmada correctamente');
+                    alert(buyerPaidEmailSent
+                        ? (allPaidEmailsSent ? 'Transferencia confirmada correctamente. El comprador fue notificado por Gmail.' : 'Transferencia confirmada y comprador notificado; alguna notificación adicional quedó pendiente.')
+                        : 'Transferencia confirmada, pero no se pudo notificar al comprador por Gmail. Puedes reintentar desde Transferencias.');
                 } catch(err) {
                     const details = getOperationErrorDetails(err);
                     console.error('[Transferencias][Pagado] El flujo no pudo completarse.', {
