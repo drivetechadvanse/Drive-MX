@@ -1,5 +1,3 @@
-import { buildPackageFromPanelForm, createEmptyPackageForm } from '../services/panelControlService.js';
-
 const h = globalThis.React?.createElement;
 const noop = () => {};
 const EmptyIcon = () => null;
@@ -50,34 +48,6 @@ export function AdminHeader(props = {}) {
   );
 }
 
-export function NewShipmentCard(props = {}) {
-  if (!h) return null;
-  const pkgForm = props.pkgForm || createEmptyPackageForm();
-  const setPkgForm = props.setPkgForm || noop;
-  const users = toArray(props.users);
-  const handleSubmit = (event) => {
-    event.preventDefault();
-    const nextPackage = buildPackageFromPanelForm(pkgForm);
-    if (!nextPackage.id) return;
-    if (typeof props.saveDoc === 'function') props.saveDoc('packages', nextPackage.id, nextPackage);
-    setPkgForm(createEmptyPackageForm());
-  };
-
-  return h('div', { className: 'md:col-span-1 card-glass p-6 space-y-6' },
-    h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400 drive-mx-panel-section-title' }, 'Nuevo Envío'),
-    h('form', { onSubmit: handleSubmit, className: 'space-y-4' },
-      h('input', { required: true, className: 'input-field uppercase', placeholder: 'NÚMERO DE GUÍA', value: pkgForm.id || '', onChange: (e) => setPkgForm({ ...pkgForm, id: e.target.value }) }),
-      h('input', { required: true, className: 'input-field uppercase', placeholder: 'ORIGEN', value: pkgForm.o || '', onChange: (e) => setPkgForm({ ...pkgForm, o: e.target.value }) }),
-      h('input', { required: true, className: 'input-field uppercase', placeholder: 'DESTINO', value: pkgForm.d || '', onChange: (e) => setPkgForm({ ...pkgForm, d: e.target.value }) }),
-      h('select', { required: true, className: 'input-field', value: pkgForm.op || '', onChange: (e) => setPkgForm({ ...pkgForm, op: e.target.value }) },
-        h('option', { value: '' }, 'ASIGNAR USUARIO'),
-        users.filter((user) => user.role !== 'admin' && user.active !== false).map((user) => h('option', { key: user.id, value: user.id }, user.name))
-      ),
-      h('button', { type: 'submit', className: 'w-full btn-primary h-12' }, 'Crear Guía')
-    )
-  );
-}
-
 export function ActiveShipmentsCard(props = {}) {
   if (!h) return null;
   const Icons = props.Icons || {};
@@ -96,6 +66,9 @@ export function ActiveShipmentsCard(props = {}) {
           h('td', { className: 'px-6 py-4 text-red-600 font-black' }, `#${pkg.id}`),
           h('td', { className: 'px-6 py-4' },
             `${pkg.o} → ${pkg.d}`,
+            h('br'),
+            h('span', { className: 'text-[8px] text-slate-500 uppercase' }, pkg.fullName || pkg.customer?.fullName || 'Nombre no registrado'),
+            h('span', { className: 'text-[8px] text-slate-400' }, ` · ${pkg.phone || pkg.customer?.phone || 'Teléfono no registrado'}`),
             h('br'),
             h('span', { className: 'text-[8px] text-slate-400 uppercase' }, findProductByTracking(pkg)?.name || pkg.productId || 'Sin producto')
           ),
