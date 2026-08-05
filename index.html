@@ -130,6 +130,41 @@
         const PRODUCT_SIZE_OPTIONS = ['Chica', 'Mediana', 'Grande', 'XL'];
         const PAYMENT_BANK_AZTECA_ORDER_TEXT = 'Pagar solo con Banco Azteca, el nombre del titular de la cuenta debe de coincidir con el nombre registrado en el pedido para que la tranferencia sea aprobada';
         const GLOBAL_SHIPPING_FEE = 150;
+        const normalizeEmailSettings = (settings = {}) => ({
+            senderEmail: String(settings?.senderEmail ?? '').trim(),
+            appPassword: String(settings?.appPassword ?? '').trim(),
+            receiverEmail: String(settings?.receiverEmail ?? '').trim()
+        });
+        const normalizePaymentSettings = (settings = {}) => ({
+            bankAccount: String(settings?.bankAccount ?? '').trim()
+        });
+        const cleanFirestoreText = (value = '', maxLength = null) => {
+            const normalized = String(value ?? '').trim();
+            if (!Number.isFinite(Number(maxLength))) return normalized;
+            return normalized.slice(0, Math.max(0, Math.floor(Number(maxLength))));
+        };
+        const finiteFirestoreNumber = (value, fallback = 0) => {
+            const normalized = Number(value);
+            return Number.isFinite(normalized) ? normalized : fallback;
+        };
+        const sanitizeFirestoreData = (value) => {
+            if (value === undefined || typeof value === 'function' || typeof value === 'symbol') return undefined;
+            if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+            if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+            if (value instanceof Date) return value;
+            if (Array.isArray(value)) {
+                return value.map(item => sanitizeFirestoreData(item)).filter(item => item !== undefined);
+            }
+            if (value && typeof value === 'object') {
+                if (typeof value.toDate === 'function' && Number.isFinite(Number(value.seconds))) return value;
+                return Object.fromEntries(
+                    Object.entries(value)
+                        .map(([key, item]) => [key, sanitizeFirestoreData(item)])
+                        .filter(([, item]) => item !== undefined)
+                );
+            }
+            return String(value);
+        };
         const normalizeProductSizes = (sizes = []) => Array.isArray(sizes) ? sizes.filter(size => PRODUCT_SIZE_OPTIONS.includes(String(size || '').trim())) : [];
         const normalizeProductColors = (colors = []) => Array.isArray(colors) ? colors.map(color => String(color || '').trim()).filter(Boolean) : [];
         const productSizesText = (product = {}) => normalizeProductSizes(product.sizes || product.medidas).join(', ');
@@ -303,8 +338,20 @@
             const [isCartOpen, setIsCartOpenState] = useState(false);
             const [checkoutProductIds, setCheckoutProductIds] = useState([]);
             const [deliveryForm, setDeliveryForm] = useState({ street: '', state: '', municipality: '', neighborhood: '', zip: '', fullName: '', phone: '', email: '', references: '' });
-            const [emailSettings, setEmailSettings] = useState(() => { try { return JSON.parse(localStorage.getItem('driveMxEmailSettings') || '{\"senderEmail\":\"\",\"appPassword\":\"\",\"receiverEmail\":\"\"}'); } catch(e) { return { senderEmail: '', appPassword: '', receiverEmail: '' }; } });
-            const [paymentSettings, setPaymentSettings] = useState(() => { try { return JSON.parse(localStorage.getItem('driveMxPaymentSettings') || '{\"bankAccount\":\"\"}'); } catch(e) { return { bankAccount: '' }; } });
+            const [emailSettings, setEmailSettings] = useState(() => {
+                try {
+                    return normalizeEmailSettings(JSON.parse(localStorage.getItem('driveMxEmailSettings') || '{}'));
+                } catch(e) {
+                    return normalizeEmailSettings();
+                }
+            });
+            const [paymentSettings, setPaymentSettings] = useState(() => {
+                try {
+                    return normalizePaymentSettings(JSON.parse(localStorage.getItem('driveMxPaymentSettings') || '{}'));
+                } catch(e) {
+                    return normalizePaymentSettings();
+                }
+            });
             const [pendingTransfers, setPendingTransfers] = useState(() => readLocal('driveMxPendingTransfers'));
             const [completedSales, setCompletedSales] = useState([]);
             const [transferTrackingDrafts, setTransferTrackingDrafts] = useState({});
@@ -661,12 +708,36 @@
                     writeLocal(ADMIN_PRODUCTS_LOCAL_KEY, l);
                 }, (err) => { console.error('Firestore productos Panel de Control:', err); });
 
-                const unsubTransfers = fbase.onSnapshot(transferCol, (s) => {
-                    const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
-                    l.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
-                    setPendingTransfers(l);
-                    writeLocal('driveMxPendingTransfers', l);
-                }, (err) => { console.error('Firestore transferencias:', err); });
+                let unsubTransfers = () => {};
+                if (sessionUser?.role === 'admin') {
+                    unsubTransfers = fbase.onSnapshot(transferCol, (snapshot) => {
+                        const list = [];
+                        snapshot.forEach(documentSnapshot => list.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+                        list.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+                        setPendingTransfers(list);
+                        writeLocal('driveMxPendingTransfers', list);
+                    }, (err) => { console.error('Firestore transferencias administrativas:', err); });
+                } else if (sessionUser && sessionUser.role !== 'admin') {
+                    const walletId = String(sessionUser.uid || sessionUser.id || '').trim();
+                    if (walletId) {
+                        const ownRechargeTransfersQuery = fbase.query(
+                            transferCol,
+                            fbase.where('type', '==', 'wallet_recharge'),
+                            fbase.where('walletId', '==', walletId)
+                        );
+                        unsubTransfers = fbase.onSnapshot(ownRechargeTransfersQuery, (snapshot) => {
+                            const list = [];
+                            snapshot.forEach(documentSnapshot => list.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+                            list.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+                            setPendingTransfers(list);
+                            writeLocal('driveMxPendingTransfers', list);
+                        }, (err) => { console.error('Firestore recargas pendientes del usuario:', err); });
+                    } else {
+                        setPendingTransfers([]);
+                    }
+                } else {
+                    setPendingTransfers([]);
+                }
 
                 let unsubCompletedSales = () => {};
                 if (sessionUser?.role === 'admin') {
@@ -684,11 +755,7 @@
                 const unsubMailSettings = fbase.onSnapshot(mailSettingsRef, (snap) => {
                     if (!snap.exists()) return;
                     const data = snap.data() || {};
-                    const next = {
-                        senderEmail: data.senderEmail || '',
-                        appPassword: data.appPassword || '',
-                        receiverEmail: data.receiverEmail || ''
-                    };
+                    const next = normalizeEmailSettings(data);
                     setEmailSettings(next);
                     try { localStorage.setItem('driveMxEmailSettings', JSON.stringify(next)); } catch(e) {}
                 }, (err) => { console.error('Firestore configuración correo:', err); });
@@ -703,9 +770,7 @@
                 const unsubPaymentSettings = fbase.onSnapshot(paymentSettingsRef, (snap) => {
                     if (!snap.exists()) return;
                     const data = snap.data() || {};
-                    const next = {
-                        bankAccount: data.bankAccount || ''
-                    };
+                    const next = normalizePaymentSettings(data);
                     setPaymentSettings(next);
                     try { localStorage.setItem('driveMxPaymentSettings', JSON.stringify(next)); } catch(e) {}
                 }, (err) => { console.error('Firestore configuración pagos:', err); });
@@ -2453,10 +2518,11 @@
 
             const savePaymentSettings = async (e) => {
                 e.preventDefault();
+                const normalizedSettings = normalizePaymentSettings(paymentSettings);
                 const next = {
-                    bankAccount: paymentSettings.bankAccount.trim(),
+                    bankAccount: cleanFirestoreText(normalizedSettings.bankAccount, 160),
                     updatedAt: Date.now(),
-                    updatedBy: sessionUser?.email || ''
+                    updatedBy: cleanFirestoreText(sessionUser?.email, 254)
                 };
                 if (!next.bankAccount) {
                     alert('Configura el número de cuenta bancaria.');
@@ -2464,7 +2530,8 @@
                 }
                 setPaymentSaving(true);
                 try {
-                    await saveDoc('payment_settings', 'config', next);
+                    await saveDoc('payment_settings', 'config', next, { throwOnError: true, applyLocalOnError: false });
+                    setPaymentSettings(next);
                     try { localStorage.setItem('driveMxPaymentSettings', JSON.stringify(next)); } catch(err) {}
                     alert('Configuración de pagos guardada correctamente.');
                 } catch(err) {
@@ -2476,14 +2543,16 @@
             };
 
             const buildOrderPayload = () => {
+                const normalizedMailSettings = normalizeEmailSettings(emailSettings);
                 const orderProducts = checkoutProducts.map(product => {
                     const seller = getSellerInfoForProduct(product || {});
-                    const quantity = Number(product.quantity || product.productQuantity || 1);
-                    const unitPrice = getProductUnitPrice(product || {});
+                    const requestedQuantity = Math.floor(finiteFirestoreNumber(product?.quantity ?? product?.productQuantity, 1));
+                    const quantity = Math.max(1, requestedQuantity || 1);
+                    const unitPrice = Math.max(0, finiteFirestoreNumber(getProductUnitPrice(product || {}), 0));
                     const lineTotal = Number((unitPrice * quantity).toFixed(2));
                     return Supermercado.copyCategory({
-                        id: product?.id || '',
-                        name: product?.name || '',
+                        id: cleanFirestoreText(product?.id, 180),
+                        name: cleanFirestoreText(product?.name, 180),
                         price: unitPrice,
                         unitPrice,
                         productUnitPrice: unitPrice,
@@ -2492,27 +2561,27 @@
                         lineTotal,
                         totalPrice: lineTotal,
                         productTotal: lineTotal,
-                        stockAtPurchase: getProductStock(product || {}),
-                        sizes: normalizeProductSizes(product?.sizes || product?.medidas),
-                        colors: normalizeProductColors(product?.colors || product?.colores),
-                        ownerId: seller.id,
-                        ownerName: seller.name,
-                        ownerEmail: seller.email,
-                        ownerPhone: seller.phone,
-                        saleNotificationEmail: seller.saleNotificationEmail,
-                        sellerNotificationEmail: seller.saleNotificationEmail
+                        stockAtPurchase: Math.max(0, Math.floor(finiteFirestoreNumber(getProductStock(product || {}), 0))),
+                        sizes: normalizeProductSizes(product?.sizes || product?.medidas).slice(0, 500),
+                        colors: normalizeProductColors(product?.colors || product?.colores).slice(0, 500),
+                        ownerId: cleanFirestoreText(seller.id, 180),
+                        ownerName: cleanFirestoreText(seller.name, 180),
+                        ownerEmail: cleanFirestoreText(seller.email, 254),
+                        ownerPhone: cleanFirestoreText(seller.phone, 60),
+                        saleNotificationEmail: cleanFirestoreText(seller.saleNotificationEmail, 254),
+                        sellerNotificationEmail: cleanFirestoreText(seller.saleNotificationEmail, 254)
                     }, product);
-                }).filter(product => product.id && product.name && Number(product.quantity || 0) > 0).slice(0, CART_MAX_ITEMS);
+                }).filter(product => product.id && product.name && Number.isFinite(product.price) && Number(product.quantity || 0) > 0).slice(0, CART_MAX_ITEMS);
                 const primaryProduct = orderProducts[0] || {};
-                const orderSubtotal = orderProducts.reduce((total, product) => total + Number(product.lineTotal || product.totalPrice || 0), 0);
-                const orderShippingFee = orderProducts.length > 0 ? GLOBAL_SHIPPING_FEE : 0;
-                const orderTotal = orderSubtotal + orderShippingFee;
-                const orderTotalQuantity = orderProducts.reduce((total, product) => total + Number(product.quantity || 0), 0);
-                return {
+                const orderSubtotal = Number(orderProducts.reduce((total, product) => total + finiteFirestoreNumber(product.lineTotal ?? product.totalPrice, 0), 0).toFixed(2));
+                const orderShippingFee = orderProducts.length > 0 ? finiteFirestoreNumber(GLOBAL_SHIPPING_FEE, 0) : 0;
+                const orderTotal = Number((orderSubtotal + orderShippingFee).toFixed(2));
+                const orderTotalQuantity = orderProducts.reduce((total, product) => total + Math.max(1, Math.floor(finiteFirestoreNumber(product.quantity, 1))), 0);
+                return sanitizeFirestoreData({
                     mailSettings: {
-                        senderEmail: emailSettings.senderEmail.trim(),
-                        appPassword: emailSettings.appPassword.trim(),
-                        receiverEmail: emailSettings.receiverEmail.trim()
+                        senderEmail: cleanFirestoreText(normalizedMailSettings.senderEmail, 254),
+                        appPassword: cleanFirestoreText(normalizedMailSettings.appPassword, 500),
+                        receiverEmail: cleanFirestoreText(normalizedMailSettings.receiverEmail, 254)
                     },
                     product: primaryProduct,
                     products: orderProducts,
@@ -2527,17 +2596,57 @@
                         expiresInMinutes: Math.round(CART_TTL_MS / 60000)
                     },
                     delivery: {
-                        street: deliveryForm.street.trim(),
-                        state: deliveryForm.state.trim(),
-                        municipality: deliveryForm.municipality.trim(),
-                        neighborhood: deliveryForm.neighborhood.trim(),
-                        zip: deliveryForm.zip.trim(),
-                        fullName: deliveryForm.fullName.trim(),
-                        phone: deliveryForm.phone.trim(),
-                        email: deliveryForm.email.trim(),
-                        references: deliveryForm.references.trim()
+                        street: cleanFirestoreText(deliveryForm.street, 240),
+                        state: cleanFirestoreText(deliveryForm.state, 120),
+                        municipality: cleanFirestoreText(deliveryForm.municipality, 140),
+                        neighborhood: cleanFirestoreText(deliveryForm.neighborhood, 180),
+                        zip: cleanFirestoreText(deliveryForm.zip, 25),
+                        fullName: cleanFirestoreText(deliveryForm.fullName, 180),
+                        phone: cleanFirestoreText(deliveryForm.phone, 60),
+                        email: cleanFirestoreText(deliveryForm.email, 254),
+                        references: cleanFirestoreText(deliveryForm.references, 1200)
                     }
-                };
+                });
+            };
+
+            const validatePendingTransferPayload = (payload = {}) => {
+                const orderProducts = Array.isArray(payload.products) ? payload.products : [];
+                if (orderProducts.length < 1 || orderProducts.length > CART_MAX_ITEMS) {
+                    return 'No se encontraron productos válidos para registrar la compra.';
+                }
+                for (const product of orderProducts) {
+                    if (!String(product?.id || '').trim() || !String(product?.name || '').trim()) {
+                        return 'Uno de los productos no contiene ID o nombre válido.';
+                    }
+                    if (!Number.isFinite(Number(product?.price)) || Number(product.price) < 0) {
+                        return `El precio de ${product?.name || 'uno de los productos'} no es válido.`;
+                    }
+                    if (!Number.isFinite(Number(product?.quantity)) || Number(product.quantity) < 1) {
+                        return `La cantidad de ${product?.name || 'uno de los productos'} no es válida.`;
+                    }
+                }
+                const delivery = payload.delivery || {};
+                const requiredFields = [
+                    ['street', 'La calle es obligatoria.'],
+                    ['state', 'El estado es obligatorio.'],
+                    ['municipality', 'El municipio es obligatorio.'],
+                    ['neighborhood', 'La colonia es obligatoria.'],
+                    ['zip', 'El código postal es obligatorio.'],
+                    ['fullName', 'El nombre completo es obligatorio.'],
+                    ['phone', 'El teléfono es obligatorio.'],
+                    ['email', 'El correo electrónico es obligatorio.'],
+                    ['references', 'Las referencias del domicilio son obligatorias.']
+                ];
+                for (const [field, message] of requiredFields) {
+                    if (!String(delivery[field] || '').trim()) return message;
+                }
+                if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(delivery.email || '').trim())) {
+                    return 'Ingresa un correo electrónico válido.';
+                }
+                if (!payload.cart || Number(payload.cart.itemCount) !== orderProducts.length || !Number.isFinite(Number(payload.cart.total))) {
+                    return 'No se pudo calcular correctamente el total de la compra.';
+                }
+                return '';
             };
 
             const appendSaleNotificationToPayload = (payload = {}) => {
@@ -3026,7 +3135,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
 
             const createPendingWalletRechargeTransfer = async () => {
                 if (!ensureAccountAllowed()) return;
-                if (!paymentSettings.bankAccount.trim()) {
+                const normalizedPaymentSettings = normalizePaymentSettings(paymentSettings);
+                if (!normalizedPaymentSettings.bankAccount) {
                     alert('Falta configurar el número de cuenta bancaria en el Panel Admin.');
                     return;
                 }
@@ -3046,25 +3156,26 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 try {
                     const createdAt = Date.now();
                     const id = `WR-${userId}-${createdAt}`;
-                    await saveDoc('bank_transfers', id, {
+                    const rechargeTransferData = sanitizeFirestoreData({
                         transferId: id,
                         type: 'wallet_recharge',
                         paymentMethod: 'Transferencia bancaria',
-                        bankAccount: paymentSettings.bankAccount.trim(),
-                        bankLegend: 'La recarga se abonará al saldo a favor cuando el administrador confirme la transferencia.',
-                        holderName: Wallet.getUserName ? Wallet.getUserName(sessionUser || {}) : (sessionUser?.name || sessionUser?.email || 'Usuario'),
+                        bankAccount: cleanFirestoreText(normalizedPaymentSettings.bankAccount, 160),
+                        bankLegend: cleanFirestoreText('La recarga se abonará al saldo a favor cuando el administrador confirme la transferencia.', 500),
+                        holderName: cleanFirestoreText(Wallet.getUserName ? Wallet.getUserName(sessionUser || {}) : (sessionUser?.name || sessionUser?.email || 'Usuario'), 180),
                         status: 'Pendiente',
                         walletId: userId,
                         userId,
-                        userName: sessionUser?.name || sessionUser?.email || 'Usuario',
-                        userEmail: sessionUser?.email || '',
-                        userPhone: sessionUser?.phone || '',
-                        amount: validation.amount,
+                        userName: cleanFirestoreText(sessionUser?.name || sessionUser?.email || 'Usuario', 180),
+                        userEmail: cleanFirestoreText(sessionUser?.email, 254),
+                        userPhone: cleanFirestoreText(sessionUser?.phone, 80),
+                        amount: finiteFirestoreNumber(validation.amount, 0),
                         currency: 'MXN',
                         createdAt,
                         updatedAt: createdAt,
-                        createdBy: sessionUser?.email || ''
+                        createdBy: cleanFirestoreText(sessionUser?.email, 254)
                     });
+                    await saveDoc('bank_transfers', id, rechargeTransferData, { throwOnError: true, applyLocalOnError: false });
                     alert('Recarga registrada como Pendiente. El saldo se abonará cuando el administrador confirme la transferencia.');
                     setWalletRechargeAmount('');
                     setShowWalletRecharge(false);
@@ -3077,7 +3188,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             };
 
             const createPendingTransfer = async () => {
-                if (!paymentSettings.bankAccount.trim()) {
+                const normalizedPaymentSettings = normalizePaymentSettings(paymentSettings);
+                if (!normalizedPaymentSettings.bankAccount) {
                     alert('Falta configurar el número de cuenta bancaria en el Panel Admin.');
                     return;
                 }
@@ -3086,24 +3198,48 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 setOrderSending(true);
                 try {
                     const payload = buildOrderPayload();
-                    const id = `TR-${Date.now()}`;
-                    await saveDoc('bank_transfers', id, {
+                    const validationMessage = validatePendingTransferPayload(payload);
+                    if (validationMessage) {
+                        alert(validationMessage);
+                        return;
+                    }
+
+                    try {
+                        const auth = fbase.getAuth();
+                        if (!auth.currentUser) await fbase.signInAnonymously(auth);
+                    } catch(authError) {
+                        console.warn('[Transferencias] No se pudo renovar la sesión anónima; se intentará registrar con las reglas públicas actuales.', authError);
+                    }
+
+                    const now = Date.now();
+                    const randomSuffix = Math.random().toString(36).slice(2, 8).toUpperCase().padEnd(6, '0');
+                    const id = `TR-${now}-${randomSuffix}`;
+                    const transferData = sanitizeFirestoreData({
                         transferId: id,
+                        type: 'purchase',
                         paymentMethod: 'Transferencia bancaria',
-                        bankAccount: paymentSettings.bankAccount.trim(),
-                        bankLegend: PAYMENT_BANK_AZTECA_ORDER_TEXT,
-                        holderName: payload.delivery.fullName,
+                        bankAccount: cleanFirestoreText(normalizedPaymentSettings.bankAccount, 160),
+                        bankLegend: cleanFirestoreText(PAYMENT_BANK_AZTECA_ORDER_TEXT, 500),
+                        holderName: cleanFirestoreText(payload.delivery.fullName, 180),
                         status: 'Pendiente',
                         order: payload,
-                        createdAt: Date.now(),
-                        updatedAt: Date.now()
-                    }, { throwOnError: true, applyLocalOnError: false });
+                        createdAt: now,
+                        updatedAt: now
+                    });
+                    await saveDoc('bank_transfers', id, transferData, { throwOnError: true, applyLocalOnError: false });
                     alert('Transferencia registrada como Pendiente. Tu solicitud se procesará cuando el administrador confirme el pago.');
                     clearCompletedCartIfNeeded();
                     resetPublicFlow();
                 } catch(err) {
-                    console.error('Registrar transferencia:', err);
-                    alert('No se pudo registrar la transferencia pendiente.');
+                    const details = getOperationErrorDetails(err);
+                    console.error('[Transferencias][Registro] No se pudo crear la transferencia pendiente.', details, err);
+                    if (String(details.code || '').includes('permission-denied')) {
+                        alert('No se pudo registrar la transferencia pendiente porque la aplicación no tiene permiso para guardar el pedido.');
+                    } else if (String(details.code || '').includes('invalid-argument')) {
+                        alert('No se pudo registrar la transferencia pendiente porque uno de los datos del pedido no es válido. Revisa el formulario e inténtalo nuevamente.');
+                    } else {
+                        alert('No se pudo registrar la transferencia pendiente. Revisa tu conexión e inténtalo nuevamente.');
+                    }
                 } finally {
                     setOrderSending(false);
                 }
@@ -4047,39 +4183,39 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         <div className="grid md:grid-cols-2 gap-4">
                                             <div className="md:col-span-2">
                                                 <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Calle</label>
-                                                <input className="input-field" placeholder="Calle y número" value={deliveryForm.street} onChange={e => setDeliveryForm({...deliveryForm, street: e.target.value})} />
+                                                <input className="input-field" placeholder="Calle y número" maxLength={240} value={deliveryForm.street} onChange={e => setDeliveryForm({...deliveryForm, street: e.target.value})} />
                                             </div>
                                             <div>
                                                 <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Estado</label>
-                                                <input className="input-field" placeholder="Estado" value={deliveryForm.state} onChange={e => setDeliveryForm({...deliveryForm, state: e.target.value})} />
+                                                <input className="input-field" placeholder="Estado" maxLength={120} value={deliveryForm.state} onChange={e => setDeliveryForm({...deliveryForm, state: e.target.value})} />
                                             </div>
                                             <div>
                                                 <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Municipio</label>
-                                                <input className="input-field" placeholder="Municipio" value={deliveryForm.municipality} onChange={e => setDeliveryForm({...deliveryForm, municipality: e.target.value})} />
+                                                <input className="input-field" placeholder="Municipio" maxLength={140} value={deliveryForm.municipality} onChange={e => setDeliveryForm({...deliveryForm, municipality: e.target.value})} />
                                             </div>
                                             <div>
                                                 <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Colonia</label>
-                                                <input className="input-field" placeholder="Colonia" value={deliveryForm.neighborhood} onChange={e => setDeliveryForm({...deliveryForm, neighborhood: e.target.value})} />
+                                                <input className="input-field" placeholder="Colonia" maxLength={180} value={deliveryForm.neighborhood} onChange={e => setDeliveryForm({...deliveryForm, neighborhood: e.target.value})} />
                                             </div>
                                             <div>
                                                 <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Código Postal</label>
-                                                <input className="input-field" placeholder="Código Postal" inputMode="numeric" value={deliveryForm.zip} onChange={e => setDeliveryForm({...deliveryForm, zip: e.target.value})} />
+                                                <input className="input-field" placeholder="Código Postal" inputMode="numeric" maxLength={25} value={deliveryForm.zip} onChange={e => setDeliveryForm({...deliveryForm, zip: e.target.value})} />
                                             </div>
                                             <div>
                                                 <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Nombre completo</label>
-                                                <input className="input-field" placeholder="Nombre completo" value={deliveryForm.fullName} onChange={e => setDeliveryForm({...deliveryForm, fullName: e.target.value})} />
+                                                <input className="input-field" placeholder="Nombre completo" maxLength={180} value={deliveryForm.fullName} onChange={e => setDeliveryForm({...deliveryForm, fullName: e.target.value})} />
                                             </div>
                                             <div>
                                                 <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Teléfono</label>
-                                                <input className="input-field" placeholder="Teléfono" inputMode="tel" value={deliveryForm.phone} onChange={e => setDeliveryForm({...deliveryForm, phone: e.target.value})} />
+                                                <input className="input-field" placeholder="Teléfono" inputMode="tel" maxLength={60} value={deliveryForm.phone} onChange={e => setDeliveryForm({...deliveryForm, phone: e.target.value})} />
                                             </div>
                                             <div className="md:col-span-2">
                                                 <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Correo electrónico</label>
-                                                <input className="input-field" placeholder="Correo electrónico" type="email" value={deliveryForm.email} onChange={e => setDeliveryForm({...deliveryForm, email: e.target.value})} />
+                                                <input className="input-field" placeholder="Correo electrónico" type="email" maxLength={254} value={deliveryForm.email} onChange={e => setDeliveryForm({...deliveryForm, email: e.target.value})} />
                                             </div>
                                             <div className="md:col-span-2">
                                                 <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Referencias del domicilio</label>
-                                                <textarea className="input-field min-h-[120px] resize-none" placeholder="Referencias del domicilio" value={deliveryForm.references} onChange={e => setDeliveryForm({...deliveryForm, references: e.target.value})}></textarea>
+                                                <textarea className="input-field min-h-[120px] resize-none" placeholder="Referencias del domicilio" maxLength={1200} value={deliveryForm.references} onChange={e => setDeliveryForm({...deliveryForm, references: e.target.value})}></textarea>
                                             </div>
                                         </div>
                                     </form>
