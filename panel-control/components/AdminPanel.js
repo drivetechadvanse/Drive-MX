@@ -1,6 +1,6 @@
+import { AdminNewShipmentCard } from '../../new-shipment/new-shipment.js';
 import {
   AdminHeader,
-  NewShipmentCard,
   ActiveShipmentsCard,
   EmailSettingsCard,
   PaymentSettingsCard,
@@ -27,11 +27,12 @@ export function AdminPanel(props = {}) {
       openAdminSupport: props.openAdminSupport
     }),
     h('div', { className: 'grid md:grid-cols-3 gap-8' },
-      h(NewShipmentCard, {
-        pkgForm: props.pkgForm,
-        setPkgForm: props.setPkgForm,
+      h(AdminNewShipmentCard, {
+        fbase: props.fbase,
+        appId: props.appId,
+        currentUser: props.sessionUser,
         users: props.users,
-        saveDoc: props.saveDoc
+        onCreated: props.onShipmentCreated
       }),
       h('div', { className: 'md:col-span-2 space-y-8' },
         h(ActiveShipmentsCard, {
