@@ -62,6 +62,8 @@
         import "./home-products/home-products.js";
         import "./product-details/product-details.js";
         import "./supermercado-module/supermercado-module.js";
+        import "./new-shipment/new-shipment.js";
+        import "./guide-assignment/guide-assignment.js";
         import "./panel-control/panel-control.js";
         
         const firebaseConfig = {
@@ -90,6 +92,8 @@
         const HomeProducts = window.DriveMxHomeProducts || {};
         const ProductDetails = window.DriveMxProductDetails || {};
         const Supermercado = window.DriveMxSupermercado || window.DriveMxSupermercadoCore || {};
+        const NewShipmentUI = window.DriveMxNewShipment || {};
+        const GuideAssignmentUI = window.DriveMxGuideAssignment || {};
         const PanelControlUI = window.DriveMxPanelControlUI;
         
         const Icons = {
@@ -238,7 +242,7 @@
         };
 
         const DRIVE_MX_HISTORY_KEY = 'driveMxBackNavigation';
-        const VALID_APP_VIEWS = new Set(['home', 'product-detail', 'delivery-data', 'payment-method', 'login', 'admin', 'admin-tracking', 'support', 'admin-support', 'operator']);
+        const VALID_APP_VIEWS = new Set(['home', 'product-detail', 'delivery-data', 'payment-method', 'login', 'admin', 'admin-tracking', 'support', 'admin-support', 'operator', 'guide-assignment']);
         const normalizeNavigationSnapshot = (snapshot = {}) => ({
             view: VALID_APP_VIEWS.has(snapshot.view) ? snapshot.view : 'home',
             selectedProductId: snapshot.selectedProductId ? String(snapshot.selectedProductId) : null,
@@ -283,11 +287,7 @@
             const [searchQuery, setSearchQuery] = useState('');
             const [trackingResult, setTrackingResult] = useState(null);
             const [trackingNotFound, setTrackingNotFound] = useState(false);
-            const [guideQuery, setGuideQuery] = useState('');
-            const [guideResult, setGuideResult] = useState(null);
-            const [guideNotFound, setGuideNotFound] = useState(false);
             const [loginForm, setLoginForm] = useState({ email: '', p: '' });
-            const [pkgForm, setPkgForm] = useState({ id: '', o: '', d: '', op: '', productId: '' });
             const [userForm, setUserForm] = useState({ email: '', p: '', n: '', phone: '' });
             const [userRegistrationSaving, setUserRegistrationSaving] = useState(false);
             const [editingRegisteredUserId, setEditingRegisteredUserId] = useState(null);
@@ -425,13 +425,13 @@
                     next.view = activeSession ? 'operator' : 'home';
                     next.showAdminMenu = false;
                 }
-                if (next.view === 'operator' && (!activeSession || activeSession.role === 'admin')) {
+                if (['operator', 'guide-assignment'].includes(next.view) && (!activeSession || activeSession.role === 'admin')) {
                     next.view = activeSession?.role === 'admin' ? 'admin' : 'home';
                     next.showUserMenu = false;
                     next.assignmentsUnlocked = false;
                     next.showAssignmentsPasswordModal = false;
                 }
-                if (next.view === 'operator' && activeSession && activeSession.role !== 'admin') {
+                if (['operator', 'guide-assignment'].includes(next.view) && activeSession && activeSession.role !== 'admin') {
                     if (isUserBlocked(activeSession)) {
                         next.view = 'home';
                         next.showUserMenu = false;
@@ -620,11 +620,26 @@
                 const mailSettingsRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'mail_settings', 'config');
                 const paymentSettingsRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'payment_settings', 'config');
                 
-                const unsubPkgs = fbase.onSnapshot(pkgCol, (s) => {
-                    const l = []; s.forEach(d => l.push(d.data()));
-                    setPkgs(l);
-                    writeLocal('driveMxPackages', l);
-                }, (err) => { console.error('Firestore paquetes:', err); });
+                let unsubPkgs = () => {};
+                if (sessionUser?.role === 'admin') {
+                    unsubPkgs = fbase.onSnapshot(pkgCol, (snapshot) => {
+                        const list = [];
+                        snapshot.forEach(documentSnapshot => list.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+                        setPkgs(list);
+                        writeLocal('driveMxPackages', list);
+                    }, (err) => { console.error('Firestore paquetes administrativos:', err); });
+                } else if (sessionUser && sessionUser.role !== 'admin') {
+                    const assignedUserId = sessionUser.uid || sessionUser.id || '';
+                    const assignedPackagesQuery = fbase.query(pkgCol, fbase.where('op', '==', assignedUserId));
+                    unsubPkgs = fbase.onSnapshot(assignedPackagesQuery, (snapshot) => {
+                        const list = [];
+                        snapshot.forEach(documentSnapshot => list.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+                        setPkgs(list);
+                        writeLocal('driveMxPackages', list);
+                    }, (err) => { console.error('Firestore paquetes asignados al usuario:', err); });
+                } else {
+                    setPkgs([]);
+                }
 
                 const unsubUsers = fbase.onSnapshot(userCol, (s) => {
                     const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
@@ -696,7 +711,7 @@
                 }, (err) => { console.error('Firestore configuración pagos:', err); });
 
                 return () => { unsubPkgs(); unsubUsers(); unsubProducts(); unsubAdminProducts(); unsubTransfers(); unsubCompletedSales(); unsubSupportChats(); unsubMailSettings(); unsubPaymentSettings(); };
-            }, [fbUser, sessionUser?.role]);
+            }, [fbUser, sessionUser?.role, sessionUser?.uid, sessionUser?.id]);
 
             useEffect(() => {
                 if (!fbUser) return;
@@ -934,11 +949,15 @@
             };
 
             const deletePkg = async (id) => {
-                setPkgs(prev => { const next = prev.filter(x => x.id !== id); writeLocal('driveMxPackages', next); return next; });
+                if (sessionUser?.role !== 'admin') return;
+                if (!window.confirm(`¿Eliminar la guía ${id}?`)) return;
                 try {
-                    const db = fbase.getFirestore();
-                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'packages', id));
-                } catch(err) { console.error('Firestore borrar paquete:', err); }
+                    await NewShipmentUI.services.deleteAdminShipmentWithTracking({ fbase, appId, guideCode: id });
+                    setPkgs(prev => { const next = prev.filter(x => x.id !== id); writeLocal('driveMxPackages', next); return next; });
+                } catch(err) {
+                    console.error('Firestore borrar paquete:', err);
+                    alert('No se pudo eliminar la guía.');
+                }
             };
 
             const getSessionUserId = () => sessionUser?.uid || sessionUser?.id || '';
@@ -3463,6 +3482,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 if (!code) { alert('Ingresa el número de guía.'); return; }
                 const pkg = buildPackageFromOrder(transfer, code);
                 await saveDoc('packages', code, pkg);
+                await NewShipmentUI.services.upsertTrackingGuide({ fbase, appId, shipment: pkg });
                 await saveDoc('bank_transfers', transferId, { ...transfer, trackingNumber: code, packageId: code, updatedAt: Date.now(), trackingAssignedAt: Date.now(), trackingAssignedBy: sessionUser?.email || '' });
                 setTransferTrackingDrafts(prev => ({ ...prev, [transferId]: '' }));
                 alert('Guía asociada al pedido y producto correctamente.');
@@ -3484,66 +3504,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 setTrackingResult(foundProduct || null);
                 setTrackingNotFound(!foundProduct);
                 if (!foundProduct && notify) alert('No se encontró el producto');
-            };
-
-            const runGuideSearch = (value, notify = false) => {
-                const code = normalizeTrackingCode(value);
-                setGuideQuery(value);
-                if (!code) {
-                    setGuideResult(null);
-                    setGuideNotFound(false);
-                    return;
-                }
-
-                // Buscador independiente de guía:
-                // busca SOLO envíos registrados en packages por número de guía.
-                // No consulta productos ni altera el buscador de ID de producto.
-                const foundGuide = pkgs.find(pkg => normalizeTrackingCode(pkg.id || pkg.trackingNumber) === code);
-                setGuideResult(foundGuide || null);
-                setGuideNotFound(!foundGuide);
-                if (!foundGuide && notify) alert('No se encontró la guía');
-            };
-
-            const getTrackingStepIndex = (pkg) => {
-                if (!pkg) return 0;
-                const current = Number(pkg.currentStep);
-                if (Number.isFinite(current)) return Math.max(0, Math.min(STEPS.length - 1, current));
-                const status = String(pkg.status || '').toLowerCase();
-                if (status.includes('entregado')) return 3;
-                if (status.includes('camino')) return 2;
-                if (status.includes('proces')) return 1;
-                if (status.includes('recolect')) return 0;
-                return 0;
-            };
-
-            const trackingStepLabel = (step) => step === 'Procesando' ? 'Procesado' : step;
-
-            const TrackingStatusCard = ({ pkg }) => {
-                const activeIndex = getTrackingStepIndex(pkg);
-
-            return (
-                    <div className="card-glass p-6 max-w-3xl mx-auto animate-slide space-y-5">
-                        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                            <div>
-                                <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Número de guía</p>
-                                <h2 className="text-3xl font-black text-red-600">#{pkg.id || pkg.trackingNumber}</h2>
-                            </div>
-                            <span className="px-3 py-2 bg-red-50 text-red-600 rounded-full text-[9px] font-black uppercase tracking-widest self-start">{trackingStepLabel(pkg.status || STEPS[activeIndex])}</span>
-                        </div>
-                        <div className="bg-slate-50 rounded-2xl p-4 grid sm:grid-cols-2 gap-4">
-                            <div><p className="text-[8px] font-black text-slate-400 uppercase">Origen</p><p className="text-sm font-black text-slate-900 uppercase">{pkg.o || 'Origen pendiente'}</p></div>
-                            <div><p className="text-[8px] font-black text-slate-400 uppercase">Destino</p><p className="text-sm font-black text-slate-900 uppercase">{pkg.d || 'Destino pendiente'}</p></div>
-                        </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                            {STEPS.map((step, i) => (
-                                <div key={step} className={`p-3 rounded-xl border-2 text-center ${i <= activeIndex ? 'bg-red-500 border-red-500 text-white' : 'bg-white border-slate-100 text-slate-300'}`}>
-                                    <p className="text-[9px] font-black uppercase">{trackingStepLabel(step)}</p>
-                                </div>
-                            ))}
-                        </div>
-                        <p className="text-[9px] font-bold text-slate-300 uppercase text-center">La información se actualiza cuando el usuario cambia el estado del envío.</p>
-                    </div>
-                );
             };
 
             const getSupportUserId = () => sessionUser?.uid || sessionUser?.id || fbUser?.uid || 'local';
@@ -3646,7 +3606,27 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     alert('Valida primero la contraseña maestra para acceder a Mis Asignaciones.');
                     return;
                 }
-                await saveDoc('packages', pkg.id, { ...pkg, status, currentStep });
+                try {
+                    const updatedPackage = await NewShipmentUI.services.updateAdminShipmentWithTracking({
+                        fbase,
+                        appId,
+                        shipment: pkg,
+                        patch: {
+                            status,
+                            currentStep,
+                            updatedBy: sessionUser?.email || '',
+                            updatedByUid: sessionUser?.uid || sessionUser?.id || ''
+                        }
+                    });
+                    setPkgs(prev => {
+                        const next = prev.map(item => item.id === updatedPackage.id ? updatedPackage : item);
+                        writeLocal('driveMxPackages', next);
+                        return next;
+                    });
+                } catch (err) {
+                    console.error('Actualizar estado de asignación:', err);
+                    alert('No se pudo actualizar el estado de la guía.');
+                }
             };
 
             const sendSupportMessage = async (role = 'user') => {
@@ -3974,20 +3954,13 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             <img src="repartidora.png" alt="Drive MX" className="w-full h-auto" />
                                         </div>
 
-                                        <section className="card-glass p-6 max-w-3xl mx-auto space-y-4">
-                                            <div className="text-center">
-                                                <p className="text-[10px] text-red-500 font-black uppercase tracking-widest">Consultar número de guía</p>
-                                                <h2 className="text-2xl font-black tracking-tight">Rastrea tu envío</h2>
-                                                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">Origen, destino y estado actualizado por el usuario</p>
-                                            </div>
-                                            <div className="bg-slate-50 p-2 rounded-2xl border-2 border-slate-100 flex gap-2">
-                                                <input className="flex-grow bg-transparent px-4 text-sm font-bold uppercase outline-none" placeholder="INGRESA TU NÚMERO DE GUÍA" value={guideQuery} onChange={e => runGuideSearch(e.target.value, false)} />
-                                                <button onClick={() => runGuideSearch(guideQuery, true)} className="btn-primary">Consultar</button>
-                                            </div>
-                                            {guideNotFound && <p className="text-center text-[10px] font-black text-red-500 uppercase tracking-widest">No se encontró la guía</p>}
-                                            {!guideResult && !guideNotFound && <p className="text-center text-[10px] font-black text-slate-300 uppercase tracking-widest">Ingresa el número de guía registrado en Nuevo Envío</p>}
-                                            {guideResult && <TrackingStatusCard pkg={guideResult} />}
-                                        </section>
+                                        {NewShipmentUI.PublicGuideTracker && (
+                                            <NewShipmentUI.PublicGuideTracker
+                                                fbase={fbase}
+                                                appId={appId}
+                                                steps={STEPS}
+                                            />
+                                        )}
 
                                         {HomeProducts.HomeProductsSection && (
                                             <HomeProducts.HomeProductsSection
@@ -4191,10 +4164,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 setShowAdminMenu={setShowAdminMenu}
                                 openAdminTracking={openAdminTracking}
                                 openAdminSupport={openAdminSupport}
-                                pkgForm={pkgForm}
-                                setPkgForm={setPkgForm}
                                 users={users}
-                                saveDoc={saveDoc}
                                 pkgs={pkgs}
                                 deletePkg={deletePkg}
                                 findProductByTracking={findProductByTracking}
@@ -4347,6 +4317,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                 <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-products-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Administración de Productos</button>
                                                 <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-sales-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Ventas Realizadas</button>
                                                 <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('wallet-movements-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Movimientos</button>
+                                                <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); setView('guide-assignment'); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Asignación de Guías</button>
                                                 <button type="button" onClick={openAssignmentsAccess} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Mis Asignaciones</button>
                                             </div>
                                         )}
@@ -4377,7 +4348,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     <>
                                         <div><h1 className="text-3xl font-black uppercase tracking-tight">Mis <span className="text-red-500">Asignaciones</span></h1><p className="text-[10px] font-bold text-slate-400 uppercase">Ruta Activa</p></div>
                                         <div className="space-y-4">
-                                            {pkgs.filter(p => p.op === sessionUser.id).map(p => (
+                                            {pkgs.filter(p => p.op === (sessionUser.uid || sessionUser.id)).map(p => (
                                                 <div key={p.id} className="card-glass p-6 space-y-6">
                                                     <div className="flex justify-between items-center"><h3 className="text-xl font-black text-red-600">#{p.id}</h3><span className="text-[9px] font-black uppercase text-slate-400">{p.o} → {p.d}</span></div>
                                                     <div className="grid grid-cols-2 gap-2">
@@ -4401,6 +4372,18 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     </div>
                                 )}
                             </div>
+                        )}
+
+                        {view === 'guide-assignment' && GuideAssignmentUI.GuideAssignmentPanel && (
+                            <GuideAssignmentUI.GuideAssignmentPanel
+                                fbase={fbase}
+                                appId={appId}
+                                currentUser={sessionUser}
+                                Icons={Icons}
+                                steps={STEPS}
+                                ensureAccountAllowed={ensureAccountAllowed}
+                                onBack={() => setView('operator')}
+                            />
                         )}
 
                         {view === 'login' && (
