@@ -47,24 +47,6 @@ export function NewShipmentForm(props = {}) {
       value: form.d || '',
       onChange: (event) => setForm({ ...form, d: event.target.value })
     }),
-    h('input', {
-      required: true,
-      className: 'input-field uppercase',
-      placeholder: 'CÓDIGO POSTAL',
-      autoComplete: 'postal-code',
-      inputMode: 'numeric',
-      maxLength: 25,
-      value: form.postalCode || '',
-      onChange: (event) => setForm({ ...form, postalCode: event.target.value })
-    }),
-    h('textarea', {
-      required: true,
-      className: 'input-field uppercase min-h-[96px] resize-y',
-      placeholder: 'REFERENCIAS DEL DOMICILIO',
-      maxLength: 1200,
-      value: form.addressReferences || '',
-      onChange: (event) => setForm({ ...form, addressReferences: event.target.value })
-    }),
     showUserSelect ? h('select', {
       required: true,
       className: 'input-field',
@@ -90,4 +72,5 @@ export function NewShipmentForm(props = {}) {
     }, 'Cancelar') : null
   );
 }
+
 
