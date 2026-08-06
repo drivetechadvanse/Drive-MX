@@ -1,8 +1,4 @@
 import {
-  buildTrackingGuideRecord,
-  getAdminShipmentRef,
-  getTrackingGuideRef,
-  getUserShipmentRef,
   isValidGuideCode,
   normalizeGuideCode
 } from '../../new-shipment/services/newShipmentService.js';
@@ -11,141 +7,95 @@ const ERROR_CODES = {
   INVALID_GUIDE: 'DRIVE_MX_INVALID_GUIDE',
   NOT_FOUND: 'DRIVE_MX_GUIDE_NOT_FOUND',
   ALREADY_ASSIGNED: 'DRIVE_MX_GUIDE_ALREADY_ASSIGNED',
-  NOT_AUTHORIZED: 'DRIVE_MX_ASSIGNMENTS_NOT_AUTHORIZED'
+  NOT_AUTHORIZED: 'DRIVE_MX_ASSIGNMENTS_NOT_AUTHORIZED',
+  SESSION_REQUIRED: 'DRIVE_MX_SESSION_REQUIRED',
+  SERVER_ERROR: 'DRIVE_MX_ASSIGNMENT_SERVER_ERROR'
 };
 
-function createServiceError(code, message) {
+function createServiceError(code, message, status = 0) {
   const error = new Error(message);
   error.code = code;
+  error.status = status;
   return error;
 }
 
-function getUserId(user = {}) {
-  return String(user?.uid || user?.id || '').trim();
+function getAuthenticatedFirebaseUser(fbase) {
+  try {
+    return fbase?.getAuth?.()?.currentUser || null;
+  } catch (error) {
+    return null;
+  }
 }
 
-function cleanText(value = '', maxLength = 500) {
-  return String(value || '').trim().slice(0, maxLength);
+async function getFreshIdToken(fbase) {
+  const authUser = getAuthenticatedFirebaseUser(fbase);
+  if (!authUser || typeof authUser.getIdToken !== 'function') {
+    throw createServiceError(
+      ERROR_CODES.SESSION_REQUIRED,
+      'Tu sesión expiró. Inicia sesión nuevamente para asignar la guía.',
+      401
+    );
+  }
+  return authUser.getIdToken(true);
 }
 
-function getOperatorRef({ fbase, db, appId, userId }) {
-  return fbase.doc(db, 'artifacts', appId, 'public', 'data', 'operators', userId);
+async function readApiResponse(response) {
+  const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
+  if (contentType.includes('application/json')) {
+    return response.json().catch(() => ({}));
+  }
+  const text = await response.text().catch(() => '');
+  return text ? { error: text } : {};
 }
 
 export async function claimGuideForAuthenticatedUser({
   fbase,
   appId,
-  guideCode,
-  currentUser = {}
+  guideCode
 } = {}) {
-  if (!fbase || !appId) throw new Error('Firebase no está disponible para asignar la guía.');
+  if (!fbase || !appId) {
+    throw createServiceError(ERROR_CODES.SERVER_ERROR, 'Firebase no está disponible para asignar la guía.');
+  }
 
   const code = normalizeGuideCode(guideCode);
   if (!isValidGuideCode(code)) {
-    throw createServiceError(ERROR_CODES.INVALID_GUIDE, 'Ingresa un número de guía válido.');
+    throw createServiceError(ERROR_CODES.INVALID_GUIDE, 'Ingresa un número de guía válido.', 400);
   }
 
-  const userId = getUserId(currentUser);
-  if (!userId) throw new Error('No se pudo identificar al usuario autenticado.');
+  const idToken = await getFreshIdToken(fbase);
+  let response;
 
-  const db = fbase.getFirestore();
-  const packageRef = getAdminShipmentRef({ fbase, db, appId, guideCode: code });
-  const trackingRef = getTrackingGuideRef({ fbase, db, appId, guideCode: code });
-  const operatorRef = getOperatorRef({ fbase, db, appId, userId });
-  let claimedShipment = null;
-
-  await fbase.runTransaction(db, async (transaction) => {
-    const [trackingSnapshot, packageSnapshot, operatorSnapshot] = await Promise.all([
-      transaction.get(trackingRef),
-      transaction.get(packageRef),
-      transaction.get(operatorRef)
-    ]);
-
-    if (packageSnapshot.exists()) {
-      const assignedPackage = packageSnapshot.data() || {};
-      const message = assignedPackage.op === userId
-        ? `La guía ${code} ya se encuentra en tu Ruta Activa.`
-        : `La guía ${code} ya fue asignada a otro usuario.`;
-      throw createServiceError(ERROR_CODES.ALREADY_ASSIGNED, message);
-    }
-
-    if (!trackingSnapshot.exists()) {
-      throw createServiceError(ERROR_CODES.NOT_FOUND, `No se encontró la guía ${code} en Asignación de Guías.`);
-    }
-
-    if (!operatorSnapshot.exists() || operatorSnapshot.data()?.assignmentsAuthorized !== true) {
-      throw createServiceError(ERROR_CODES.NOT_AUTHORIZED, 'Valida la contraseña maestra antes de ingresar una guía.');
-    }
-
-    const trackingData = trackingSnapshot.data() || {};
-    const sourceUserId = cleanText(trackingData.sourceUserId || trackingData.ownerId, 180);
-    if (!sourceUserId) {
-      throw createServiceError(ERROR_CODES.NOT_FOUND, `La guía ${code} no está disponible en Asignación de Guías.`);
-    }
-
-    const sourceRef = getUserShipmentRef({
-      fbase,
-      db,
-      appId,
-      userId: sourceUserId,
-      guideCode: code
+  try {
+    response = await fetch('/api/claim-guide', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`
+      },
+      body: JSON.stringify({
+        guideCode: code,
+        appId
+      })
     });
-    const sourceSnapshot = await transaction.get(sourceRef);
+  } catch (error) {
+    throw createServiceError(
+      ERROR_CODES.SERVER_ERROR,
+      'No se pudo conectar con el servicio de asignación. Intenta nuevamente.'
+    );
+  }
 
-    if (!sourceSnapshot.exists()) {
-      throw createServiceError(ERROR_CODES.NOT_FOUND, `La guía ${code} ya no está disponible en Asignación de Guías.`);
-    }
+  const payload = await readApiResponse(response);
+  if (!response.ok || payload?.success !== true) {
+    const codeFromServer = String(payload?.code || ERROR_CODES.SERVER_ERROR);
+    const message = String(payload?.error || payload?.message || 'No se pudo asignar la guía.');
+    throw createServiceError(codeFromServer, message, response.status);
+  }
 
-    const sourceShipment = { id: sourceSnapshot.id, ...sourceSnapshot.data() };
-    const operator = operatorSnapshot.data() || {};
-    const now = Date.now();
-    const assignedUserName = String(operator.name || '').slice(0, 160);
-    const assignedUserEmail = String(operator.email || '').slice(0, 254);
-    const originalOwnerId = cleanText(sourceShipment.ownerId || sourceUserId, 180);
-
-    if (!assignedUserName.trim() || !assignedUserEmail.trim()) {
-      throw createServiceError(ERROR_CODES.NOT_AUTHORIZED, 'El perfil del usuario no contiene nombre y correo válidos.');
-    }
-
-    claimedShipment = {
-      ...sourceShipment,
-      id: code,
-      trackingNumber: code,
-      ownerId: originalOwnerId,
-      originalOwnerId,
-      sourceUserId,
-      op: userId,
-      assignedUserId: userId,
-      assignedUserName,
-      assignedUserEmail,
-      sourcePanel: 'panel_control',
-      shipmentScope: 'admin',
-      assignmentMethod: 'guide_number',
-      assignedAt: now,
-      assignedByUid: userId,
-      assignedByEmail: assignedUserEmail,
-      updatedAt: now,
-      updatedByUid: userId,
-      updatedByEmail: assignedUserEmail
-    };
-
-    const trackingRecord = {
-      ...buildTrackingGuideRecord(claimedShipment, { sourceUserId }),
-      sourcePanel: 'panel_control',
-      shipmentScope: 'admin',
-      sourceUserId,
-      op: userId,
-      assignedUserId: userId,
-      createdAt: claimedShipment.createdAt || now,
-      updatedAt: now
-    };
-
-    transaction.set(packageRef, claimedShipment);
-    transaction.set(trackingRef, trackingRecord);
-    transaction.delete(sourceRef);
-  });
-
-  return claimedShipment;
+  return payload.shipment || {
+    id: code,
+    trackingNumber: code
+  };
 }
 
 export { ERROR_CODES };
+
