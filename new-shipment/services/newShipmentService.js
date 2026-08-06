@@ -25,6 +25,8 @@ export function createEmptyShipmentForm(overrides = {}) {
     phone: '',
     o: '',
     d: '',
+    postalCode: '',
+    addressReferences: '',
     op: '',
     productId: '',
     ...overrides
@@ -37,6 +39,8 @@ export function normalizeShipmentForm(form = {}) {
     phone: String(form.phone || '').trim(),
     o: String(form.o || '').trim(),
     d: String(form.d || '').trim(),
+    postalCode: String(form.postalCode || form.zip || '').trim(),
+    addressReferences: String(form.addressReferences || form.references || '').trim(),
     op: String(form.op || '').trim(),
     productId: String(form.productId || '').trim()
   };
@@ -45,6 +49,7 @@ export function normalizeShipmentForm(form = {}) {
 export function validateShipmentForm(form = {}, options = {}) {
   const normalized = normalizeShipmentForm(form);
   const requireOperator = options.requireOperator === true;
+  const requireAddressDetails = options.requireAddressDetails === true;
 
   if (normalized.fullName.length < 2) return { valid: false, message: 'Ingresa el nombre completo.', data: normalized };
   if (normalized.fullName.length > 160) return { valid: false, message: 'El nombre completo es demasiado largo.', data: normalized };
@@ -53,6 +58,10 @@ export function validateShipmentForm(form = {}, options = {}) {
   if (!normalized.o) return { valid: false, message: 'Ingresa el origen.', data: normalized };
   if (!normalized.d) return { valid: false, message: 'Ingresa el destino.', data: normalized };
   if (normalized.o.length > 240 || normalized.d.length > 500) return { valid: false, message: 'El origen o destino es demasiado largo.', data: normalized };
+  if (requireAddressDetails && !normalized.postalCode) return { valid: false, message: 'Ingresa el código postal.', data: normalized };
+  if (normalized.postalCode.length > 25) return { valid: false, message: 'El código postal es demasiado largo.', data: normalized };
+  if (requireAddressDetails && !normalized.addressReferences) return { valid: false, message: 'Ingresa las referencias del domicilio.', data: normalized };
+  if (normalized.addressReferences.length > 1200) return { valid: false, message: 'Las referencias del domicilio son demasiado largas.', data: normalized };
   if (requireOperator && !normalized.op) return { valid: false, message: 'Selecciona el usuario asignado.', data: normalized };
 
   return { valid: true, message: '', data: normalized };
@@ -104,6 +113,8 @@ export function buildShipmentRecord({ form = {}, guideCode = '', mode = 'admin',
     },
     o: normalized.o,
     d: normalized.d,
+    postalCode: normalized.postalCode,
+    addressReferences: normalized.addressReferences,
     op: assignedUserId,
     assignedUserId,
     productId: normalized.productId || existing?.productId || '',
@@ -170,7 +181,10 @@ export async function createUniqueShipment({
   if (!fbase || !appId) throw new Error('Firebase no está disponible para crear la guía.');
 
   const isUserShipment = mode === 'user';
-  const validation = validateShipmentForm(form, { requireOperator: !isUserShipment });
+  const validation = validateShipmentForm(form, {
+    requireOperator: !isUserShipment,
+    requireAddressDetails: true
+  });
   if (!validation.valid) throw new Error(validation.message);
 
   const userId = getUserId(currentUser);
@@ -258,18 +272,43 @@ export async function updateAdminShipmentWithTracking({ fbase, appId, shipment, 
   const trackingRef = getTrackingGuideRef({ fbase, db, appId, guideCode: code });
   const updatedAt = Date.now();
   const shipmentPatch = { ...patch, updatedAt };
-  const nextShipment = { ...(shipment || {}), ...shipmentPatch, id: code };
-  const trackingPatch = { updatedAt };
-
-  if ('status' in patch) trackingPatch.status = patch.status;
-  if ('currentStep' in patch) trackingPatch.currentStep = Number(patch.currentStep);
+  let nextShipment = null;
 
   await fbase.runTransaction(db, async (transaction) => {
-    // Las guías antiguas pueden no tener todavía el espejo de tracking_guides.
-    // En ese caso se actualiza packages y el rastreador público usa su fallback legado.
-    const trackingSnapshot = await transaction.get(trackingRef);
+    const [shipmentSnapshot, trackingSnapshot] = await Promise.all([
+      transaction.get(shipmentRef),
+      transaction.get(trackingRef)
+    ]);
+
+    if (!shipmentSnapshot.exists()) throw new Error('La guía ya no existe.');
+
+    const storedShipment = { id: shipmentSnapshot.id, ...shipmentSnapshot.data() };
+    nextShipment = {
+      ...storedShipment,
+      ...shipmentPatch,
+      id: code,
+      trackingNumber: code
+    };
+
+    const previousTracking = trackingSnapshot.exists() ? trackingSnapshot.data() : {};
+    const trackingRecord = {
+      ...buildTrackingGuideRecord(nextShipment, {
+        sourcePanel: 'panel_control',
+        shipmentScope: 'admin',
+        sourceUserId: nextShipment.sourceUserId || previousTracking.sourceUserId || nextShipment.ownerId || ''
+      }),
+      sourcePanel: 'panel_control',
+      shipmentScope: 'admin',
+      op: nextShipment.op || nextShipment.assignedUserId || '',
+      assignedUserId: nextShipment.assignedUserId || nextShipment.op || '',
+      createdAt: nextShipment.createdAt || previousTracking.createdAt || updatedAt,
+      updatedAt
+    };
+
     transaction.set(shipmentRef, shipmentPatch, { merge: true });
-    if (trackingSnapshot.exists()) transaction.set(trackingRef, trackingPatch, { merge: true });
+    // Se reconstruye el espejo público completo. Así se reparan guías antiguas
+    // o asignaciones cuyo tracking_guides quedó con metadatos desfasados.
+    transaction.set(trackingRef, trackingRecord);
   });
 
   return nextShipment;
