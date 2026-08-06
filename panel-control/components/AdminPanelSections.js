@@ -62,19 +62,27 @@ export function ActiveShipmentsCard(props = {}) {
     ),
     h('table', { className: 'w-full text-left' },
       h('tbody', { className: 'divide-y divide-slate-50' },
-        pkgs.map((pkg) => h('tr', { key: pkg.id, className: 'text-[10px] font-bold text-slate-600' },
-          h('td', { className: 'px-6 py-4 text-red-600 font-black' }, `#${pkg.id}`),
-          h('td', { className: 'px-6 py-4' },
-            `${pkg.o} → ${pkg.d}`,
-            h('br'),
-            h('span', { className: 'text-[8px] text-slate-500 uppercase' }, pkg.fullName || pkg.customer?.fullName || 'Nombre no registrado'),
-            h('span', { className: 'text-[8px] text-slate-400' }, ` · ${pkg.phone || pkg.customer?.phone || 'Teléfono no registrado'}`),
-            h('br'),
-            h('span', { className: 'text-[8px] text-slate-400 uppercase' }, findProductByTracking(pkg)?.name || pkg.productId || 'Sin producto')
-          ),
-          h('td', { className: 'px-6 py-4' }, h('span', { className: 'px-2 py-1 bg-slate-100 rounded-full text-[8px] uppercase' }, pkg.status)),
-          h('td', { className: 'px-6 py-4 text-right' }, h('button', { onClick: () => deletePkg(pkg.id), className: 'text-slate-300 hover:text-red-500' }, h(TrashIcon)))
-        )),
+        pkgs.map((pkg) => {
+          const assignedUserName = pkg.assignedUserName || pkg.operatorName || '';
+          const assignedUserEmail = pkg.assignedUserEmail || pkg.operatorEmail || '';
+          return h('tr', { key: pkg.id, className: 'text-[10px] font-bold text-slate-600' },
+            h('td', { className: 'px-6 py-4' },
+              h('span', { className: 'text-red-600 font-black' }, `#${pkg.id}`),
+              assignedUserName ? h('span', { className: 'block mt-1 text-[8px] font-black text-slate-600 uppercase break-anywhere' }, assignedUserName) : null,
+              assignedUserEmail ? h('span', { className: 'block text-[8px] font-bold text-slate-400 lowercase break-anywhere' }, assignedUserEmail) : null
+            ),
+            h('td', { className: 'px-6 py-4' },
+              `${pkg.o} → ${pkg.d}`,
+              h('br'),
+              h('span', { className: 'text-[8px] text-slate-500 uppercase' }, pkg.fullName || pkg.customer?.fullName || 'Nombre no registrado'),
+              h('span', { className: 'text-[8px] text-slate-400' }, ` · ${pkg.phone || pkg.customer?.phone || 'Teléfono no registrado'}`),
+              h('br'),
+              h('span', { className: 'text-[8px] text-slate-400 uppercase' }, findProductByTracking(pkg)?.name || pkg.productId || 'Sin producto')
+            ),
+            h('td', { className: 'px-6 py-4' }, h('span', { className: 'px-2 py-1 bg-slate-100 rounded-full text-[8px] uppercase' }, pkg.status)),
+            h('td', { className: 'px-6 py-4 text-right' }, h('button', { onClick: () => deletePkg(pkg.id), className: 'text-slate-300 hover:text-red-500' }, h(TrashIcon)))
+          );
+        }),
         pkgs.length === 0 ? h('tr', null, h('td', { colSpan: '4', className: 'px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase' }, 'No hay envíos activos')) : null
       )
     )
