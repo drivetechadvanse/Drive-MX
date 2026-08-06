@@ -1,12 +1,10 @@
 const admin = require('firebase-admin');
 
-const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || 'admin@drivemx.com').trim().toLowerCase();
-const DEFAULT_APP_ID = String(
-  process.env.DRIVE_MX_APP_ID ||
-  process.env.FIREBASE_PROJECT_ID ||
-  process.env.GCLOUD_PROJECT ||
-  'drivemx-paqueteria'
+const FALLBACK_PROJECT_ID = 'drivemx-paqueteria';
+const CONFIGURED_DATA_APP_ID = String(
+  process.env.DRIVE_MX_APP_ID || FALLBACK_PROJECT_ID
 ).trim();
+const ADMIN_APP_NAME = 'drive-mx-claim-guide';
 
 const GUIDE_PATTERN = /^\d{6}-[A-Z]$/;
 const ERROR_CODES = {
@@ -80,18 +78,43 @@ function parseServiceAccountFromEnv() {
   return null;
 }
 
+function getFirebaseProjectId(serviceAccount = null) {
+  return clean(
+    serviceAccount?.project_id ||
+    process.env.FIREBASE_PROJECT_ID ||
+    process.env.GCLOUD_PROJECT ||
+    FALLBACK_PROJECT_ID,
+    180
+  );
+}
+
 function getAdminApp() {
-  if (admin.apps.length) return admin.app();
+  const existingApp = admin.apps.find((app) => app?.name === ADMIN_APP_NAME);
+  if (existingApp) return existingApp;
 
   const serviceAccount = parseServiceAccountFromEnv();
+  const projectId = getFirebaseProjectId(serviceAccount);
+  const options = { projectId };
+
   if (serviceAccount) {
-    return admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-      projectId: serviceAccount.project_id || DEFAULT_APP_ID
-    });
+    options.credential = admin.credential.cert(serviceAccount);
   }
 
-  return admin.initializeApp({ projectId: DEFAULT_APP_ID });
+  return admin.initializeApp(options, ADMIN_APP_NAME);
+}
+
+function resolveDataAppId(requestedAppId = '') {
+  const requested = clean(requestedAppId, 180);
+  const allowedIds = new Set([
+    CONFIGURED_DATA_APP_ID,
+    FALLBACK_PROJECT_ID
+  ].filter(Boolean));
+
+  if (requested && !allowedIds.has(requested)) {
+    throw httpError(400, ERROR_CODES.NOT_AUTHORIZED, 'El proyecto solicitado no es válido.');
+  }
+
+  return requested || CONFIGURED_DATA_APP_ID || FALLBACK_PROJECT_ID;
 }
 
 function getDataRoot(db, appId) {
@@ -140,6 +163,16 @@ function publicTrackingRecord(shipment = {}, sourceUserId = '') {
   };
 }
 
+function isInvalidSessionError(error = {}) {
+  const code = clean(error.code, 160).toLowerCase();
+  return code === 'auth/id-token-expired'
+    || code === 'auth/id-token-revoked'
+    || code === 'auth/invalid-id-token'
+    || code === 'auth/argument-error'
+    || code === 'auth/user-disabled'
+    || code === 'auth/user-not-found';
+}
+
 async function requireAuthenticatedUser(req, app) {
   const authorization = clean(req.headers.authorization || req.headers.Authorization, 10000);
   const token = authorization.toLowerCase().startsWith('bearer ')
@@ -147,13 +180,29 @@ async function requireAuthenticatedUser(req, app) {
     : '';
 
   if (!token) {
-    throw httpError(401, ERROR_CODES.SESSION_REQUIRED, 'Tu sesión expiró. Inicia sesión nuevamente.');
+    throw httpError(401, ERROR_CODES.SESSION_REQUIRED, 'No se recibió una sesión válida.');
   }
 
   try {
-    return await admin.auth(app).verifyIdToken(token, true);
+    // La firma, audiencia y vencimiento del token siguen verificándose.
+    // No se solicita aquí la comprobación remota de revocación porque esa
+    // consulta adicional provocaba el falso mensaje de sesión expirada.
+    return await admin.auth(app).verifyIdToken(token);
   } catch (error) {
-    throw httpError(401, ERROR_CODES.SESSION_REQUIRED, 'Tu sesión expiró. Inicia sesión nuevamente.');
+    console.error('Validar token de Ingresar Número de Guía:', {
+      code: error?.code || '',
+      message: error?.message || ''
+    });
+
+    if (isInvalidSessionError(error)) {
+      throw httpError(401, ERROR_CODES.SESSION_REQUIRED, 'La sesión de acceso ya no es válida. Inicia sesión nuevamente.');
+    }
+
+    throw httpError(
+      500,
+      ERROR_CODES.SERVER_ERROR,
+      'No se pudo validar la sesión en el servidor.'
+    );
   }
 }
 
@@ -196,6 +245,12 @@ async function claimGuide({ db, appId, decodedUser, guideCode }) {
       throw httpError(403, ERROR_CODES.NOT_AUTHORIZED, 'Valida la contraseña maestra antes de ingresar una guía.');
     }
 
+    const operatorEmail = clean(operator.email, 254).toLowerCase();
+    const tokenEmail = clean(decodedUser.email, 254).toLowerCase();
+    if (operatorEmail && tokenEmail && operatorEmail !== tokenEmail) {
+      throw httpError(403, ERROR_CODES.NOT_AUTHORIZED, 'La sesión no corresponde al usuario autenticado.');
+    }
+
     const trackingData = trackingSnapshot.data() || {};
     const sourceUserId = clean(trackingData.sourceUserId || trackingData.ownerId, 180);
     if (!sourceUserId || trackingData.sourcePanel === 'panel_control') {
@@ -213,8 +268,8 @@ async function claimGuide({ db, appId, decodedUser, guideCode }) {
       throw httpError(409, ERROR_CODES.NOT_FOUND, 'Los datos de la guía no coinciden con el registro disponible.');
     }
 
-    const assignedUserName = clean(operator.name || decodedUser.name || decodedUser.email?.split('@')[0], 160);
-    const assignedUserEmail = clean(operator.email || decodedUser.email, 254).toLowerCase();
+    const assignedUserName = clean(operator.name || decodedUser.name || tokenEmail.split('@')[0], 160);
+    const assignedUserEmail = operatorEmail || tokenEmail;
     if (!assignedUserName || !assignedUserEmail) {
       throw httpError(403, ERROR_CODES.NOT_AUTHORIZED, 'El perfil del usuario no contiene nombre y correo válidos.');
     }
@@ -279,13 +334,9 @@ module.exports = async function claimGuideHandler(req, res) {
 
   try {
     const body = readRequestBody(req);
-    const requestedAppId = clean(body.appId, 180);
-    const appId = requestedAppId || DEFAULT_APP_ID;
-    if (appId !== DEFAULT_APP_ID) {
-      throw httpError(400, ERROR_CODES.NOT_AUTHORIZED, 'El proyecto solicitado no es válido.');
-    }
-
+    const appId = resolveDataAppId(body.appId);
     const guideCode = normalizeGuideCode(body.guideCode);
+
     if (!GUIDE_PATTERN.test(guideCode)) {
       throw httpError(400, ERROR_CODES.INVALID_GUIDE, 'Ingresa un número de guía válido.');
     }
@@ -300,7 +351,7 @@ module.exports = async function claimGuideHandler(req, res) {
     const statusCode = Number(error.statusCode) || 500;
     const publicCode = error.publicCode || ERROR_CODES.SERVER_ERROR;
     const publicMessage = statusCode >= 500
-      ? 'No se pudo completar la asignación de la guía.'
+      ? (error.publicCode ? error.message : 'No se pudo completar la asignación de la guía.')
       : error.message;
 
     console.error('Ingresar número de guía:', {
@@ -316,3 +367,4 @@ module.exports = async function claimGuideHandler(req, res) {
     });
   }
 };
+
