@@ -64,7 +64,6 @@
         import "./supermercado-module/supermercado-module.js";
         import "./new-shipment/new-shipment.js";
         import "./guide-assignment/guide-assignment.js";
-        import "./guide-number-entry/guide-number-entry.js";
         import "./panel-control/panel-control.js";
         
         const firebaseConfig = {
@@ -95,7 +94,6 @@
         const Supermercado = window.DriveMxSupermercado || window.DriveMxSupermercadoCore || {};
         const NewShipmentUI = window.DriveMxNewShipment || {};
         const GuideAssignmentUI = window.DriveMxGuideAssignment || {};
-        const GuideNumberEntryUI = window.DriveMxGuideNumberEntry || {};
         const PanelControlUI = window.DriveMxPanelControlUI;
         
         const Icons = {
@@ -1237,8 +1235,16 @@
                     }));
                 } catch(e) {}
             };
-            const userHasAssignmentsAuthorization = (user = sessionUser) => user?.assignmentsAuthorized === true;
-            const persistAssignmentsAuthorization = async (authorizedDb = null) => {
+            const userHasAssignmentsAuthorization = (user = sessionUser) => {
+                const userId = getUserProfileId(user || {}) || getSessionUserId();
+                return Boolean(
+                    user?.assignmentsAuthorized === true ||
+                    user?.assignmentsAccessAuthorized === true ||
+                    user?.misAsignacionesAutorizadas === true ||
+                    readAssignmentsAuthorization(userId)
+                );
+            };
+            const persistAssignmentsAuthorization = async () => {
                 const userId = getSessionUserId();
                 if (!userId || !sessionUser) return false;
                 const now = Date.now();
@@ -1256,18 +1262,8 @@
                 };
                 delete next.assignmentsPassword;
                 delete next.masterPassword;
-
-                // La autorización se escribe con la sesión secundaria del administrador
-                // que acaba de validar la contraseña maestra, no con la sesión del usuario.
-                const db = authorizedDb || fbase.getFirestore();
-                const profileRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, userId);
-                await fbase.setDoc(profileRef, next, { merge: true });
                 writeAssignmentsAuthorization(userId, authorizedAt);
-                setUsers(prev => {
-                    const updatedUsers = [...prev.filter(user => getUserProfileId(user) !== userId), { id: userId, ...next }];
-                    writeLocal(STAFF_USERS_LOCAL_KEY, updatedUsers);
-                    return updatedUsers;
-                });
+                await saveDoc(STAFF_USERS_COLLECTION, userId, next);
                 sessionUserRef.current = { ...(sessionUser || {}), ...next, id: userId };
                 setSessionUser(prev => ({ ...(prev || {}), ...next, id: userId }));
                 return true;
@@ -3723,9 +3719,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 try {
                     const secondaryAuth = getSecondaryAuth();
                     await fbase.signInWithEmailAndPassword(secondaryAuth, ADMIN_EMAIL, assignmentsPassword);
-                    const authorizedDb = fbase.getFirestore(window.secondaryAuthApp);
-                    await persistAssignmentsAuthorization(authorizedDb);
                     await fbase.signOut(secondaryAuth).catch(() => {});
+                    await persistAssignmentsAuthorization();
                     setAssignmentsUnlocked(true);
                     setShowAssignmentsPasswordModal(false);
                     setAssignmentsPassword('');
@@ -4487,40 +4482,18 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
 
                                 {assignmentsUnlocked ? (
                                     <>
-                                        {GuideNumberEntryUI.EnterGuideNumberCard && (
-                                            <GuideNumberEntryUI.EnterGuideNumberCard
-                                                fbase={fbase}
-                                                appId={appId}
-                                                currentUser={sessionUser}
-                                                authorized={assignmentsUnlocked}
-                                                ensureAccountAllowed={ensureAccountAllowed}
-                                            />
-                                        )}
                                         <div><h1 className="text-3xl font-black uppercase tracking-tight">Mis <span className="text-red-500">Asignaciones</span></h1><p className="text-[10px] font-bold text-slate-400 uppercase">Ruta Activa</p></div>
                                         <div className="space-y-4">
-                                            {pkgs.filter(p => p.op === (sessionUser.uid || sessionUser.id)).map(p => {
-                                                const customer = p.customer || {};
-                                                const postalCode = p.postalCode || p.zip || p.delivery?.zip || '-';
-                                                const addressReferences = p.addressReferences || p.references || p.delivery?.references || '-';
-                                                return (
-                                                    <div key={p.id} className="card-glass p-6 space-y-6">
-                                                        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2"><h3 className="text-xl font-black text-red-600">#{p.id}</h3><span className="text-[9px] font-black uppercase text-slate-400 break-anywhere">{p.o} → {p.d}</span></div>
-                                                        <div className="grid sm:grid-cols-2 gap-3 bg-slate-50 rounded-2xl p-4">
-                                                            <div><p className="text-[8px] font-black text-slate-400 uppercase">Nombre completo</p><p className="text-sm font-black text-slate-800 uppercase break-anywhere">{p.fullName || customer.fullName || '-'}</p></div>
-                                                            <div><p className="text-[8px] font-black text-slate-400 uppercase">Número de teléfono</p><p className="text-sm font-black text-slate-800 break-anywhere">{p.phone || customer.phone || '-'}</p></div>
-                                                            <div><p className="text-[8px] font-black text-slate-400 uppercase">Origen</p><p className="text-sm font-black text-slate-800 uppercase break-anywhere">{p.o || '-'}</p></div>
-                                                            <div><p className="text-[8px] font-black text-slate-400 uppercase">Destino</p><p className="text-sm font-black text-slate-800 uppercase break-anywhere">{p.d || '-'}</p></div>
-                                                            <div><p className="text-[8px] font-black text-slate-400 uppercase">Código Postal</p><p className="text-sm font-black text-slate-800 uppercase break-anywhere">{postalCode}</p></div>
-                                                            <div className="sm:col-span-2"><p className="text-[8px] font-black text-slate-400 uppercase">Referencias del domicilio</p><p className="text-sm font-black text-slate-800 uppercase break-anywhere whitespace-pre-wrap">{addressReferences}</p></div>
-                                                        </div>
-                                                        <div className="grid grid-cols-2 gap-2">
-                                                            {STEPS.map((s, i) => (
-                                                                <button key={s} onClick={() => updateAssignedPackageStatus(p, s, i)} className={`p-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${p.status === s ? 'bg-red-500 border-red-500 text-white shadow-lg' : 'border-slate-100 text-slate-400'}`}>{s}</button>
-                                                            ))}
-                                                        </div>
+                                            {pkgs.filter(p => p.op === (sessionUser.uid || sessionUser.id)).map(p => (
+                                                <div key={p.id} className="card-glass p-6 space-y-6">
+                                                    <div className="flex justify-between items-center"><h3 className="text-xl font-black text-red-600">#{p.id}</h3><span className="text-[9px] font-black uppercase text-slate-400">{p.o} → {p.d}</span></div>
+                                                    <div className="grid grid-cols-2 gap-2">
+                                                        {STEPS.map((s, i) => (
+                                                            <button key={s} onClick={() => updateAssignedPackageStatus(p, s, i)} className={`p-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${p.status === s ? 'bg-red-500 border-red-500 text-white shadow-lg' : 'border-slate-100 text-slate-400'}`}>{s}</button>
+                                                        ))}
                                                     </div>
-                                                );
-                                            })}
+                                                </div>
+                                            ))}
                                         </div>
                                     </>
                                 ) : (
@@ -4595,8 +4568,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         ReactDOM.createRoot(document.getElementById('root')).render(<App />);
     </script>
 </body>
-</html>
-                   
+</html>       
 
 
 
