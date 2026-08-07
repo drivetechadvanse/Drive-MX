@@ -48,39 +48,6 @@ export function AdminHeader(props = {}) {
   );
 }
 
-export function ActiveShipmentsCard(props = {}) {
-  if (!h) return null;
-  const Icons = props.Icons || {};
-  const TrashIcon = Icons.Trash || EmptyIcon;
-  const pkgs = toArray(props.pkgs);
-  const findProductByTracking = props.findProductByTracking || (() => null);
-  const deletePkg = props.deletePkg || noop;
-
-  return h('div', { className: 'card-glass overflow-hidden' },
-    h('div', { className: 'bg-slate-50 border-b border-slate-100 px-6 py-4' },
-      h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400 drive-mx-panel-section-title' }, 'Envíos Activos')
-    ),
-    h('table', { className: 'w-full text-left' },
-      h('tbody', { className: 'divide-y divide-slate-50' },
-        pkgs.map((pkg) => h('tr', { key: pkg.id, className: 'text-[10px] font-bold text-slate-600' },
-          h('td', { className: 'px-6 py-4 text-red-600 font-black' }, `#${pkg.id}`),
-          h('td', { className: 'px-6 py-4' },
-            `${pkg.o} → ${pkg.d}`,
-            h('br'),
-            h('span', { className: 'text-[8px] text-slate-500 uppercase' }, pkg.fullName || pkg.customer?.fullName || 'Nombre no registrado'),
-            h('span', { className: 'text-[8px] text-slate-400' }, ` · ${pkg.phone || pkg.customer?.phone || 'Teléfono no registrado'}`),
-            h('br'),
-            h('span', { className: 'text-[8px] text-slate-400 uppercase' }, findProductByTracking(pkg)?.name || pkg.productId || 'Sin producto')
-          ),
-          h('td', { className: 'px-6 py-4' }, h('span', { className: 'px-2 py-1 bg-slate-100 rounded-full text-[8px] uppercase' }, pkg.status)),
-          h('td', { className: 'px-6 py-4 text-right' }, h('button', { onClick: () => deletePkg(pkg.id), className: 'text-slate-300 hover:text-red-500' }, h(TrashIcon)))
-        )),
-        pkgs.length === 0 ? h('tr', null, h('td', { colSpan: '4', className: 'px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase' }, 'No hay envíos activos')) : null
-      )
-    )
-  );
-}
-
 export function EmailSettingsCard(props = {}) {
   if (!h) return null;
   const settings = props.emailSettings || {};
@@ -266,135 +233,44 @@ export function CompletedSalesCard(props = {}) {
   );
 }
 
+// Compatibilidad con la interfaz anterior de PanelControl. La lógica completa
+// vive ahora en packages-guides/packages-guides.js; este componente solo adapta
+// las propiedades antiguas para no romper importaciones existentes.
+export function ActiveShipmentsCard(props = {}) {
+  if (!h) return null;
+  const PackagesGuidesUI = globalThis.DriveMxPackagesGuides || {};
+  if (typeof PackagesGuidesUI.AdminShipmentsCard !== 'function') return null;
+  const manager = props.manager || {
+    pkgs: toArray(props.pkgs),
+    deletePackage: (pkg) => props.deletePkg?.(pkg?.id || pkg),
+    findProductByTracking: props.findProductByTracking || (() => null)
+  };
+  return h(PackagesGuidesUI.AdminShipmentsCard, { manager, Icons: props.Icons || {} });
+}
+
+// Compatibilidad con la interfaz anterior de PanelControl. El CRUD, imágenes,
+// inventario y formulario completo viven en admin-products/admin-products.js.
 export function ProductsAdminPanel(props = {}) {
   if (!h) return null;
-  const Icons = props.Icons || {};
-  const TrashIcon = Icons.Trash || EmptyIcon;
-  const productForm = props.productForm || {};
-  const setProductForm = props.setProductForm || noop;
-  const productImageFiles = toArray(props.productImageFiles);
-  const controlProducts = toArray(props.controlProducts);
-  const normalizeProductSizes = props.normalizeProductSizes || (() => []);
-  const normalizeProductColors = props.normalizeProductColors || (() => []);
-  const getProductGallery = props.getProductGallery || (() => []);
-  const Supermercado = globalThis.DriveMxSupermercado || {};
-
-  return h('div', { className: 'card-glass overflow-hidden' },
-    h('div', { className: 'bg-slate-50 border-b border-slate-100 px-6 py-4 flex items-center justify-between gap-3' },
-      h('div', null,
-        h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400 drive-mx-panel-section-title' }, 'Administración de Productos'),
-        h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'Administra únicamente publicaciones creadas desde el Panel de Control')
-      ),
-      props.editingProductId ? h('button', { onClick: props.resetProductForm || noop, className: 'text-[9px] font-black text-slate-400 uppercase' }, 'Cancelar edición') : null
-    ),
-    h('div', { className: 'p-6 border-b border-slate-50' },
-      h('form', { onSubmit: props.handleProductSubmit || noop, className: 'grid md:grid-cols-5 gap-3' },
-        h('label', { className: 'md:col-span-5 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl p-4 cursor-pointer hover:border-red-200 transition-all' },
-          h('input', { type: 'file', accept: 'image/*', multiple: true, className: 'hidden', onChange: props.handleProductImagesSelect || noop }),
-          h('div', { className: 'flex items-center justify-between gap-4 flex-wrap' },
-            h('div', null,
-              h('p', { className: 'text-[10px] font-black uppercase text-slate-600' }, 'Fotografías del producto'),
-              h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase mt-1' }, 'Máximo 5 imágenes JPG, PNG o WebP asociadas al mismo ID')
-            ),
-            h('span', { className: 'px-3 py-2 bg-white rounded-xl text-[9px] font-black text-slate-400 uppercase' }, `${toArray(productForm.images).length + productImageFiles.length}/5 fotos`)
-          )
-        ),
-        (toArray(productForm.images).length > 0 || productImageFiles.length > 0) ? h('div', { className: 'md:col-span-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3' },
-          toArray(productForm.images).map((img, index) => h('div', { key: img + index, className: 'relative rounded-2xl overflow-hidden bg-slate-100 border border-slate-100 group' },
-            h('img', { src: img, alt: `Foto ${index + 1}`, className: 'w-full aspect-square object-cover' }),
-            h('div', { className: 'absolute inset-x-2 bottom-2 flex gap-1' },
-              h('label', { className: 'flex-1 text-center bg-white/90 rounded-lg px-2 py-1 text-[7px] font-black uppercase cursor-pointer' },
-                'Reemplazar',
-                h('input', { type: 'file', accept: 'image/*', className: 'hidden', onChange: (e) => props.replaceExistingProductImage?.(index, e) })
-              ),
-              h('button', { type: 'button', onClick: () => props.removeExistingProductImage?.(index), className: 'flex-1 bg-red-500 text-white rounded-lg px-2 py-1 text-[7px] font-black uppercase' }, 'Eliminar')
-            )
-          )),
-          productImageFiles.map((item, index) => h('div', { key: item.preview, className: 'relative rounded-2xl overflow-hidden bg-slate-100 border border-dashed border-red-200' },
-            h('img', { src: item.preview, alt: `Nueva foto ${index + 1}`, className: 'w-full aspect-square object-cover' }),
-            h('button', { type: 'button', onClick: () => props.removeNewProductImage?.(index), className: 'absolute inset-x-2 bottom-2 bg-red-500 text-white rounded-lg px-2 py-1 text-[7px] font-black uppercase' }, 'Quitar')
-          ))
-        ) : null,
-        Supermercado.ProductCategorySelect ? h(Supermercado.ProductCategorySelect, {
-          value: productForm.category || '',
-          onChange: (category) => setProductForm((previous) => ({ ...previous, category }))
-        }) : null,
-        h('input', { required: true, className: 'input-field md:col-span-2', placeholder: 'NOMBRE', value: productForm.name || '', onChange: (e) => setProductForm({ ...productForm, name: e.target.value }) }),
-        h('input', { required: true, type: 'number', min: '0', step: '0.01', className: 'input-field', placeholder: 'PRECIO', value: productForm.price ?? '', onChange: (e) => setProductForm({ ...productForm, price: e.target.value }) }),
-        h('input', { required: true, type: 'number', min: '0', step: '1', className: 'input-field', placeholder: 'INVENTARIO', value: productForm.stock ?? '', onChange: (e) => setProductForm({ ...productForm, stock: e.target.value }) }),
-        h('label', { className: 'flex items-center gap-2 text-[10px] font-black uppercase text-slate-500 bg-slate-50 rounded-xl px-4 py-3' },
-          h('input', { type: 'checkbox', checked: Boolean(productForm.active), onChange: (e) => setProductForm({ ...productForm, active: e.target.checked }) }),
-          'Activo'
-        ),
-        h('div', { className: 'md:col-span-5 bg-slate-50 rounded-2xl p-4 space-y-3' },
-          h('p', { className: 'text-[10px] font-black uppercase text-slate-600' }, 'Medidas opcionales'),
-          h('div', { className: 'flex flex-wrap gap-2' },
-            toArray(props.PRODUCT_SIZE_OPTIONS).map((size) => {
-              const selected = normalizeProductSizes(productForm.sizes).includes(size);
-              return h('label', { key: size, className: `px-3 py-2 rounded-xl border text-[9px] font-black uppercase cursor-pointer ${selected ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-slate-100 text-slate-400'}` },
-                h('input', { type: 'checkbox', className: 'hidden', checked: selected, onChange: (e) => setProductForm((prev) => ({ ...prev, sizes: e.target.checked ? [...normalizeProductSizes(prev.sizes), size] : normalizeProductSizes(prev.sizes).filter((item) => item !== size) })) }),
-                size
-              );
-            })
-          )
-        ),
-        h('div', { className: 'md:col-span-5 bg-slate-50 rounded-2xl p-4 space-y-3' },
-          h('div', { className: 'flex items-center justify-between gap-3' },
-            h('p', { className: 'text-[10px] font-black uppercase text-slate-600' }, 'Colores opcionales'),
-            h('button', { type: 'button', onClick: () => setProductForm((prev) => ({ ...prev, colors: [...(prev.colors || ['']), ''] })), className: 'px-3 py-2 bg-white border border-slate-100 rounded-xl text-[10px] font-black text-red-500' }, '+')
-          ),
-          (productForm.colors || ['']).map((color, index) => h('div', { key: index, className: 'flex gap-2' },
-            h('input', { className: 'input-field', placeholder: 'COLOR', value: color || '', onChange: (e) => setProductForm((prev) => { const colors = [...(prev.colors || [''])]; colors[index] = e.target.value; return { ...prev, colors }; }) }),
-            h('button', { type: 'button', onClick: () => setProductForm((prev) => { const colors = (prev.colors || ['']).filter((_, i) => i !== index); return { ...prev, colors: colors.length ? colors : [''] }; }), className: 'px-3 rounded-xl bg-white border border-slate-100 text-slate-400 font-black' }, '×')
-          ))
-        ),
-        h('textarea', { className: 'input-field md:col-span-5 min-h-[90px] resize-y', placeholder: 'DESCRIPCIÓN', value: productForm.description || '', onChange: (e) => setProductForm({ ...productForm, description: e.target.value }) }),
-        h('textarea', { className: 'input-field md:col-span-5 min-h-[90px] resize-y', placeholder: 'ESPECIFICACIONES', value: productForm.specifications || '', onChange: (e) => setProductForm({ ...productForm, specifications: e.target.value }) }),
-        h('button', { disabled: props.productUploading, type: 'submit', className: 'md:col-span-5 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed' }, props.productUploading ? 'Guardando...' : (props.editingProductId ? 'Guardar Cambios' : 'Agregar Producto'))
-      )
-    ),
-    h('div', { className: 'overflow-x-auto drive-mx-panel-table-wrap' },
-      h('table', { className: 'w-full text-left' },
-        h('thead', { className: 'bg-white border-b border-slate-50' },
-          h('tr', { className: 'text-[8px] font-black uppercase text-slate-400' },
-            h('th', { className: 'px-6 py-3' }, 'Foto'),
-            h('th', { className: 'px-6 py-3' }, 'Producto'),
-            h('th', { className: 'px-6 py-3' }, 'Precio'),
-            h('th', { className: 'px-6 py-3' }, 'Inventario'),
-            h('th', { className: 'px-6 py-3' }, 'Estado'),
-            h('th', { className: 'px-6 py-3 text-right' }, 'Acciones')
-          )
-        ),
-        h('tbody', { className: 'divide-y divide-slate-50' },
-          controlProducts.map((product) => {
-            const stock = Math.max(0, Math.floor(Number(product.stock ?? product.availableStock ?? 0)));
-            const isSoldOut = stock <= 0;
-            const statusLabel = isSoldOut ? 'Agotado' : (product.active !== false ? 'Activo' : 'Inactivo');
-            const statusClass = isSoldOut ? 'bg-red-50 text-red-600' : (product.active !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400');
-            return h('tr', { key: product.id, className: 'text-[10px] font-bold text-slate-600' },
-              h('td', { className: 'px-6 py-4' },
-                h('div', { className: 'w-12 h-12 rounded-xl bg-slate-100 overflow-hidden drive-mx-panel-product-thumb' },
-                  getProductGallery(product)[0] ? h('img', { src: getProductGallery(product)[0], alt: product.name, className: 'w-full h-full object-cover' }) : null
-                )
-              ),
-              h('td', { className: 'px-6 py-4' }, h('p', { className: 'font-black text-slate-800' }, product.name), h('p', { className: 'font-mono text-[8px] text-slate-400' }, product.id)),
-              h('td', { className: 'px-6 py-4 text-red-600 font-black' }, `$${Number(product.price || 0).toFixed(2)}`),
-              h('td', { className: 'px-6 py-4' }, stock),
-              h('td', { className: 'px-6 py-4' }, h('span', { className: `px-2 py-1 rounded-full text-[8px] uppercase ${statusClass}` }, statusLabel)),
-              h('td', { className: 'px-6 py-4 text-right' },
-                h('div', { className: 'flex justify-end gap-2 flex-wrap' },
-                  h('button', { onClick: () => props.editProduct?.(product), className: 'px-2 py-1 bg-slate-100 rounded-lg text-[8px] font-black uppercase' }, 'Editar'),
-                  h('button', { onClick: () => props.toggleProduct?.(product), className: 'px-2 py-1 bg-slate-100 rounded-lg text-[8px] font-black uppercase' }, product.active !== false ? 'Desactivar' : 'Activar'),
-                  h('button', { onClick: () => props.deleteProduct?.(product.id), className: 'text-slate-300 hover:text-red-500' }, h(TrashIcon))
-                )
-              )
-            );
-          }),
-          controlProducts.length === 0 ? h('tr', null, h('td', { colSpan: '6', className: 'px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase' }, 'Aún no hay productos registrados')) : null
-        )
-      )
-    )
-  );
+  const AdminProductsUI = globalThis.DriveMxAdminProducts || {};
+  if (typeof AdminProductsUI.AdminProductsPanel !== 'function') return null;
+  const manager = props.manager || {
+    productForm: props.productForm,
+    setProductForm: props.setProductForm,
+    productImageFiles: props.productImageFiles,
+    productUploading: props.productUploading,
+    editingProductId: props.editingProductId,
+    controlProducts: toArray(props.controlProducts),
+    resetProductForm: props.resetProductForm,
+    handleProductImagesSelect: props.handleProductImagesSelect,
+    removeExistingProductImage: props.removeExistingProductImage,
+    removeNewProductImage: props.removeNewProductImage,
+    replaceExistingProductImage: props.replaceExistingProductImage,
+    handleProductSubmit: props.handleProductSubmit,
+    editProduct: props.editProduct,
+    toggleProduct: props.toggleProduct,
+    deleteProduct: props.deleteProduct
+  };
+  return h(AdminProductsUI.AdminProductsPanel, { manager, Icons: props.Icons || {} });
 }
-            
 
