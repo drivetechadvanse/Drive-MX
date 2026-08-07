@@ -81,6 +81,11 @@
     </script>
     <script src="./wallet/wallet.js"></script>
     <script src="./users/users.js"></script>
+    <script src="./products-core/products-core.js"></script>
+    <script type="text/babel" data-presets="react" src="./admin-products/admin-products.js"></script>
+    <script type="text/babel" data-presets="react" src="./user-products/user-products.js"></script>
+    <script type="text/babel" data-presets="react" src="./auth-email-password/auth-email-password.js"></script>
+    <script type="text/babel" data-presets="react" src="./packages-guides/packages-guides.js"></script>
 
     <script type="text/babel" data-presets="react">
         const { useState, useEffect, useRef, useCallback } = React;
@@ -95,6 +100,11 @@
         const NewShipmentUI = window.DriveMxNewShipment || {};
         const GuideAssignmentUI = window.DriveMxGuideAssignment || {};
         const PanelControlUI = window.DriveMxPanelControlUI;
+        const ProductsCore = window.DriveMxProductsCore;
+        const AdminProductsUI = window.DriveMxAdminProducts;
+        const UserProductsUI = window.DriveMxUserProducts;
+        const EmailPasswordAuthUI = window.DriveMxEmailPasswordAuth;
+        const PackagesGuidesUI = window.DriveMxPackagesGuides;
         
         const Icons = {
             Truck: ({size=16}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-5l-4-4h-3v10h3Z"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>,
@@ -109,25 +119,24 @@
             Unlock: ({size=14}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>
         };
 
-        const STEPS = ['Recolectado', 'Procesando', 'En Camino', 'Entregado'];
+        const STEPS = PackagesGuidesUI.STEPS;
         const appId = window.firebaseConfig.projectId;
         const ADMIN_EMAIL = 'admin@drivemx.com';
         const STAFF_USERS_COLLECTION = 'operators';
-        const PUBLIC_PRODUCTS_COLLECTION = 'products';
-        const ADMIN_PRODUCTS_COLLECTION = 'admin_products';
-        const USER_PRODUCTS_COLLECTION = 'user_products';
-        const USER_SALES_COLLECTION = 'user_sales';
-        const PRODUCT_ORIGIN_CONTROL = 'panel_control';
-        const PRODUCT_ORIGIN_USER = 'usuario';
+        const PUBLIC_PRODUCTS_COLLECTION = ProductsCore.PUBLIC_PRODUCTS_COLLECTION;
+        const ADMIN_PRODUCTS_COLLECTION = ProductsCore.ADMIN_PRODUCTS_COLLECTION;
+        const USER_PRODUCTS_COLLECTION = ProductsCore.USER_PRODUCTS_COLLECTION;
+        const USER_SALES_COLLECTION = ProductsCore.USER_SALES_COLLECTION;
+        const PRODUCT_ORIGIN_CONTROL = ProductsCore.PRODUCT_ORIGIN_CONTROL;
+        const PRODUCT_ORIGIN_USER = ProductsCore.PRODUCT_ORIGIN_USER;
         const STAFF_USERS_LOCAL_KEY = 'driveMxOperators';
-        const ADMIN_PRODUCTS_LOCAL_KEY = 'driveMxAdminProducts';
         const CART_MAX_ITEMS = 2;
         const REGISTERED_USERS_PAGE_SIZE = 20;
         const CART_TTL_MS = 30 * 60 * 1000;
         const CART_LOCAL_PREFIX = 'driveMxVisitorCart';
         const CART_SESSION_KEY = 'driveMxVisitorCartSessionId';
         const SALE_NOTIFICATION_MESSAGE = 'Tu producto ha sido vendido. Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.';
-        const PRODUCT_SIZE_OPTIONS = ['Chica', 'Mediana', 'Grande', 'XL'];
+        const PRODUCT_SIZE_OPTIONS = ProductsCore.PRODUCT_SIZE_OPTIONS;
         const PAYMENT_BANK_AZTECA_ORDER_TEXT = 'Pagar solo con Banco Azteca, el nombre del titular de la cuenta debe de coincidir con el nombre registrado en el pedido para que la tranferencia sea aprobada';
         const GLOBAL_SHIPPING_FEE = 150;
         const normalizeEmailSettings = (settings = {}) => ({
@@ -165,8 +174,8 @@
             }
             return String(value);
         };
-        const normalizeProductSizes = (sizes = []) => Array.isArray(sizes) ? sizes.filter(size => PRODUCT_SIZE_OPTIONS.includes(String(size || '').trim())) : [];
-        const normalizeProductColors = (colors = []) => Array.isArray(colors) ? colors.map(color => String(color || '').trim()).filter(Boolean) : [];
+        const normalizeProductSizes = ProductsCore.normalizeProductSizes;
+        const normalizeProductColors = ProductsCore.normalizeProductColors;
         const productSizesText = (product = {}) => normalizeProductSizes(product.sizes || product.medidas).join(', ');
         const productColorsText = (product = {}) => normalizeProductColors(product.colors || product.colores).join(', ');
         const productOptionsLines = (product = {}) => {
@@ -179,8 +188,7 @@
         };
         const BLOCKED_ACCOUNT_MESSAGE = 'La cuenta ha sido bloqueada por el administrador.';
         const DELETED_ACCOUNT_MESSAGE = 'La cuenta ha sido eliminada por el administrador.';
-        const ASSIGNMENTS_AUTH_LOCAL_PREFIX = 'driveMxAssignmentsAuthorization';
-        const getSafeFirestoreDocId = (value = '') => String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+        const getSafeFirestoreDocId = ProductsCore.safeDocumentId;
         const createVisitorCartSessionId = () => `${Date.now()}_${Math.random().toString(36).slice(2)}`;
         const getVisitorCartStorageKey = () => {
             try {
@@ -267,14 +275,9 @@
         const clearVisitorCart = () => {
             try { localStorage.removeItem(getVisitorCartStorageKey()); } catch(e) {}
         };
-        const readLocal = (key) => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; } };
-        const writeLocal = (key, data) => { try { localStorage.setItem(key, JSON.stringify(data)); } catch(e) {} };
-        const getProductGallery = (product) => {
-            const legacyImage = product?.imageUrl || product?.image || '';
-            const gallery = Array.isArray(product?.images) ? product.images.filter(Boolean) : [];
-            if (gallery.length > 0) return gallery.slice(0, 5);
-            return legacyImage ? [legacyImage] : [];
-        };
+        const readLocal = (key) => ProductsCore.readLocal(key, []);
+        const writeLocal = ProductsCore.writeLocal;
+        const getProductGallery = ProductsCore.getProductGallery;
 
         const DRIVE_MX_HISTORY_KEY = 'driveMxBackNavigation';
         const VALID_APP_VIEWS = new Set(['home', 'product-detail', 'delivery-data', 'payment-method', 'login', 'admin', 'admin-tracking', 'support', 'admin-support', 'operator', 'guide-assignment']);
@@ -309,28 +312,14 @@
 
         const App = () => {
             const [view, setViewState] = useState('home');
-            const [fbUser, setFbUser] = useState(null);
-            const [sessionUser, setSessionUser] = useState(null);
-            const [pkgs, setPkgs] = useState(() => readLocal('driveMxPackages'));
             const [users, setUsers] = useState(() => readLocal(STAFF_USERS_LOCAL_KEY));
             const [staffUsersLoaded, setStaffUsersLoaded] = useState(false);
-            const [products, setProducts] = useState(() => readLocal('driveMxProducts'));
-            const [adminProducts, setAdminProducts] = useState(() => readLocal(ADMIN_PRODUCTS_LOCAL_KEY));
             const [ads, setAds] = useState(() => AdsManager.readAdsLocal());
-            const [userPanelProducts, setUserPanelProducts] = useState([]);
-            const [userCompletedSales, setUserCompletedSales] = useState([]);
             const [searchQuery, setSearchQuery] = useState('');
-            const [trackingResult, setTrackingResult] = useState(null);
-            const [trackingNotFound, setTrackingNotFound] = useState(false);
-            const [loginForm, setLoginForm] = useState({ email: '', p: '' });
             const [userForm, setUserForm] = useState({ email: '', p: '', n: '', phone: '' });
             const [userRegistrationSaving, setUserRegistrationSaving] = useState(false);
             const [editingRegisteredUserId, setEditingRegisteredUserId] = useState(null);
             const [registeredUsersPage, setRegisteredUsersPage] = useState(1);
-            const [productForm, setProductForm] = useState(() => Supermercado.createProductFormState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], colors: [''], images: [], image: '', imageUrl: '', active: true }));
-            const [productImageFiles, setProductImageFiles] = useState([]);
-            const [productUploading, setProductUploading] = useState(false);
-            const [editingProductId, setEditingProductId] = useState(null);
             const [selectedProductId, setSelectedProductId] = useState(null);
             const [currentImageIndex, setCurrentImageIndex] = useState(0);
             const [selectedProductQuantity, setSelectedProductQuantity] = useState(1);
@@ -354,7 +343,6 @@
             });
             const [pendingTransfers, setPendingTransfers] = useState(() => readLocal('driveMxPendingTransfers'));
             const [completedSales, setCompletedSales] = useState([]);
-            const [transferTrackingDrafts, setTransferTrackingDrafts] = useState({});
             const [emailSaving, setEmailSaving] = useState(false);
             const [paymentSaving, setPaymentSaving] = useState(false);
             const [orderSending, setOrderSending] = useState(false);
@@ -365,17 +353,6 @@
             const [activeSupportChatId, setActiveSupportChatId] = useState('');
             const [showAdminMenu, setShowAdminMenuState] = useState(false);
             const [showUserMenu, setShowUserMenuState] = useState(false);
-            const [assignmentsUnlocked, setAssignmentsUnlockedState] = useState(false);
-            const [showAssignmentsPasswordModal, setShowAssignmentsPasswordModalState] = useState(false);
-            const [assignmentsPassword, setAssignmentsPassword] = useState('');
-            const [assignmentsPasswordError, setAssignmentsPasswordError] = useState('');
-            const [assignmentsUnlocking, setAssignmentsUnlocking] = useState(false);
-            const [saleNotificationEmail, setSaleNotificationEmail] = useState('');
-            const [saleNotificationSaving, setSaleNotificationSaving] = useState(false);
-            const [userProductForm, setUserProductForm] = useState(() => Supermercado.createProductFormState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], colors: [''], images: [], image: '', imageUrl: '', active: true }));
-            const [userProductImageFiles, setUserProductImageFiles] = useState([]);
-            const [userProductUploading, setUserProductUploading] = useState(false);
-            const [editingUserProductId, setEditingUserProductId] = useState(null);
             const [wallets, setWallets] = useState([]);
             const [walletSettings, setWalletSettings] = useState(() => Wallet.defaultSettings());
             const [walletSettingsSaving, setWalletSettingsSaving] = useState(false);
@@ -386,14 +363,92 @@
             const [walletRechargeProcessing, setWalletRechargeProcessing] = useState(false);
             const [walletRechargeActionId, setWalletRechargeActionId] = useState('');
 
+            const featureManagersRef = useRef({});
+            const navigationActionsRef = useRef({});
+            const authManager = EmailPasswordAuthUI.useEmailPasswordAuth({
+                fbase,
+                appId,
+                firebaseConfig: window.firebaseConfig,
+                adminEmail: ADMIN_EMAIL,
+                usersCollection: STAFF_USERS_COLLECTION,
+                users,
+                staffUsersLoaded,
+                onLogin: (profile) => featureManagersRef.current.onLogin?.(profile),
+                onLogoutStart: () => featureManagersRef.current.onLogoutStart?.(),
+                onLogoutComplete: () => featureManagersRef.current.onLogoutComplete?.(),
+                onSessionProfileChange: (profile) => featureManagersRef.current.onSessionProfileChange?.(profile)
+            });
+            const { fbUser, sessionUser } = authManager;
+            const isUserBlocked = authManager.isUserBlocked;
+            const getCurrentSessionProfile = () => authManager.findRegisteredUserProfile(sessionUser) || sessionUser || {};
+            const ensureAccountAllowed = useCallback(() => {
+                if (!sessionUser || sessionUser.role === 'admin') return true;
+                if (isUserBlocked(getCurrentSessionProfile())) {
+                    alert(BLOCKED_ACCOUNT_MESSAGE);
+                    return false;
+                }
+                return true;
+            }, [sessionUser, users]);
+
+            const publicProductsManager = ProductsCore.usePublicProducts({ fbase, appId, enabled: Boolean(fbUser) });
+            const products = publicProductsManager.products;
+            const adminProductsManager = AdminProductsUI.useAdminProductsManager({
+                fbase, appId, fbUser, sessionUser, publicProducts: publicProductsManager, adminEmail: ADMIN_EMAIL
+            });
+            const controlProducts = adminProductsManager.controlProducts;
+            const userProductsManager = UserProductsUI.useUserProductsManager({
+                fbase,
+                appId,
+                fbUser,
+                sessionUser,
+                users,
+                publicProducts: publicProductsManager,
+                wallets,
+                walletSettings,
+                Wallet,
+                ensureAccountAllowed,
+                onSessionUserChange: authManager.setSessionUser
+            });
+            const currentUserProducts = userProductsManager.currentUserProducts;
+            const currentUserSales = userProductsManager.currentUserSales;
+            const packagesManager = PackagesGuidesUI.usePackagesGuidesManager({
+                fbase,
+                appId,
+                fbUser,
+                sessionUser,
+                users,
+                products,
+                controlProducts,
+                shippingFee: GLOBAL_SHIPPING_FEE,
+                ensureAccountAllowed,
+                verifyAdminPassword: authManager.verifyAdminPassword,
+                onSessionProfileChange: authManager.setSessionUser,
+                activeView: view
+            });
+            const {
+                pkgs,
+                transferTrackingDrafts,
+                setTransferTrackingDrafts,
+                trackingResult,
+                trackingNotFound,
+                assignmentsUnlocked,
+                setAssignmentsUnlocked: setAssignmentsUnlockedState,
+                showAssignmentsPasswordModal,
+                setShowAssignmentsPasswordModal: setShowAssignmentsPasswordModalState,
+                assignmentsPassword,
+                setAssignmentsPassword,
+                assignmentsPasswordError,
+                setAssignmentsPasswordError,
+                assignmentsUnlocking,
+                setAssignmentsUnlocking
+            } = packagesManager;
+            const userHasAssignmentsAuthorization = packagesManager.userHasAssignmentsAuthorization;
             const latestNavigationSnapshotRef = useRef(null);
-            const sessionUserRef = useRef(null);
             const historyInitializedRef = useRef(false);
             const suppressHistorySyncRef = useRef(false);
             const pendingHistoryModeRef = useRef(null);
             const lastHistorySnapshotKeyRef = useRef('');
             const allowNativeBackExitRef = useRef(false);
-            const blockedAccountHandledRef = useRef(false);
 
             const getCurrentNavigationSnapshot = useCallback(() => normalizeNavigationSnapshot({
                 view,
@@ -465,9 +520,42 @@
                 setAssignmentsUnlockedState(resolved);
             }, [requestHistorySync, assignmentsUnlocked]);
 
+            navigationActionsRef.current = { setView };
+            featureManagersRef.current = {
+                onLogin: (profile) => {
+                    const assignmentsAuthorized = profile?.role !== 'admin' && packagesManager.userHasAssignmentsAuthorization(profile);
+                    setAssignmentsUnlocked(assignmentsAuthorized);
+                    setShowUserMenu(false);
+                    setShowAssignmentsPasswordModal(false);
+                    setAssignmentsPassword('');
+                    setAssignmentsPasswordError('');
+                    setView(profile?.role === 'admin' ? 'admin' : 'operator');
+                },
+                onLogoutStart: () => {
+                    setUserForm({ email: '', p: '', n: '', phone: '' });
+                    setEditingRegisteredUserId(null);
+                    setShowUserModal(false);
+                    setShowUserMenu(false);
+                    setShowAdminMenu(false);
+                    setShowWalletRecharge(false);
+                    setWalletRechargeAmount('');
+                    setWalletRechargeProcessing(false);
+                    setWalletMovements([]);
+                    userProductsManager.reset();
+                    packagesManager.reset();
+                    resetPublicFlow();
+                },
+                onLogoutComplete: () => {},
+                onSessionProfileChange: (profile) => {
+                    if (profile?.role !== 'admin' && packagesManager.userHasAssignmentsAuthorization(profile)) {
+                        setAssignmentsUnlocked(true);
+                    }
+                }
+            };
+
             const applyNavigationSnapshot = useCallback((snapshot) => {
                 const next = normalizeNavigationSnapshot(snapshot);
-                const activeSession = sessionUserRef.current;
+                const activeSession = authManager.getCurrentSession();
                 if (['admin', 'admin-tracking', 'admin-support'].includes(next.view) && activeSession?.role !== 'admin') {
                     next.view = activeSession ? 'operator' : 'home';
                     next.showAdminMenu = false;
@@ -518,9 +606,6 @@
                 }
             }, []);
 
-            useEffect(() => {
-                sessionUserRef.current = sessionUser;
-            }, [sessionUser]);
 
             useEffect(() => {
                 const snapshot = getCurrentNavigationSnapshot();
@@ -622,16 +707,6 @@
             }, [applyNavigationSnapshot, getCurrentNavigationSnapshot]);
 
             useEffect(() => {
-                if (view === 'operator') return;
-                setShowUserMenu(false);
-                setAssignmentsUnlocked(false);
-                setShowAssignmentsPasswordModal(false);
-                setAssignmentsPassword('');
-                setAssignmentsPasswordError('');
-                setAssignmentsUnlocking(false);
-            }, [view]);
-
-            useEffect(() => {
                 const syncVisitorCart = () => setCartItems(readVisitorCart());
                 syncVisitorCart();
                 window.addEventListener('storage', syncVisitorCart);
@@ -643,80 +718,36 @@
             }, []);
 
             useEffect(() => {
-                if (!sessionUser || sessionUser.role === 'admin') return;
-                setSaleNotificationEmail(sessionUser.saleNotificationEmail || sessionUser.email || '');
-            }, [sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.saleNotificationEmail, sessionUser?.role]);
-
-            useEffect(() => {
-                const app = fbase.initializeApp(window.firebaseConfig);
-                const auth = fbase.getAuth(app);
-                fbase.signInAnonymously(auth).catch((err) => { console.error('Firebase Auth:', err); setFbUser({ uid: 'local' }); });
-                return fbase.onAuthStateChanged(auth, (user) => setFbUser(user || { uid: 'local' }));
-            }, []);
-
-            useEffect(() => {
-                if (!fbUser) return;
+                if (!fbUser) return undefined;
                 const db = fbase.getFirestore();
-                const pkgCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'packages');
                 const userCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION);
-                const productCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', PUBLIC_PRODUCTS_COLLECTION);
-                const adminProductCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', ADMIN_PRODUCTS_COLLECTION);
                 const transferCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'bank_transfers');
                 const completedSalesCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'completed_sales');
                 const supportCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'support_chats');
                 const mailSettingsRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'mail_settings', 'config');
                 const paymentSettingsRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'payment_settings', 'config');
-                
-                let unsubPkgs = () => {};
-                if (sessionUser?.role === 'admin') {
-                    unsubPkgs = fbase.onSnapshot(pkgCol, (snapshot) => {
-                        const list = [];
-                        snapshot.forEach(documentSnapshot => list.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
-                        setPkgs(list);
-                        writeLocal('driveMxPackages', list);
-                    }, (err) => { console.error('Firestore paquetes administrativos:', err); });
-                } else if (sessionUser && sessionUser.role !== 'admin') {
-                    const assignedUserId = sessionUser.uid || sessionUser.id || '';
-                    const assignedPackagesQuery = fbase.query(pkgCol, fbase.where('op', '==', assignedUserId));
-                    unsubPkgs = fbase.onSnapshot(assignedPackagesQuery, (snapshot) => {
-                        const list = [];
-                        snapshot.forEach(documentSnapshot => list.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
-                        setPkgs(list);
-                        writeLocal('driveMxPackages', list);
-                    }, (err) => { console.error('Firestore paquetes asignados al usuario:', err); });
-                } else {
-                    setPkgs([]);
-                }
 
-                const unsubUsers = fbase.onSnapshot(userCol, (s) => {
-                    const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
-                    setUsers(l);
+                setStaffUsersLoaded(false);
+                const unsubUsers = fbase.onSnapshot(userCol, (snapshot) => {
+                    const list = [];
+                    snapshot.forEach((documentSnapshot) => list.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+                    setUsers(list);
                     setStaffUsersLoaded(true);
-                    writeLocal(STAFF_USERS_LOCAL_KEY, l);
-                }, (err) => { console.error('Firestore usuarios:', err); });
-
-                const unsubProducts = fbase.onSnapshot(productCol, (s) => {
-                    const l = []; s.forEach(d => l.push(d.data()));
-                    setProducts(l);
-                    writeLocal('driveMxProducts', l);
-                }, (err) => { console.error('Firestore productos públicos:', err); });
-
-                const unsubAdminProducts = fbase.onSnapshot(adminProductCol, (s) => {
-                    const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
-                    l.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
-                    setAdminProducts(l);
-                    writeLocal(ADMIN_PRODUCTS_LOCAL_KEY, l);
-                }, (err) => { console.error('Firestore productos Panel de Control:', err); });
+                    writeLocal(STAFF_USERS_LOCAL_KEY, list);
+                }, (error) => {
+                    console.error('Firestore usuarios:', error);
+                    setStaffUsersLoaded(true);
+                });
 
                 let unsubTransfers = () => {};
                 if (sessionUser?.role === 'admin') {
                     unsubTransfers = fbase.onSnapshot(transferCol, (snapshot) => {
                         const list = [];
-                        snapshot.forEach(documentSnapshot => list.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+                        snapshot.forEach((documentSnapshot) => list.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
                         list.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
                         setPendingTransfers(list);
                         writeLocal('driveMxPendingTransfers', list);
-                    }, (err) => { console.error('Firestore transferencias administrativas:', err); });
+                    }, (error) => console.error('Firestore transferencias administrativas:', error));
                 } else if (sessionUser && sessionUser.role !== 'admin') {
                     const walletId = String(sessionUser.uid || sessionUser.id || '').trim();
                     if (walletId) {
@@ -727,11 +758,11 @@
                         );
                         unsubTransfers = fbase.onSnapshot(ownRechargeTransfersQuery, (snapshot) => {
                             const list = [];
-                            snapshot.forEach(documentSnapshot => list.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+                            snapshot.forEach((documentSnapshot) => list.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
                             list.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
                             setPendingTransfers(list);
                             writeLocal('driveMxPendingTransfers', list);
-                        }, (err) => { console.error('Firestore recargas pendientes del usuario:', err); });
+                        }, (error) => console.error('Firestore recargas pendientes del usuario:', error));
                     } else {
                         setPendingTransfers([]);
                     }
@@ -742,40 +773,47 @@
                 let unsubCompletedSales = () => {};
                 if (sessionUser?.role === 'admin') {
                     setCompletedSales(readLocal('driveMxCompletedSales'));
-                    unsubCompletedSales = fbase.onSnapshot(completedSalesCol, (s) => {
-                        const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
-                        l.sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0));
-                        setCompletedSales(l);
-                        writeLocal('driveMxCompletedSales', l);
-                    }, (err) => { console.error('Firestore ventas realizadas:', err); });
+                    unsubCompletedSales = fbase.onSnapshot(completedSalesCol, (snapshot) => {
+                        const list = [];
+                        snapshot.forEach((documentSnapshot) => list.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+                        list.sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0));
+                        setCompletedSales(list);
+                        writeLocal('driveMxCompletedSales', list);
+                    }, (error) => console.error('Firestore ventas realizadas:', error));
                 } else {
                     setCompletedSales([]);
                 }
 
-                const unsubMailSettings = fbase.onSnapshot(mailSettingsRef, (snap) => {
-                    if (!snap.exists()) return;
-                    const data = snap.data() || {};
-                    const next = normalizeEmailSettings(data);
+                const unsubMailSettings = fbase.onSnapshot(mailSettingsRef, (snapshot) => {
+                    if (!snapshot.exists()) return;
+                    const next = normalizeEmailSettings(snapshot.data() || {});
                     setEmailSettings(next);
-                    try { localStorage.setItem('driveMxEmailSettings', JSON.stringify(next)); } catch(e) {}
-                }, (err) => { console.error('Firestore configuración correo:', err); });
+                    try { localStorage.setItem('driveMxEmailSettings', JSON.stringify(next)); } catch(error) {}
+                }, (error) => console.error('Firestore configuración correo:', error));
 
-                const unsubSupportChats = fbase.onSnapshot(supportCol, (s) => {
-                    const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
-                    l.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
-                    setSupportChats(l);
-                    writeLocal('driveMxSupportChats', l);
-                }, (err) => { console.error('Firestore soporte:', err); });
+                const unsubSupportChats = fbase.onSnapshot(supportCol, (snapshot) => {
+                    const list = [];
+                    snapshot.forEach((documentSnapshot) => list.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+                    list.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
+                    setSupportChats(list);
+                    writeLocal('driveMxSupportChats', list);
+                }, (error) => console.error('Firestore soporte:', error));
 
-                const unsubPaymentSettings = fbase.onSnapshot(paymentSettingsRef, (snap) => {
-                    if (!snap.exists()) return;
-                    const data = snap.data() || {};
-                    const next = normalizePaymentSettings(data);
+                const unsubPaymentSettings = fbase.onSnapshot(paymentSettingsRef, (snapshot) => {
+                    if (!snapshot.exists()) return;
+                    const next = normalizePaymentSettings(snapshot.data() || {});
                     setPaymentSettings(next);
-                    try { localStorage.setItem('driveMxPaymentSettings', JSON.stringify(next)); } catch(e) {}
-                }, (err) => { console.error('Firestore configuración pagos:', err); });
+                    try { localStorage.setItem('driveMxPaymentSettings', JSON.stringify(next)); } catch(error) {}
+                }, (error) => console.error('Firestore configuración pagos:', error));
 
-                return () => { unsubPkgs(); unsubUsers(); unsubProducts(); unsubAdminProducts(); unsubTransfers(); unsubCompletedSales(); unsubSupportChats(); unsubMailSettings(); unsubPaymentSettings(); };
+                return () => {
+                    unsubUsers();
+                    unsubTransfers();
+                    unsubCompletedSales();
+                    unsubSupportChats();
+                    unsubMailSettings();
+                    unsubPaymentSettings();
+                };
             }, [fbUser, sessionUser?.role, sessionUser?.uid, sessionUser?.id]);
 
             useEffect(() => {
@@ -816,63 +854,7 @@
                 return Wallet.subscribeRecharges({ fbase, appId, onChange: setWalletRecharges });
             }, [fbUser, sessionUser?.role]);
 
-            useEffect(() => {
-                if (!fbUser || !sessionUser || sessionUser.role === 'admin') {
-                    setUserPanelProducts([]);
-                    return;
-                }
-                const userDocId = getSafeFirestoreDocId(sessionUser.uid || sessionUser.id);
-                if (!userDocId) {
-                    setUserPanelProducts([]);
-                    return;
-                }
-                const localKey = `driveMxUserProducts_${userDocId}`;
-                setUserPanelProducts(readLocal(localKey));
-                const db = fbase.getFirestore();
-                const userProductCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', USER_PRODUCTS_COLLECTION, userDocId, 'items');
-                const unsubUserProducts = fbase.onSnapshot(userProductCol, (s) => {
-                    const l = []; s.forEach(d => l.push({ id: d.id, ...d.data() }));
-                    l.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
-                    setUserPanelProducts(l);
-                    writeLocal(localKey, l);
-                }, (err) => { console.error('Firestore productos Panel de Usuario:', err); });
-                return () => unsubUserProducts();
-            }, [fbUser, sessionUser?.uid, sessionUser?.id, sessionUser?.role]);
 
-            useEffect(() => {
-                if (!fbUser || !sessionUser || sessionUser.role === 'admin') {
-                    setUserCompletedSales([]);
-                    return;
-                }
-                const userDocId = getSafeFirestoreDocId(sessionUser.uid || sessionUser.id);
-                if (!userDocId) {
-                    setUserCompletedSales([]);
-                    return;
-                }
-                const localKey = `driveMxUserCompletedSales_${userDocId}`;
-                const sessionEmail = String(sessionUser.email || '').trim().toLowerCase();
-                const localSales = readLocal(localKey).filter(sale => {
-                    const saleSellerId = getSafeFirestoreDocId(sale.sellerId || sale.ownerId || sale.userId);
-                    const saleSellerEmail = String(sale.sellerEmail || sale.ownerEmail || '').trim().toLowerCase();
-                    return saleSellerId === userDocId || (sessionEmail && saleSellerEmail === sessionEmail);
-                });
-                setUserCompletedSales(localSales);
-                const db = fbase.getFirestore();
-                const userSalesCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', USER_SALES_COLLECTION, userDocId, 'items');
-                const unsubUserSales = fbase.onSnapshot(userSalesCol, (s) => {
-                    const l = [];
-                    s.forEach(d => {
-                        const data = { id: d.id, ...d.data() };
-                        const saleSellerId = getSafeFirestoreDocId(data.sellerId || data.ownerId || data.userId);
-                        const saleSellerEmail = String(data.sellerEmail || data.ownerEmail || '').trim().toLowerCase();
-                        if (saleSellerId === userDocId || (sessionEmail && saleSellerEmail === sessionEmail)) l.push(data);
-                    });
-                    l.sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0));
-                    setUserCompletedSales(l);
-                    writeLocal(localKey, l);
-                }, (err) => { console.error('Firestore ventas realizadas Panel de Usuario:', err); });
-                return () => unsubUserSales();
-            }, [fbUser, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role]);
 
             const getOperationErrorDetails = (err = {}) => ({
                 name: err?.name || 'Error',
@@ -885,17 +867,8 @@
                 const { throwOnError = false, skipLocalUpdate = false, applyLocalOnError = true } = options || {};
                 const applyLocalUpdate = () => {
                     if (skipLocalUpdate) return;
-                    if (col === 'packages') {
-                        setPkgs(prev => { const next = [...prev.filter(x => x.id !== id), data]; writeLocal('driveMxPackages', next); return next; });
-                    }
                     if (col === STAFF_USERS_COLLECTION) {
                         setUsers(prev => { const next = [...prev.filter(x => x.id !== id), { id, ...data }]; writeLocal(STAFF_USERS_LOCAL_KEY, next); return next; });
-                    }
-                    if (col === PUBLIC_PRODUCTS_COLLECTION) {
-                        setProducts(prev => { const next = [...prev.filter(x => x.id !== id), data]; writeLocal('driveMxProducts', next); return next; });
-                    }
-                    if (col === ADMIN_PRODUCTS_COLLECTION) {
-                        setAdminProducts(prev => { const next = [...prev.filter(x => x.id !== id), { id, ...data }].sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0)); writeLocal(ADMIN_PRODUCTS_LOCAL_KEY, next); return next; });
                     }
                     if (col === 'bank_transfers') {
                         setPendingTransfers(prev => { const next = [{ id, ...data }, ...prev.filter(x => x.id !== id)]; writeLocal('driveMxPendingTransfers', next); return next; });
@@ -1013,95 +986,38 @@
                 return 'Usuario creado exitosamente. No se pudo completar el perfil en este momento.';
             };
 
-            const deletePkg = async (id) => {
-                if (sessionUser?.role !== 'admin') return;
-                if (!window.confirm(`¿Eliminar la guía ${id}?`)) return;
-                try {
-                    await NewShipmentUI.services.deleteAdminShipmentWithTracking({ fbase, appId, guideCode: id });
-                    setPkgs(prev => { const next = prev.filter(x => x.id !== id); writeLocal('driveMxPackages', next); return next; });
-                } catch(err) {
-                    console.error('Firestore borrar paquete:', err);
-                    alert('No se pudo eliminar la guía.');
-                }
-            };
-
-            const getSessionUserId = () => sessionUser?.uid || sessionUser?.id || '';
-            const normalizeOwnerValue = (value) => String(value || '').trim();
-            const getUserProfileId = (user = {}) => normalizeOwnerValue(user.uid || user.id);
-            const getUserProfileEmail = (user = {}) => String(user.email || '').trim().toLowerCase();
-            const getSaleRecordId = (sale = {}) => normalizeOwnerValue(sale.id || sale.saleId);
-            const getSaleOwnerId = (sale = {}) => normalizeOwnerValue(sale.sellerId || sale.ownerId || sale.userId);
-            const getSaleOwnerEmail = (sale = {}) => String(sale.sellerEmail || sale.ownerEmail || sale.userEmail || '').trim().toLowerCase();
-            const isSaleOwnedByUser = (sale = {}, user = sessionUser) => {
-                const saleOwnerId = getSaleOwnerId(sale);
-                const saleOwnerEmail = getSaleOwnerEmail(sale);
-                const userId = getUserProfileId(user || {});
-                const userEmail = getUserProfileEmail(user || {});
-                return Boolean((saleOwnerId && userId && saleOwnerId === userId) || (saleOwnerEmail && userEmail && saleOwnerEmail === userEmail));
-            };
-            const isProductOwnedByUserProfile = (product = {}, user = {}) => {
-                const ownerId = normalizeOwnerValue(getProductOwnerId(product));
-                const ownerEmail = String(product.ownerEmail || product.sellerEmail || '').trim().toLowerCase();
-                const userId = getUserProfileId(user);
-                const userEmail = getUserProfileEmail(user);
-                return Boolean((ownerId && userId && ownerId === userId) || (ownerEmail && userEmail && ownerEmail === userEmail));
-            };
-            const updateUserCompletedSalesLocal = (userDocId, updater) => {
-                if (!userDocId) return;
-                const localKey = `driveMxUserCompletedSales_${userDocId}`;
-                setUserCompletedSales(prev => {
-                    const next = updater(Array.isArray(prev) ? prev : []);
-                    writeLocal(localKey, next);
-                    return next;
-                });
-            };
+            const getSessionUserId = () => UserProductsUI.services.getUserProfileId(sessionUser || {});
+            const normalizeOwnerValue = ProductsCore.normalizeOwnerValue;
+            const getUserProfileId = UserProductsUI.services.getUserProfileId;
+            const getUserProfileEmail = UserProductsUI.services.getUserProfileEmail;
+            const getSaleRecordId = UserProductsUI.services.getSaleRecordId;
+            const getSaleOwnerId = UserProductsUI.services.getSaleOwnerId;
+            const getSaleOwnerEmail = UserProductsUI.services.getSaleOwnerEmail;
+            const isSaleOwnedByUser = (sale = {}, user = sessionUser) => UserProductsUI.services.isSaleOwnedByUser(sale, user || {});
+            const isProductOwnedByUserProfile = (product = {}, user = {}) => UserProductsUI.services.isProductOwnedByUserProfile(product, user);
+            const getProductOwnerId = ProductsCore.getProductOwnerId;
+            const isUserPanelPublication = ProductsCore.isUserPanelPublication;
+            const isControlPanelProduct = ProductsCore.isControlPanelProduct;
+            const getSellerInfoForProduct = (product = {}) => UserProductsUI.services.getSellerInfoForProduct(product, users);
             const saveUserCompletedSaleMirror = async (sale = {}, options = {}) => {
-                const { throwOnError = false } = options || {};
-                const saleId = getSaleRecordId(sale);
-                const ownerId = getSaleOwnerId(sale);
-                const userDocId = getSafeFirestoreDocId(ownerId);
-                if (!saleId || !userDocId) return null;
-                const normalizedSale = {
-                    ...sale,
-                    id: saleId,
-                    saleId: sale.saleId || saleId,
-                    sellerId: ownerId,
-                    visibleToUserId: ownerId,
-                    updatedAt: sale.updatedAt || Date.now()
-                };
-                const currentUserDocId = getSafeFirestoreDocId(getSessionUserId());
-                if (currentUserDocId && currentUserDocId === userDocId && sessionUser?.role !== 'admin') {
-                    updateUserCompletedSalesLocal(userDocId, prev => [{ id: saleId, ...normalizedSale }, ...prev.filter(x => getSaleRecordId(x) !== saleId)].sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0)));
-                }
                 try {
-                    const db = fbase.getFirestore();
-                    const mirrorRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_SALES_COLLECTION, userDocId, 'items', saleId);
-                    const existingMirror = await fbase.getDoc(mirrorRef);
-                    if (existingMirror.exists()) return { id: existingMirror.id, ...existingMirror.data() };
-                    await fbase.setDoc(mirrorRef, normalizedSale);
-                    return normalizedSale;
-                } catch(err) {
+                    return await UserProductsUI.services.saveCompletedSaleMirror({ fbase, appId, sale });
+                } catch (err) {
                     console.error('[Ventas][Firestore] No se pudo guardar el espejo de la venta.', {
-                        saleId,
-                        userDocId,
+                        saleId: getSaleRecordId(sale),
+                        ownerId: getSaleOwnerId(sale),
                         ...getOperationErrorDetails(err)
                     }, err);
-                    if (throwOnError) throw err;
+                    if (options?.throwOnError) throw err;
                     return null;
                 }
             };
             const deleteUserCompletedSaleMirror = async (sale = {}) => {
-                const saleId = getSaleRecordId(sale);
-                const userDocId = getSafeFirestoreDocId(getSaleOwnerId(sale));
-                if (!saleId || !userDocId) return;
-                const currentUserDocId = getSafeFirestoreDocId(getSessionUserId());
-                if (currentUserDocId && currentUserDocId === userDocId && sessionUser?.role !== 'admin') {
-                    updateUserCompletedSalesLocal(userDocId, prev => prev.filter(x => getSaleRecordId(x) !== saleId));
-                }
                 try {
-                    const db = fbase.getFirestore();
-                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_SALES_COLLECTION, userDocId, 'items', saleId));
-                } catch(err) { console.error('Firestore borrar espejo venta usuario:', err); }
+                    await UserProductsUI.services.deleteCompletedSaleMirror({ fbase, appId, sale });
+                } catch (err) {
+                    console.error('Firestore borrar espejo venta usuario:', err);
+                }
             };
             const deleteCompletedSale = async (sale) => {
                 const saleId = getSaleRecordId(sale);
@@ -1137,12 +1053,14 @@
                     const chatEmail = String(chat.userEmail || chat.email || '').trim().toLowerCase();
                     return Boolean((chatUserId && removedUserIds.has(chatUserId)) || (chatEmail && targetEmail && chatEmail === targetEmail));
                 };
-                const productIdsToDelete = products.filter(matchesTargetProduct).map(product => product.id).filter(Boolean);
+                const productsToDelete = products.filter(matchesTargetProduct);
+                const productIdsToDelete = productsToDelete.map(product => product.id).filter(Boolean);
+                const targetUserDocumentId = getSafeFirestoreDocId(targetId);
                 const salesToDelete = completedSales.filter(matchesTargetSale);
                 const supportChatsToDelete = supportChats.filter(matchesTargetSupportChat);
 
                 setUsers(prev => { const next = prev.filter(x => getUserProfileId(x) !== targetId && getUserProfileEmail(x) !== targetEmail); writeLocal(STAFF_USERS_LOCAL_KEY, next); return next; });
-                setProducts(prev => { const next = prev.filter(product => !matchesTargetProduct(product)); writeLocal('driveMxProducts', next); return next; });
+                productIdsToDelete.forEach(productId => publicProductsManager.removeLocal(productId));
                 setCompletedSales(prev => { const next = prev.filter(sale => !matchesTargetSale(sale)); writeLocal('driveMxCompletedSales', next); return next; });
                 setSupportChats(prev => { const next = prev.filter(chat => !matchesTargetSupportChat(chat)); writeLocal('driveMxSupportChats', next); return next; });
                 if (activeSupportChatId && supportChatsToDelete.some(chat => (chat.id || chat.chatId) === activeSupportChatId)) setActiveSupportChatId('');
@@ -1156,6 +1074,9 @@
                     const clientDeletes = [
                         fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, targetId)),
                         ...productIdsToDelete.map(productId => fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', PUBLIC_PRODUCTS_COLLECTION, productId))),
+                        ...productIdsToDelete.map(productId => targetUserDocumentId
+                            ? fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_PRODUCTS_COLLECTION, targetUserDocumentId, 'items', productId))
+                            : Promise.resolve()),
                         ...salesToDelete.map(sale => {
                             const saleId = getSaleRecordId(sale);
                             return saleId ? fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', 'completed_sales', saleId)) : Promise.resolve();
@@ -1186,524 +1107,6 @@
                     alert('No se pudo completar la eliminación del usuario.');
                 }
             };
-            const findRegisteredUserProfile = (target = sessionUser) => {
-                const targetId = getUserProfileId(target || {});
-                const targetEmail = getUserProfileEmail(target || {});
-                return users.find(user => {
-                    const userId = getUserProfileId(user);
-                    const userEmail = getUserProfileEmail(user);
-                    return (targetId && userId && userId === targetId) || (targetEmail && userEmail && userEmail === targetEmail);
-                }) || null;
-            };
-            const isUserBlocked = (user = {}) => {
-                const status = String(user.accountStatus || '').toLowerCase();
-                return Boolean(user.blocked === true || user.isBlocked === true || user.active === false || status.includes('bloqueado') || status.includes('inactivo'));
-            };
-            const getCurrentSessionProfile = () => findRegisteredUserProfile(sessionUser) || sessionUser || {};
-            const showBlockedAccountMessage = () => alert(BLOCKED_ACCOUNT_MESSAGE);
-            const ensureAccountAllowed = () => {
-                if (!sessionUser || sessionUser.role === 'admin') return true;
-                if (isUserBlocked(getCurrentSessionProfile())) {
-                    showBlockedAccountMessage();
-                    return false;
-                }
-                return true;
-            };
-            const getAssignmentsAuthorizationStorageKey = (userId = getSessionUserId()) => {
-                const safeId = normalizeOwnerValue(userId).replace(/[^a-zA-Z0-9_-]/g, '_');
-                return safeId ? `${ASSIGNMENTS_AUTH_LOCAL_PREFIX}_${safeId}` : '';
-            };
-            const readAssignmentsAuthorization = (userId = getSessionUserId()) => {
-                const key = getAssignmentsAuthorizationStorageKey(userId);
-                if (!key) return false;
-                try {
-                    const data = JSON.parse(localStorage.getItem(key) || '{}');
-                    return data?.authorized === true;
-                } catch(e) {
-                    return false;
-                }
-            };
-            const writeAssignmentsAuthorization = (userId = getSessionUserId(), authorizedAt = Date.now()) => {
-                const key = getAssignmentsAuthorizationStorageKey(userId);
-                if (!key) return;
-                try {
-                    localStorage.setItem(key, JSON.stringify({
-                        authorized: true,
-                        userId: normalizeOwnerValue(userId),
-                        authorizedAt,
-                        updatedAt: Date.now()
-                    }));
-                } catch(e) {}
-            };
-            const userHasAssignmentsAuthorization = (user = sessionUser) => {
-                const userId = getUserProfileId(user || {}) || getSessionUserId();
-                return Boolean(
-                    user?.assignmentsAuthorized === true ||
-                    user?.assignmentsAccessAuthorized === true ||
-                    user?.misAsignacionesAutorizadas === true ||
-                    readAssignmentsAuthorization(userId)
-                );
-            };
-            const persistAssignmentsAuthorization = async () => {
-                const userId = getSessionUserId();
-                if (!userId || !sessionUser) return false;
-                const now = Date.now();
-                const baseProfile = getCurrentSessionProfile();
-                const authorizedAt = baseProfile.assignmentsAuthorizedAt || now;
-                const next = {
-                    ...baseProfile,
-                    uid: baseProfile.uid || userId,
-                    email: baseProfile.email || sessionUser.email || '',
-                    assignmentsAuthorized: true,
-                    assignmentsAuthorizedAt: authorizedAt,
-                    assignmentsAuthorizationUpdatedAt: now,
-                    updatedAt: now,
-                    updatedBy: ADMIN_EMAIL
-                };
-                delete next.assignmentsPassword;
-                delete next.masterPassword;
-                writeAssignmentsAuthorization(userId, authorizedAt);
-                await saveDoc(STAFF_USERS_COLLECTION, userId, next);
-                sessionUserRef.current = { ...(sessionUser || {}), ...next, id: userId };
-                setSessionUser(prev => ({ ...(prev || {}), ...next, id: userId }));
-                return true;
-            };
-            const getProductOwnerId = (product = {}) => product.ownerId || product.sellerId || product.userId || product.createdByUid || '';
-            const getProductPublicationType = (product = {}) => String(product.publicationType || product.productOrigin || product.sourcePanel || product.createdFromPanel || '').toLowerCase().trim();
-            const isUserPanelPublication = (product = {}) => {
-                const type = getProductPublicationType(product);
-                return type === PRODUCT_ORIGIN_USER || type === 'user' || type === 'panel_usuario' || type === 'panel-usuario' || type === 'panel de usuario' || Boolean(getProductOwnerId(product));
-            };
-            const isControlPanelProduct = (product = {}) => {
-                const type = getProductPublicationType(product);
-                if (isUserPanelPublication(product)) return false;
-                return type === PRODUCT_ORIGIN_CONTROL || type === 'control' || type === 'admin' || type === 'panel de control' || !type;
-            };
-            const isProductOwnedBySessionUser = (product = {}) => isUserPanelPublication(product) && normalizeOwnerValue(getProductOwnerId(product)) === normalizeOwnerValue(getSessionUserId());
-            const getSessionOwnedProductsList = () => {
-                if (sessionUser && sessionUser.role !== 'admin' && isUserBlocked(getCurrentSessionProfile())) return [];
-                const byId = new Map();
-                userPanelProducts.forEach(product => {
-                    if (!product?.id) return;
-                    if (!getProductOwnerId(product) || isProductOwnedBySessionUser(product)) byId.set(String(product.id), product);
-                });
-                return Array.from(byId.values());
-            };
-
-            const getSellerInfoForProduct = (product = {}) => {
-                const ownerId = normalizeOwnerValue(getProductOwnerId(product));
-                const productEmail = product.ownerEmail || product.sellerEmail || '';
-                const sellerById = users.find(user => normalizeOwnerValue(user.id || user.uid) === ownerId);
-                const sellerByEmail = users.find(user => productEmail && String(user.email || '').toLowerCase() === String(productEmail).toLowerCase());
-                const seller = sellerById || sellerByEmail || {};
-                return {
-                    id: ownerId || seller.id || seller.uid || '',
-                    name: seller.name || product.ownerName || product.sellerName || '',
-                    email: seller.email || product.ownerEmail || product.sellerEmail || '',
-                    phone: seller.phone || product.ownerPhone || product.sellerPhone || '',
-                    saleNotificationEmail: seller.saleNotificationEmail || product.saleNotificationEmail || product.sellerNotificationEmail || product.notificationEmail || seller.email || product.ownerEmail || product.sellerEmail || ''
-                };
-            };
-
-            const getSafeSessionUserId = () => getSafeFirestoreDocId(getSessionUserId());
-
-            const saveUserProductMirror = async (product) => {
-                const userDocId = getSafeSessionUserId();
-                if (!userDocId || !product?.id) return;
-                const localKey = `driveMxUserProducts_${userDocId}`;
-                setUserPanelProducts(prev => { const next = [...prev.filter(x => x.id !== product.id), product].sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0)); writeLocal(localKey, next); return next; });
-                try {
-                    const db = fbase.getFirestore();
-                    await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_PRODUCTS_COLLECTION, userDocId, 'items', product.id), product);
-                } catch(err) { console.error('Firestore espejo producto usuario:', err); }
-            };
-
-            const deleteUserProductMirror = async (productId) => {
-                const userDocId = getSafeSessionUserId();
-                if (!userDocId || !productId) return;
-                const localKey = `driveMxUserProducts_${userDocId}`;
-                setUserPanelProducts(prev => { const next = prev.filter(x => x.id !== productId); writeLocal(localKey, next); return next; });
-                try {
-                    const db = fbase.getFirestore();
-                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_PRODUCTS_COLLECTION, userDocId, 'items', productId));
-                } catch(err) { console.error('Firestore borrar espejo producto usuario:', err); }
-            };
-
-            const resetProductForm = () => {
-                setProductForm(Supermercado.createProductFormState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], colors: [''], images: [], image: '', imageUrl: '', active: true }));
-                productImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
-                setProductImageFiles([]);
-                setProductUploading(false);
-                setEditingProductId(null);
-            };
-
-            const resetUserProductForm = () => {
-                setUserProductForm(Supermercado.createProductFormState({ id: '', name: '', price: '', stock: '', description: '', specifications: '', sizes: [], colors: [''], images: [], image: '', imageUrl: '', active: true }));
-                userProductImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
-                setUserProductImageFiles([]);
-                setUserProductUploading(false);
-                setEditingUserProductId(null);
-            };
-
-            const uploadSingleProductImage = async (productId, file) => {
-                const storage = fbase.getStorage();
-                const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-                const imageRef = fbase.ref(storage, `products/${productId}/${Date.now()}-${safeName}`);
-                await fbase.uploadBytes(imageRef, file);
-                return await fbase.getDownloadURL(imageRef);
-            };
-
-            const handleProductImagesSelect = (e) => {
-                const files = Array.from(e.target.files || []).filter(file => file.type.startsWith('image/'));
-                if (files.length === 0) return;
-                const currentCount = (productForm.images || []).length + productImageFiles.length;
-                const availableSlots = Math.max(0, 5 - currentCount);
-                if (availableSlots === 0) {
-                    alert('Solo puedes guardar hasta 5 fotografías por producto.');
-                    e.target.value = '';
-                    return;
-                }
-                const selected = files.slice(0, availableSlots).map(file => ({ file, preview: URL.createObjectURL(file) }));
-                if (files.length > availableSlots) alert('Solo se agregaron las fotografías permitidas hasta completar 5.');
-                setProductImageFiles(prev => [...prev, ...selected]);
-                e.target.value = '';
-            };
-
-            const removeExistingProductImage = (index) => {
-                setProductForm(prev => ({ ...prev, images: (prev.images || []).filter((_, i) => i !== index) }));
-            };
-
-            const removeNewProductImage = (index) => {
-                setProductImageFiles(prev => {
-                    const item = prev[index];
-                    if (item?.preview) { try { URL.revokeObjectURL(item.preview); } catch(e) {} }
-                    return prev.filter((_, i) => i !== index);
-                });
-            };
-
-            const replaceExistingProductImage = async (index, e) => {
-                const file = e.target.files?.[0];
-                e.target.value = '';
-                if (!file) return;
-                if (!file.type.startsWith('image/')) {
-                    alert('Selecciona un archivo de imagen válido.');
-                    return;
-                }
-                const id = editingProductId || productForm.id;
-                const existing = controlProducts.find(p => p.id === id);
-                if (!id || (editingProductId && !existing)) {
-                    alert('Guarda primero el producto del Panel de Control para poder reemplazar fotografías existentes.');
-                    return;
-                }
-                setProductUploading(true);
-                try {
-                    const url = await uploadSingleProductImage(id, file);
-                    setProductForm(prev => {
-                        const images = [...(prev.images || [])];
-                        images[index] = url;
-                        return { ...prev, images, image: images[0] || '', imageUrl: images[0] || '' };
-                    });
-                } catch(err) {
-                    console.error('Storage reemplazar foto:', err);
-                    alert('No se pudo reemplazar la fotografía.');
-                } finally {
-                    setProductUploading(false);
-                }
-            };
-
-            const uploadPendingProductImages = async (productId) => {
-                const urls = [];
-                for (const item of productImageFiles) {
-                    urls.push(await uploadSingleProductImage(productId, item.file));
-                }
-                return urls;
-            };
-
-            const handleProductSubmit = async (e) => {
-                e.preventDefault();
-                const id = editingProductId || productForm.id || `prod_${Date.now()}`;
-                setProductUploading(true);
-                try {
-                    const existing = controlProducts.find(p => p.id === id);
-                    const oldImages = getProductGallery(existing);
-                    const currentImages = Array.isArray(productForm.images) ? productForm.images.filter(Boolean) : oldImages;
-                    const uploadedImages = await uploadPendingProductImages(id);
-                    const images = [...currentImages, ...uploadedImages].filter(Boolean).slice(0, 5);
-                    const mainImage = images[0] || '';
-                    const product = Supermercado.applyCategoryToProduct({
-                        ...(existing || {}),
-                        id,
-                        name: productForm.name.trim(),
-                        price: Number(productForm.price || 0),
-                        stock: Number(productForm.stock || 0),
-                        description: productForm.description.trim(),
-                        specifications: productForm.specifications.trim(),
-                        sizes: normalizeProductSizes(productForm.sizes),
-                        colors: normalizeProductColors(productForm.colors),
-                        images,
-                        image: mainImage,
-                        imageUrl: mainImage,
-                        active: Boolean(productForm.active),
-                        publicationType: PRODUCT_ORIGIN_CONTROL,
-                        sourcePanel: PRODUCT_ORIGIN_CONTROL,
-                        ownerId: '',
-                        ownerName: '',
-                        ownerEmail: '',
-                        ownerPhone: '',
-                        saleNotificationEmail: '',
-                        sellerNotificationEmail: '',
-                        updatedAt: Date.now(),
-                        updatedBy: sessionUser?.email || ADMIN_EMAIL,
-                        createdAt: existing?.createdAt || Date.now(),
-                        createdBy: existing?.createdBy || sessionUser?.email || ADMIN_EMAIL
-                    }, productForm);
-                    await saveDoc(ADMIN_PRODUCTS_COLLECTION, id, product);
-                    await saveDoc(PUBLIC_PRODUCTS_COLLECTION, id, product);
-                    resetProductForm();
-                } catch(err) {
-                    console.error('Storage producto:', err);
-                    alert('No se pudo guardar el producto. Intenta nuevamente.');
-                    setProductUploading(false);
-                }
-            };
-
-            const editProduct = (product) => {
-                if (!isControlPanelProduct(product)) {
-                    alert('Solo puedes editar publicaciones del Panel de Control.');
-                    return;
-                }
-                const images = getProductGallery(product);
-                setProductForm(Supermercado.createProductFormState({
-                    id: product.id,
-                    name: product.name || '',
-                    price: product.price ?? '',
-                    stock: product.stock ?? '',
-                    description: product.description || '',
-                    specifications: product.specifications || '',
-                    sizes: normalizeProductSizes(product.sizes || product.medidas),
-                    colors: normalizeProductColors(product.colors || product.colores).length ? normalizeProductColors(product.colors || product.colores) : [''],
-                    images,
-                    image: images[0] || '',
-                    imageUrl: images[0] || '',
-                    active: product.active !== false
-                }, product));
-                productImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
-                setProductImageFiles([]);
-                setEditingProductId(product.id);
-            };
-
-
-            const toggleProduct = async (product) => {
-                if (!isControlPanelProduct(product)) { alert('Solo puedes administrar publicaciones del Panel de Control.'); return; }
-                const next = { ...product, active: product.active === false, publicationType: PRODUCT_ORIGIN_CONTROL, sourcePanel: PRODUCT_ORIGIN_CONTROL, updatedAt: Date.now(), updatedBy: sessionUser?.email || ADMIN_EMAIL };
-                await saveDoc(ADMIN_PRODUCTS_COLLECTION, product.id, next);
-                await saveDoc(PUBLIC_PRODUCTS_COLLECTION, product.id, next);
-            };
-
-            const deleteProduct = async (id) => {
-                setAdminProducts(prev => { const next = prev.filter(x => x.id !== id); writeLocal(ADMIN_PRODUCTS_LOCAL_KEY, next); return next; });
-                setProducts(prev => { const next = prev.filter(x => x.id !== id); writeLocal('driveMxProducts', next); return next; });
-                try {
-                    const db = fbase.getFirestore();
-                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', ADMIN_PRODUCTS_COLLECTION, id));
-                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', PUBLIC_PRODUCTS_COLLECTION, id));
-                } catch(err) { console.error('Firestore borrar producto Panel de Control:', err); }
-            };
-
-            const handleUserProductImagesSelect = (e) => {
-                if (!ensureAccountAllowed()) {
-                    e.target.value = '';
-                    return;
-                }
-                const files = Array.from(e.target.files || []).filter(file => file.type.startsWith('image/'));
-                if (files.length === 0) return;
-                const currentCount = (userProductForm.images || []).length + userProductImageFiles.length;
-                const availableSlots = Math.max(0, 5 - currentCount);
-                if (availableSlots === 0) {
-                    alert('Solo puedes guardar hasta 5 fotografías por producto.');
-                    e.target.value = '';
-                    return;
-                }
-                const selected = files.slice(0, availableSlots).map(file => ({ file, preview: URL.createObjectURL(file) }));
-                if (files.length > availableSlots) alert('Solo se agregaron las fotografías permitidas hasta completar 5.');
-                setUserProductImageFiles(prev => [...prev, ...selected]);
-                e.target.value = '';
-            };
-
-            const removeExistingUserProductImage = (index) => {
-                if (!ensureAccountAllowed()) return;
-                setUserProductForm(prev => ({ ...prev, images: (prev.images || []).filter((_, i) => i !== index) }));
-            };
-
-            const removeNewUserProductImage = (index) => {
-                if (!ensureAccountAllowed()) return;
-                setUserProductImageFiles(prev => {
-                    const item = prev[index];
-                    if (item?.preview) { try { URL.revokeObjectURL(item.preview); } catch(e) {} }
-                    return prev.filter((_, i) => i !== index);
-                });
-            };
-
-            const replaceExistingUserProductImage = async (index, e) => {
-                const file = e.target.files?.[0];
-                e.target.value = '';
-                if (!ensureAccountAllowed()) return;
-                if (!file) return;
-                if (!file.type.startsWith('image/')) {
-                    alert('Selecciona un archivo de imagen válido.');
-                    return;
-                }
-                const id = editingUserProductId || userProductForm.id;
-                const existing = getSessionOwnedProductsList().find(p => p.id === id);
-                if (!id || !existing || !isProductOwnedBySessionUser(existing)) {
-                    alert('Solo puedes reemplazar fotografías de tus propias publicaciones.');
-                    return;
-                }
-                setUserProductUploading(true);
-                try {
-                    const url = await uploadSingleProductImage(id, file);
-                    setUserProductForm(prev => {
-                        const images = [...(prev.images || [])];
-                        images[index] = url;
-                        return { ...prev, images, image: images[0] || '', imageUrl: images[0] || '' };
-                    });
-                } catch(err) {
-                    console.error('Storage reemplazar foto usuario:', err);
-                    alert('No se pudo reemplazar la fotografía.');
-                } finally {
-                    setUserProductUploading(false);
-                }
-            };
-
-            const uploadPendingUserProductImages = async (productId) => {
-                const urls = [];
-                for (const item of userProductImageFiles) {
-                    urls.push(await uploadSingleProductImage(productId, item.file));
-                }
-                return urls;
-            };
-
-            const handleUserProductSubmit = async (e) => {
-                e.preventDefault();
-                if (!ensureAccountAllowed()) return;
-                const ownerId = getSessionUserId();
-                if (!ownerId) { alert('Inicia sesión para administrar tus publicaciones.'); return; }
-                const safeOwnerId = getSafeSessionUserId() || `usuario_${Date.now()}`;
-                const id = editingUserProductId || userProductForm.id || `userprod_${safeOwnerId}_${Date.now()}`;
-                const existing = getSessionOwnedProductsList().find(p => p.id === id);
-                if (editingUserProductId && (!existing || !isProductOwnedBySessionUser(existing))) {
-                    alert('Solo puedes editar tus propias publicaciones.');
-                    return;
-                }
-                const willBeActive = Boolean(userProductForm.active);
-                const wasActive = existing?.active !== false;
-                const isNewPublication = !editingUserProductId;
-                if (willBeActive && (isNewPublication || !wasActive) && !ensureUserPublicationWalletAllowed({ productPrice: Number(userProductForm.price || 0), willBeActive })) return;
-                setUserProductUploading(true);
-                try {
-                    const oldImages = getProductGallery(existing);
-                    const currentImages = Array.isArray(userProductForm.images) ? userProductForm.images.filter(Boolean) : oldImages;
-                    const uploadedImages = await uploadPendingUserProductImages(id);
-                    const images = [...currentImages, ...uploadedImages].filter(Boolean).slice(0, 5);
-                    const mainImage = images[0] || '';
-                    const notificationEmail = (saleNotificationEmail || sessionUser?.saleNotificationEmail || sessionUser?.email || '').trim();
-                    const product = Supermercado.applyCategoryToProduct({
-                        ...(existing || {}),
-                        id,
-                        name: userProductForm.name.trim(),
-                        price: Number(userProductForm.price || 0),
-                        stock: Number(userProductForm.stock || 0),
-                        description: userProductForm.description.trim(),
-                        specifications: userProductForm.specifications.trim(),
-                        sizes: normalizeProductSizes(userProductForm.sizes),
-                        colors: normalizeProductColors(userProductForm.colors),
-                        images,
-                        image: mainImage,
-                        imageUrl: mainImage,
-                        active: Boolean(userProductForm.active),
-                        ownerId,
-                        ownerName: sessionUser?.name || '',
-                        ownerEmail: sessionUser?.email || '',
-                        ownerPhone: sessionUser?.phone || '',
-                        saleNotificationEmail: notificationEmail,
-                        sellerNotificationEmail: notificationEmail,
-                        publicationType: PRODUCT_ORIGIN_USER,
-                        sourcePanel: 'panel_usuario',
-                        updatedAt: Date.now(),
-                        updatedBy: sessionUser?.email || '',
-                        createdAt: existing?.createdAt || Date.now(),
-                        createdBy: existing?.createdBy || sessionUser?.email || ''
-                    }, userProductForm);
-                    await saveDoc(PUBLIC_PRODUCTS_COLLECTION, id, product);
-                    await saveUserProductMirror(product);
-                    resetUserProductForm();
-                    alert('Publicación guardada correctamente. Se mostrará en la portada principal si está activa.');
-                } catch(err) {
-                    console.error('Storage publicación usuario:', err);
-                    alert('No se pudo guardar la publicación. Intenta nuevamente.');
-                    setUserProductUploading(false);
-                }
-            };
-
-            const editUserProduct = (product) => {
-                if (!ensureAccountAllowed()) return;
-                if (!isProductOwnedBySessionUser(product)) {
-                    alert('Solo puedes editar tus propias publicaciones.');
-                    return;
-                }
-                const images = getProductGallery(product);
-                setUserProductForm(Supermercado.createProductFormState({
-                    id: product.id,
-                    name: product.name || '',
-                    price: product.price ?? '',
-                    stock: product.stock ?? '',
-                    description: product.description || '',
-                    specifications: product.specifications || '',
-                    sizes: normalizeProductSizes(product.sizes || product.medidas),
-                    colors: normalizeProductColors(product.colors || product.colores).length ? normalizeProductColors(product.colors || product.colores) : [''],
-                    images,
-                    image: images[0] || '',
-                    imageUrl: images[0] || '',
-                    active: product.active !== false
-                }, product));
-                userProductImageFiles.forEach(item => { try { URL.revokeObjectURL(item.preview); } catch(e) {} });
-                setUserProductImageFiles([]);
-                setEditingUserProductId(product.id);
-            };
-
-            const toggleUserProduct = async (product) => {
-                if (!ensureAccountAllowed()) return;
-                if (!isProductOwnedBySessionUser(product)) { alert('Solo puedes administrar tus propias publicaciones.'); return; }
-                const activating = product.active === false;
-                if (activating && !ensureUserPublicationWalletAllowed({ productPrice: Number(product.price || 0), willBeActive: true })) return;
-                const next = { ...product, active: product.active === false, updatedAt: Date.now(), updatedBy: sessionUser?.email || '' };
-                await saveDoc(PUBLIC_PRODUCTS_COLLECTION, product.id, next);
-                await saveUserProductMirror(next);
-            };
-
-            const deleteUserProduct = async (product) => {
-                if (!ensureAccountAllowed()) return;
-                if (!product?.id || !isProductOwnedBySessionUser(product)) { alert('Solo puedes eliminar tus propias publicaciones.'); return; }
-                if (!confirm('¿Eliminar esta publicación?')) return;
-                setProducts(prev => { const next = prev.filter(x => x.id !== product.id); writeLocal('driveMxProducts', next); return next; });
-                try {
-                    const db = fbase.getFirestore();
-                    await fbase.deleteDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', PUBLIC_PRODUCTS_COLLECTION, product.id));
-                    await deleteUserProductMirror(product.id);
-                } catch(err) { console.error('Firestore borrar publicación usuario:', err); }
-                if (editingUserProductId === product.id) resetUserProductForm();
-            };
-
-            const controlProducts = (() => {
-                const byId = new Map();
-                adminProducts.filter(isControlPanelProduct).forEach(product => byId.set(String(product.id), product));
-                products.filter(isControlPanelProduct).forEach(product => byId.set(String(product.id), product));
-                return Array.from(byId.values()).sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
-            })();
-            const currentUserProducts = getSessionOwnedProductsList().sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
-            const currentUserSales = userCompletedSales
-                .filter(sale => isSaleOwnedByUser(sale, sessionUser))
-                .sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0));
             const walletCommissionPercent = Wallet.normalizePercent(walletSettings.globalCommissionPercent);
             const currentUserWallet = sessionUser && sessionUser.role !== 'admin'
                 ? Wallet.findWalletForUser(wallets, sessionUser)
@@ -1820,22 +1223,6 @@
                 });
                 if (!validation.ok) {
                     alert(Wallet.INSUFFICIENT_MESSAGE);
-                    return false;
-                }
-                return true;
-            };
-
-            const ensureUserPublicationWalletAllowed = ({ productPrice = 0, willBeActive = true } = {}) => {
-                const activeUserProductCount = getSessionOwnedProductsList().filter(product => product.active !== false).length;
-                const validation = Wallet.validatePublication({
-                    wallet: currentUserWallet,
-                    productPrice,
-                    commissionPercent: walletCommissionPercent,
-                    willBeActive,
-                    userProductCount: activeUserProductCount
-                });
-                if (!validation.ok) {
-                    alert(validation.message || Wallet.INSUFFICIENT_MESSAGE);
                     return false;
                 }
                 return true;
@@ -1982,8 +1369,7 @@
             const resetPublicFlow = () => {
                 setView('home');
                 setSearchQuery('');
-                setTrackingResult(null);
-                setTrackingNotFound(false);
+                packagesManager.resetTracking();
                 setSelectedProductId(null);
                 setCheckoutProductIds([]);
                 setSelectedProductQuantity(1);
@@ -1998,12 +1384,10 @@
                 resetPublicFlow();
             };
 
-            const getSecondaryAuth = () => {
-                if (!window.secondaryAuthApp) {
-                    window.secondaryAuthApp = fbase.initializeApp(window.firebaseConfig, 'SecondaryAuthApp');
-                }
-                return fbase.getAuth(window.secondaryAuthApp);
-            };
+            const getSecondaryAuth = () => EmailPasswordAuthUI.services.getSecondaryAuth({
+                fbase,
+                firebaseConfig: window.firebaseConfig
+            });
 
             const normalizeRegistrationEmail = (value = '') => String(value || '').replace(/\s+/g, '').toLowerCase();
 
@@ -2079,182 +1463,6 @@
                     return { success: false, error: fallbackErr };
                 }
             };
-
-            const getStaffProfile = async (user) => {
-                const db = fbase.getFirestore();
-                const normalizedEmail = String(user.email || '').trim().toLowerCase();
-                const profileRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, user.uid);
-                const profileSnap = await fbase.getDoc(profileRef);
-                if (profileSnap.exists()) return { id: user.uid, uid: user.uid, email: user.email, ...profileSnap.data() };
-
-                if (normalizedEmail === ADMIN_EMAIL.toLowerCase()) {
-                    const adminProfile = {
-                        uid: user.uid,
-                        email: user.email,
-                        name: 'Admin Central',
-                        role: 'admin',
-                        active: true,
-                        blocked: false,
-                        createdAt: Date.now(),
-                        updatedAt: Date.now()
-                    };
-                    await saveDoc(STAFF_USERS_COLLECTION, user.uid, adminProfile);
-                    return { id: user.uid, ...adminProfile };
-                }
-
-                const localProfile = users.find(profile => getUserProfileEmail(profile) === normalizedEmail || getUserProfileId(profile) === user.uid);
-                if (localProfile) {
-                    return {
-                        ...localProfile,
-                        id: localProfile.id || user.uid,
-                        uid: user.uid,
-                        email: user.email || localProfile.email
-                    };
-                }
-
-                try {
-                    const userCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION);
-                    const emailQuery = fbase.query(userCol, fbase.where('email', '==', normalizedEmail));
-                    const emailSnap = await fbase.getDocs(emailQuery);
-                    let matchedProfile = null;
-                    emailSnap.forEach((docSnap) => {
-                        if (!matchedProfile) matchedProfile = { id: docSnap.id, ...docSnap.data() };
-                    });
-
-                    if (matchedProfile) {
-                        return {
-                            ...matchedProfile,
-                            uid: user.uid,
-                            email: user.email || matchedProfile.email
-                        };
-                    }
-                } catch(err) {
-                    console.error('Buscar perfil por correo:', err);
-                }
-
-                return null;
-            };
-
-            const handleLogin = async (e) => {
-                e.preventDefault();
-                try {
-                    const auth = fbase.getAuth();
-                    const credential = await fbase.signInWithEmailAndPassword(auth, loginForm.email.trim(), loginForm.p);
-                    const profile = await getStaffProfile(credential.user);
-                    if (!profile) {
-                        await fbase.signOut(auth);
-                        await fbase.signInAnonymously(auth).catch(() => {});
-                        setLoginForm({ email: '', p: '' });
-                        alert('Tu cuenta no tiene acceso activo al panel.');
-                        return;
-                    }
-                    if (profile.role !== 'admin' && isUserBlocked(profile)) {
-                        await fbase.signOut(auth);
-                        await fbase.signInAnonymously(auth).catch(() => {});
-                        setLoginForm({ email: '', p: '' });
-                        alert(BLOCKED_ACCOUNT_MESSAGE);
-                        return;
-                    }
-                    const assignmentsAuthorized = profile.role !== 'admin' && userHasAssignmentsAuthorization(profile);
-                    sessionUserRef.current = profile;
-                    setSessionUser(profile);
-                    setAssignmentsUnlocked(assignmentsAuthorized);
-                    setShowUserMenu(false);
-                    setShowAssignmentsPasswordModal(false);
-                    setAssignmentsPassword('');
-                    setAssignmentsPasswordError('');
-                    setLoginForm({ email: '', p: '' });
-                    setView(profile.role === 'admin' ? 'admin' : 'operator');
-                } catch(err) {
-                    console.error('Login Firebase Auth:', err);
-                    setLoginForm(prev => ({ ...prev, p: '' }));
-                    alert('Correo o contraseña incorrectos.');
-                }
-            };
-
-            const handleLogout = async () => {
-                const auth = fbase.getAuth();
-                sessionUserRef.current = null;
-                blockedAccountHandledRef.current = false;
-                setSessionUser(null);
-                setLoginForm({ email: '', p: '' });
-                setUserForm({ email: '', p: '', n: '', phone: '' });
-                setEditingRegisteredUserId(null);
-                setShowUserModal(false);
-                setShowUserMenu(false);
-                setAssignmentsUnlocked(false);
-                setShowAssignmentsPasswordModal(false);
-                setAssignmentsPassword('');
-                setAssignmentsPasswordError('');
-                setAssignmentsUnlocking(false);
-                setSaleNotificationEmail('');
-                setSaleNotificationSaving(false);
-                setShowWalletRecharge(false);
-                setWalletRechargeAmount('');
-                setWalletRechargeProcessing(false);
-                setWalletMovements([]);
-                setUserPanelProducts([]);
-                setUserCompletedSales([]);
-                resetUserProductForm();
-                resetPublicFlow();
-                try {
-                    await fbase.signOut(auth);
-                    await fbase.signInAnonymously(auth);
-                } catch(err) {
-                    console.error('Cerrar sesión:', err);
-                }
-            };
-
-            useEffect(() => {
-                if (!sessionUser || sessionUser.role === 'admin') return;
-                const profile = findRegisteredUserProfile(sessionUser);
-                if (!profile) {
-                    if (staffUsersLoaded) {
-                        if (!blockedAccountHandledRef.current) {
-                            blockedAccountHandledRef.current = true;
-                            alert(DELETED_ACCOUNT_MESSAGE);
-                        }
-                        handleLogout();
-                    }
-                    return;
-                }
-
-                if (isUserBlocked(profile)) {
-                    if (!blockedAccountHandledRef.current) {
-                        blockedAccountHandledRef.current = true;
-                        alert(BLOCKED_ACCOUNT_MESSAGE);
-                    }
-                    handleLogout();
-                    return;
-                }
-
-                blockedAccountHandledRef.current = false;
-                const mergedProfile = {
-                    ...(sessionUser || {}),
-                    ...profile,
-                    id: profile.id || profile.uid || sessionUser.id,
-                    uid: profile.uid || profile.id || sessionUser.uid
-                };
-                sessionUserRef.current = mergedProfile;
-                setSessionUser(prev => {
-                    const previousKey = JSON.stringify({
-                        saleNotificationEmail: prev?.saleNotificationEmail || '',
-                        assignmentsAuthorized: prev?.assignmentsAuthorized === true,
-                        accountStatus: prev?.accountStatus || '',
-                        active: prev?.active !== false,
-                        blocked: prev?.blocked === true
-                    });
-                    const nextKey = JSON.stringify({
-                        saleNotificationEmail: mergedProfile.saleNotificationEmail || '',
-                        assignmentsAuthorized: mergedProfile.assignmentsAuthorized === true,
-                        accountStatus: mergedProfile.accountStatus || '',
-                        active: mergedProfile.active !== false,
-                        blocked: mergedProfile.blocked === true
-                    });
-                    return previousKey === nextKey ? prev : mergedProfile;
-                });
-                if (userHasAssignmentsAuthorization(mergedProfile)) setAssignmentsUnlocked(true);
-            }, [users, staffUsersLoaded, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.role]);
 
             const resetRegisteredUserForm = () => {
                 setUserForm({ email: '', p: '', n: '', phone: '' });
@@ -2470,49 +1678,6 @@
                     alert('No se pudo guardar la configuración de correo.');
                 } finally {
                     setEmailSaving(false);
-                }
-            };
-
-            const saveSaleNotificationEmail = async (e) => {
-                e.preventDefault();
-                if (!ensureAccountAllowed()) return;
-                const userId = getSessionUserId();
-                const email = saleNotificationEmail.trim();
-                if (!userId) { alert('Inicia sesión para guardar el correo de venta.'); return; }
-                if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-                    alert('Ingresa un correo electrónico válido para notificaciones de venta.');
-                    return;
-                }
-                const next = {
-                    ...sessionUser,
-                    uid: sessionUser?.uid || userId,
-                    email: sessionUser?.email || '',
-                    saleNotificationEmail: email,
-                    updatedAt: Date.now(),
-                    updatedBy: sessionUser?.email || ''
-                };
-                setSaleNotificationSaving(true);
-                try {
-                    await saveDoc(STAFF_USERS_COLLECTION, userId, next);
-                    const ownedProducts = getSessionOwnedProductsList();
-                    for (const product of ownedProducts) {
-                        const updatedProduct = {
-                            ...product,
-                            saleNotificationEmail: email,
-                            sellerNotificationEmail: email,
-                            updatedAt: Date.now(),
-                            updatedBy: sessionUser?.email || ''
-                        };
-                        await saveDoc(PUBLIC_PRODUCTS_COLLECTION, product.id, updatedProduct);
-                        await saveUserProductMirror(updatedProduct);
-                    }
-                    setSessionUser(prev => ({ ...(prev || {}), saleNotificationEmail: email, updatedAt: next.updatedAt }));
-                    alert('Correo para notificaciones de venta guardado correctamente.');
-                } catch(err) {
-                    console.error('Guardar correo de venta:', err);
-                    alert('No se pudo guardar el correo para notificaciones de venta.');
-                } finally {
-                    setSaleNotificationSaving(false);
                 }
             };
 
@@ -2761,14 +1926,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
 
             const applyProductInventoryLocal = (productId, patch = {}, ownerId = '') => {
                 if (!productId) return;
-                const applyPatch = (product) => String(product.id) === String(productId) ? { ...product, ...patch } : product;
-                setProducts(prev => { const next = prev.map(applyPatch); writeLocal('driveMxProducts', next); return next; });
-                setAdminProducts(prev => { const next = prev.map(applyPatch); writeLocal(ADMIN_PRODUCTS_LOCAL_KEY, next); return next; });
-                const ownerDocId = getSafeFirestoreDocId(ownerId || '');
-                if (ownerDocId) {
-                    const localKey = `driveMxUserProducts_${ownerDocId}`;
-                    setUserPanelProducts(prev => { const next = prev.map(applyPatch); writeLocal(localKey, next); return next; });
-                }
+                publicProductsManager.patchLocal(productId, patch);
+                adminProductsManager.patchInventoryLocal(productId, patch);
+                userProductsManager.patchInventoryLocal(productId, patch, ownerId);
             };
 
             const processCompletedSaleTransaction = async ({ id, sale, sourceProduct = {}, seller = {}, saleSellerId = '' }) => {
@@ -3141,7 +2301,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     return;
                 }
                 const currentWallet = Wallet.findWalletForUser(wallets, sessionUser || {});
-                const activeUserProductCount = getSessionOwnedProductsList().filter(product => product.active !== false).length;
+                const activeUserProductCount = currentUserProducts.filter(product => product.active !== false).length;
                 const validation = Wallet.validateRechargeAmount(currentWallet, walletRechargeAmount, walletSettings, activeUserProductCount);
                 if (!validation.ok) {
                     alert(validation.message);
@@ -3565,83 +2725,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 setView('payment-method');
             };
 
-            const findProductByTracking = (tracking) => {
-                if (!tracking) return null;
-                const orderProducts = Array.isArray(tracking.order?.products) ? tracking.order.products : [];
-                const productId = tracking.productId || tracking.products?.[0]?.id || orderProducts[0]?.id || tracking.product?.id || tracking.order?.product?.id || '';
-                return products.find(p => String(p.id) === String(productId)) || tracking.products?.[0] || orderProducts[0] || tracking.product || tracking.order?.product || null;
-            };
-
-            const normalizeTrackingCode = (value) => String(value || '').toUpperCase().trim();
-
-            const buildPackageFromOrder = (transfer, trackingCode) => {
-                const order = transfer?.order || {};
-                const orderProducts = Array.isArray(order.products) && order.products.length > 0 ? order.products : (order.product ? [order.product] : []);
-                const product = orderProducts[0] || {};
-                const delivery = order.delivery || {};
-                const address = [delivery.street, delivery.neighborhood, delivery.municipality, delivery.state, delivery.zip].filter(Boolean).join(', ');
-                const orderProductLineTotal = (item = {}) => {
-                    const quantity = Math.max(1, Math.floor(Number(item.quantity || item.productQuantity || 1)) || 1);
-                    const unitPrice = Number(item.unitPrice ?? item.productUnitPrice ?? item.price ?? 0);
-                    return Number(item.lineTotal ?? item.totalPrice ?? item.productTotal ?? item.productCost ?? (unitPrice * quantity) ?? 0);
-                };
-                return {
-                    id: trackingCode,
-                    trackingNumber: trackingCode,
-                    orderId: transfer?.id || transfer?.transferId || '',
-                    transferId: transfer?.id || transfer?.transferId || '',
-                    productId: orderProducts.map(item => item.id).filter(Boolean).join(', ') || product.id || '',
-                    product: { ...product },
-                    products: orderProducts.map(item => ({ ...item })),
-                    orderTotal: Number(order.cart?.total ?? (orderProducts.reduce((total, item) => total + orderProductLineTotal(item), 0) + (orderProducts.length > 0 ? GLOBAL_SHIPPING_FEE : 0))),
-                    shippingFee: Number(order.cart?.shippingFee ?? (orderProducts.length > 0 ? GLOBAL_SHIPPING_FEE : 0)),
-                    customer: {
-                        fullName: delivery.fullName || transfer?.holderName || '',
-                        phone: delivery.phone || '',
-                        email: delivery.email || ''
-                    },
-                    delivery: { ...delivery },
-                    o: 'DRIVE MX',
-                    d: address || 'Dirección registrada',
-                    op: '',
-                    status: 'Recolectado',
-                    currentStep: 0,
-                    createdAt: Date.now(),
-                    updatedAt: Date.now()
-                };
-            };
-
-            const assignTrackingToTransfer = async (transfer) => {
-                if (sessionUser?.role !== 'admin') return;
-                const transferId = transfer?.id || transfer?.transferId;
-                const code = normalizeTrackingCode(transferTrackingDrafts[transferId] || transfer?.trackingNumber || '');
-                if (!code) { alert('Ingresa el número de guía.'); return; }
-                const pkg = buildPackageFromOrder(transfer, code);
-                await saveDoc('packages', code, pkg);
-                await NewShipmentUI.services.upsertTrackingGuide({ fbase, appId, shipment: pkg });
-                await saveDoc('bank_transfers', transferId, { ...transfer, trackingNumber: code, packageId: code, updatedAt: Date.now(), trackingAssignedAt: Date.now(), trackingAssignedBy: sessionUser?.email || '' });
-                setTransferTrackingDrafts(prev => ({ ...prev, [transferId]: '' }));
-                alert('Guía asociada al pedido y producto correctamente.');
-            };
-
-            const runTrackingSearch = (value, notify = false) => {
-                const productId = normalizeTrackingCode(value);
-                setSearchQuery(value);
-                if (!productId) {
-                    setTrackingResult(null);
-                    setTrackingNotFound(false);
-                    return;
-                }
-
-                // Buscador independiente del Panel de Control:
-                // busca SOLO publicaciones creadas y administradas desde el Panel de Control.
-                // No consulta publicaciones de usuarios, envíos, guías, paquetes ni transferencias.
-                const foundProduct = controlProducts.find(product => normalizeTrackingCode(product.id) === productId);
-                setTrackingResult(foundProduct || null);
-                setTrackingNotFound(!foundProduct);
-                if (!foundProduct && notify) alert('No se encontró el producto');
-            };
-
             const getSupportUserId = () => sessionUser?.uid || sessionUser?.id || fbUser?.uid || 'local';
             const activeSupportChat = supportChats.find(c => c.id === activeSupportChatId) || null;
             const adminSelectedSupportChat = activeSupportChat || supportChats.find(c => c.status === 'open') || null;
@@ -3680,89 +2763,18 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             const openAdminTracking = () => {
                 setShowAdminMenu(false);
                 setSearchQuery('');
-                setTrackingResult(null);
-                setTrackingNotFound(false);
+                packagesManager.resetTracking();
                 setView('admin-tracking');
             };
 
-            const closeAssignmentsPasswordModal = () => {
-                if (assignmentsUnlocking) return;
-                setShowAssignmentsPasswordModal(false);
-                setAssignmentsPassword('');
-                setAssignmentsPasswordError('');
+            const runTrackingSearch = (value, notify = false) => {
+                setSearchQuery(value);
+                return packagesManager.runTrackingSearch(value, notify);
             };
 
             const openAssignmentsAccess = () => {
-                if (!ensureAccountAllowed()) return;
                 setShowUserMenu(false);
-                setAssignmentsPassword('');
-                setAssignmentsPasswordError('');
-                if (assignmentsUnlocked || userHasAssignmentsAuthorization(getCurrentSessionProfile())) {
-                    setAssignmentsUnlocked(true);
-                    return;
-                }
-                setShowAssignmentsPasswordModal(true);
-            };
-
-            const validateAssignmentsPassword = async (e) => {
-                e.preventDefault();
-                if (!ensureAccountAllowed()) {
-                    setAssignmentsPassword('');
-                    return;
-                }
-                if (!assignmentsPassword) {
-                    setAssignmentsPasswordError('Ingresa la contraseña maestra.');
-                    return;
-                }
-                setAssignmentsUnlocking(true);
-                setAssignmentsPasswordError('');
-                try {
-                    const secondaryAuth = getSecondaryAuth();
-                    await fbase.signInWithEmailAndPassword(secondaryAuth, ADMIN_EMAIL, assignmentsPassword);
-                    await fbase.signOut(secondaryAuth).catch(() => {});
-                    await persistAssignmentsAuthorization();
-                    setAssignmentsUnlocked(true);
-                    setShowAssignmentsPasswordModal(false);
-                    setAssignmentsPassword('');
-                    setAssignmentsPasswordError('');
-                } catch(err) {
-                    console.error('Validar contraseña maestra de asignaciones:', err);
-                    try { await fbase.signOut(getSecondaryAuth()); } catch(e) {}
-                    setAssignmentsUnlocked(false);
-                    setAssignmentsPassword('');
-                    setAssignmentsPasswordError('Acceso denegado. Contraseña incorrecta.');
-                } finally {
-                    setAssignmentsUnlocking(false);
-                }
-            };
-
-            const updateAssignedPackageStatus = async (pkg, status, currentStep) => {
-                if (!ensureAccountAllowed()) return;
-                if (!assignmentsUnlocked && !userHasAssignmentsAuthorization(getCurrentSessionProfile())) {
-                    alert('Valida primero la contraseña maestra para acceder a Mis Asignaciones.');
-                    return;
-                }
-                try {
-                    const updatedPackage = await NewShipmentUI.services.updateAdminShipmentWithTracking({
-                        fbase,
-                        appId,
-                        shipment: pkg,
-                        patch: {
-                            status,
-                            currentStep,
-                            updatedBy: sessionUser?.email || '',
-                            updatedByUid: sessionUser?.uid || sessionUser?.id || ''
-                        }
-                    });
-                    setPkgs(prev => {
-                        const next = prev.map(item => item.id === updatedPackage.id ? updatedPackage : item);
-                        writeLocal('driveMxPackages', next);
-                        return next;
-                    });
-                } catch (err) {
-                    console.error('Actualizar estado de asignación:', err);
-                    alert('No se pudo actualizar el estado de la guía.');
-                }
+                packagesManager.openAssignmentsAccess();
             };
 
             const sendSupportMessage = async (role = 'user') => {
@@ -3811,194 +2823,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             };
 
 
-                const renderUserProductsPanel = () => (
-                <>
-                    <div className="card-glass overflow-hidden">
-                        <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
-                            <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Correo para notificaciones de venta</h2>
-                            <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Este correo recibirá el aviso automático cuando una de tus publicaciones sea vendida</p>
-                        </div>
-                        <form onSubmit={saveSaleNotificationEmail} className="p-6 grid md:grid-cols-[1fr_auto] gap-3 items-end">
-                            <div>
-                                <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Correo para notificaciones de venta</label>
-                                <input required type="email" className="input-field" placeholder="correo@ejemplo.com" value={saleNotificationEmail} onChange={e => setSaleNotificationEmail(e.target.value)} />
-                            </div>
-                            <button disabled={saleNotificationSaving} type="submit" className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{saleNotificationSaving ? 'Guardando...' : 'Guardar correo'}</button>
-                        </form>
-                    </div>
-
-                    <div id="user-sales-section" className="card-glass overflow-hidden">
-                        <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
-                            <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Ventas Realizadas</h2>
-                            <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Historial individual de productos vendidos de este usuario</p>
-                        </div>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left">
-                                <thead className="bg-white border-b border-slate-50">
-                                    <tr className="text-[8px] font-black uppercase text-slate-400">
-                                        <th className="px-6 py-3">Nombre del producto</th>
-                                        <th className="px-6 py-3">Detalle de venta</th>
-                                        <th className="px-6 py-3">Fecha de venta</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-50">
-                                    {currentUserSales.map(sale => {
-                                        const saleQuantity = Math.max(1, Math.floor(Number(sale.quantity || sale.productQuantity || 1)) || 1);
-                                        const saleUnitPrice = Number(sale.unitPrice ?? sale.productUnitPrice ?? sale.productPrice ?? sale.price ?? 0);
-                                        const saleLineTotal = Number(sale.productCost ?? sale.productTotal ?? sale.lineTotal ?? sale.totalPrice ?? (saleUnitPrice * saleQuantity) ?? 0);
-                                        return (
-                                            <tr key={sale.id || sale.saleId} className="text-[10px] font-bold text-slate-600">
-                                                <td className="px-6 py-4 font-black text-slate-800">{sale.productName || sale.name || sale.productId || '-'}</td>
-                                                <td className="px-6 py-4">
-                                                    <p className="text-red-600 font-black">${saleLineTotal.toFixed(2)}</p>
-                                                    <p className="text-[8px] text-slate-400 uppercase">Cantidad: {saleQuantity} · Unitario: ${saleUnitPrice.toFixed(2)}</p>
-                                                </td>
-                                                <td className="px-6 py-4">{(sale.soldAt || sale.createdAt) ? new Date(sale.soldAt || sale.createdAt).toLocaleString('es-MX') : '-'}</td>
-                                            </tr>
-                                        );
-                                    })}
-                                    {currentUserSales.length === 0 && (
-                                        <tr><td colSpan="3" className="px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase">Aún no tienes ventas realizadas registradas</td></tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div id="user-products-section" className="card-glass overflow-hidden">
-                        <div className="bg-slate-50 border-b border-slate-100 px-6 py-4 flex items-center justify-between gap-3">
-                            <div>
-                                <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Administración de Productos</h2>
-                                <p className="text-[9px] font-bold text-slate-300 uppercase mt-1">Administra únicamente tus publicaciones; las activas se muestran en la portada principal</p>
-                            </div>
-                            {editingUserProductId && <button onClick={resetUserProductForm} className="text-[9px] font-black text-slate-400 uppercase">Cancelar edición</button>}
-                        </div>
-                        <div className="p-6 border-b border-slate-50">
-                            <form onSubmit={handleUserProductSubmit} className="grid md:grid-cols-5 gap-3">
-                                <label className="md:col-span-5 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl p-4 cursor-pointer hover:border-red-200 transition-all">
-                                    <input type="file" accept="image/*" multiple className="hidden" onChange={handleUserProductImagesSelect} />
-                                    <div className="flex items-center justify-between gap-4 flex-wrap">
-                                        <div>
-                                            <p className="text-[10px] font-black uppercase text-slate-600">Fotografías del producto</p>
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">Máximo 5 imágenes JPG, PNG o WebP asociadas al mismo ID</p>
-                                        </div>
-                                        <span className="px-3 py-2 bg-white rounded-xl text-[9px] font-black text-slate-400 uppercase">{(userProductForm.images || []).length + userProductImageFiles.length}/5 fotos</span>
-                                    </div>
-                                </label>
-
-                                {((userProductForm.images || []).length > 0 || userProductImageFiles.length > 0) && (
-                                    <div className="md:col-span-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                                        {(userProductForm.images || []).map((img, index) => (
-                                            <div key={img + index} className="relative rounded-2xl overflow-hidden bg-slate-100 border border-slate-100 group">
-                                                <img src={img} alt={`Foto ${index + 1}`} className="w-full aspect-square object-cover" />
-                                                <div className="absolute inset-x-2 bottom-2 flex gap-1">
-                                                    <label className="flex-1 text-center bg-white/90 rounded-lg px-2 py-1 text-[7px] font-black uppercase cursor-pointer">
-                                                        Reemplazar
-                                                        <input type="file" accept="image/*" className="hidden" onChange={(e) => replaceExistingUserProductImage(index, e)} />
-                                                    </label>
-                                                    <button type="button" onClick={() => removeExistingUserProductImage(index)} className="flex-1 bg-red-500 text-white rounded-lg px-2 py-1 text-[7px] font-black uppercase">Eliminar</button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                        {userProductImageFiles.map((item, index) => (
-                                            <div key={item.preview} className="relative rounded-2xl overflow-hidden bg-slate-100 border border-dashed border-red-200">
-                                                <img src={item.preview} alt={`Nueva foto ${index + 1}`} className="w-full aspect-square object-cover" />
-                                                <button type="button" onClick={() => removeNewUserProductImage(index)} className="absolute inset-x-2 bottom-2 bg-red-500 text-white rounded-lg px-2 py-1 text-[7px] font-black uppercase">Quitar</button>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-
-                                {Supermercado.ProductCategorySelect && (
-                                    <Supermercado.ProductCategorySelect
-                                        value={userProductForm.category || ''}
-                                        onChange={category => setUserProductForm(previous => ({ ...previous, category }))}
-                                    />
-                                )}
-                                <input required className="input-field md:col-span-2" placeholder="NOMBRE" value={userProductForm.name} onChange={e => setUserProductForm({...userProductForm, name: e.target.value})} />
-                                <input required type="number" min="0" step="0.01" className="input-field" placeholder="PRECIO" value={userProductForm.price} onChange={e => setUserProductForm({...userProductForm, price: e.target.value})} />
-                                <input required type="number" min="0" step="1" className="input-field" placeholder="INVENTARIO" value={userProductForm.stock} onChange={e => setUserProductForm({...userProductForm, stock: e.target.value})} />
-                                <label className="flex items-center gap-2 text-[10px] font-black uppercase text-slate-500 bg-slate-50 rounded-xl px-4 py-3">
-                                    <input type="checkbox" checked={userProductForm.active} onChange={e => setUserProductForm({...userProductForm, active: e.target.checked})} />
-                                    Activo
-                                </label>
-                                <div className="md:col-span-5 bg-slate-50 rounded-2xl p-4 space-y-3">
-                                    <p className="text-[10px] font-black uppercase text-slate-600">Medidas opcionales</p>
-                                    <div className="flex flex-wrap gap-2">
-                                        {PRODUCT_SIZE_OPTIONS.map(size => (
-                                            <label key={size} className={`px-3 py-2 rounded-xl border text-[9px] font-black uppercase cursor-pointer ${normalizeProductSizes(userProductForm.sizes).includes(size) ? 'bg-red-50 border-red-200 text-red-600' : 'bg-white border-slate-100 text-slate-400'}`}>
-                                                <input type="checkbox" className="hidden" checked={normalizeProductSizes(userProductForm.sizes).includes(size)} onChange={e => setUserProductForm(prev => ({ ...prev, sizes: e.target.checked ? [...normalizeProductSizes(prev.sizes), size] : normalizeProductSizes(prev.sizes).filter(item => item !== size) }))} />
-                                                {size}
-                                            </label>
-                                        ))}
-                                    </div>
-                                </div>
-                                <div className="md:col-span-5 bg-slate-50 rounded-2xl p-4 space-y-3">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <p className="text-[10px] font-black uppercase text-slate-600">Colores opcionales</p>
-                                        <button type="button" onClick={() => setUserProductForm(prev => ({ ...prev, colors: [...(prev.colors || ['']), ''] }))} className="px-3 py-2 bg-white border border-slate-100 rounded-xl text-[10px] font-black text-red-500">+</button>
-                                    </div>
-                                    {(userProductForm.colors || ['']).map((color, index) => (
-                                        <div key={index} className="flex gap-2">
-                                            <input className="input-field" placeholder="COLOR" value={color} onChange={e => setUserProductForm(prev => { const colors = [...(prev.colors || [''])]; colors[index] = e.target.value; return { ...prev, colors }; })} />
-                                            <button type="button" onClick={() => setUserProductForm(prev => { const colors = (prev.colors || ['']).filter((_, i) => i !== index); return { ...prev, colors: colors.length ? colors : [''] }; })} className="px-3 rounded-xl bg-white border border-slate-100 text-slate-400 font-black">×</button>
-                                        </div>
-                                    ))}
-                                </div>
-                                <textarea className="input-field md:col-span-5 min-h-[90px] resize-y" placeholder="DESCRIPCIÓN" value={userProductForm.description} onChange={e => setUserProductForm({...userProductForm, description: e.target.value})}></textarea>
-                                <textarea className="input-field md:col-span-5 min-h-[90px] resize-y" placeholder="ESPECIFICACIONES" value={userProductForm.specifications} onChange={e => setUserProductForm({...userProductForm, specifications: e.target.value})}></textarea>
-                                <button disabled={userProductUploading} type="submit" className="md:col-span-5 btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{userProductUploading ? 'Guardando...' : (editingUserProductId ? 'Guardar Cambios' : 'Agregar Producto')}</button>
-                            </form>
-                        </div>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left">
-                                <thead className="bg-white border-b border-slate-50">
-                                    <tr className="text-[8px] font-black uppercase text-slate-400">
-                                        <th className="px-6 py-3">Foto</th>
-                                        <th className="px-6 py-3">Producto</th>
-                                        <th className="px-6 py-3">Precio</th>
-                                        <th className="px-6 py-3">Inventario</th>
-                                        <th className="px-6 py-3">Estado</th>
-                                        <th className="px-6 py-3 text-right">Acciones</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-50">
-                                    {currentUserProducts.map(product => {
-                                        const productStock = Math.max(0, Math.floor(Number(product.stock ?? product.availableStock ?? 0)));
-                                        const productSoldOut = productStock <= 0;
-                                        const productStatusLabel = productSoldOut ? 'Agotado' : (product.active !== false ? 'Activo' : 'Inactivo');
-                                        const productStatusClass = productSoldOut ? 'bg-red-50 text-red-600' : (product.active !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-400');
-                                        return (
-                                            <tr key={product.id} className="text-[10px] font-bold text-slate-600">
-                                                <td className="px-6 py-4">
-                                                    <div className="w-12 h-12 rounded-xl bg-slate-100 overflow-hidden">
-                                                        {getProductGallery(product)[0] ? <img src={getProductGallery(product)[0]} alt={product.name} className="w-full h-full object-cover" /> : null}
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4"><p className="font-black text-slate-800">{product.name}</p><p className="font-mono text-[8px] text-slate-400">{product.id}</p></td>
-                                                <td className="px-6 py-4 text-red-600 font-black">${Number(product.price || 0).toFixed(2)}</td>
-                                                <td className="px-6 py-4">{productStock}</td>
-                                                <td className="px-6 py-4"><span className={`px-2 py-1 rounded-full text-[8px] uppercase ${productStatusClass}`}>{productStatusLabel}</span></td>
-                                                <td className="px-6 py-4 text-right">
-                                                    <div className="flex justify-end gap-2 flex-wrap">
-                                                        <button onClick={() => editUserProduct(product)} className="px-2 py-1 bg-slate-100 rounded-lg text-[8px] font-black uppercase">Editar</button>
-                                                        <button onClick={() => toggleUserProduct(product)} className="px-2 py-1 bg-slate-100 rounded-lg text-[8px] font-black uppercase">{product.active !== false ? 'Desactivar' : 'Activar'}</button>
-                                                        <button onClick={() => deleteUserProduct(product)} className="text-slate-300 hover:text-red-500"><Icons.Trash /></button>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                    {currentUserProducts.length === 0 && (
-                                        <tr><td colSpan="6" className="px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase">Aún no tienes publicaciones registradas</td></tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </>
-            );
-
             return (
                 <div className="min-h-screen flex flex-col">
                     <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between sticky top-0 z-50">
@@ -4013,7 +2837,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     <p className="text-[10px] font-bold leading-none">{sessionUser.name}</p>
                                     <p className="text-[8px] font-black text-red-500 uppercase">{sessionUser.role}</p>
                                 </div>
-                                <button onClick={handleLogout} className="p-2 text-slate-400"><Icons.LogOut /></button>
+                                <button onClick={authManager.handleLogout} className="p-2 text-slate-400"><Icons.LogOut /></button>
                             </div>
                         ) : (
                             <div className="flex items-center gap-3">
@@ -4022,7 +2846,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     {cartItems.length > 0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center">{cartItems.length}</span>}
                                 </button>
                                 <button onClick={openSupportFromCover} className="px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-red-50 hover:text-red-600">Soporte Técnico</button>
-                                <button onClick={() => { resetPublicFlow(); setLoginForm({ email: '', p: '' }); setView('login'); }} className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Registrarse</button>
+                                <button onClick={() => { resetPublicFlow(); authManager.setLoginForm({ email: '', p: '' }); setView('login'); }} className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Registrarse</button>
                             </div>
                         )}
                     </header>
@@ -4301,9 +3125,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 openAdminTracking={openAdminTracking}
                                 openAdminSupport={openAdminSupport}
                                 users={users}
-                                pkgs={pkgs}
-                                deletePkg={deletePkg}
-                                findProductByTracking={findProductByTracking}
+                                packagesManager={packagesManager}
                                 emailSettings={emailSettings}
                                 setEmailSettings={setEmailSettings}
                                 saveEmailSettings={saveEmailSettings}
@@ -4322,9 +3144,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 deleteWalletRechargeFromPanel={deleteWalletRechargeFromPanel}
                                 walletRechargeActionId={walletRechargeActionId}
                                 pendingSalesTransfers={pendingSalesTransfers}
-                                transferTrackingDrafts={transferTrackingDrafts}
-                                setTransferTrackingDrafts={setTransferTrackingDrafts}
-                                assignTrackingToTransfer={assignTrackingToTransfer}
                                 markTransferPaid={markTransferPaid}
                                 deleteTransfer={deleteTransfer}
                                 orderSending={orderSending}
@@ -4332,25 +3151,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 completedSales={completedSales}
                                 deleteCompletedSale={deleteCompletedSale}
                                 ads={ads}
-                                editingProductId={editingProductId}
-                                resetProductForm={resetProductForm}
-                                handleProductSubmit={handleProductSubmit}
-                                handleProductImagesSelect={handleProductImagesSelect}
-                                productForm={productForm}
-                                setProductForm={setProductForm}
-                                productImageFiles={productImageFiles}
-                                replaceExistingProductImage={replaceExistingProductImage}
-                                removeExistingProductImage={removeExistingProductImage}
-                                removeNewProductImage={removeNewProductImage}
-                                PRODUCT_SIZE_OPTIONS={PRODUCT_SIZE_OPTIONS}
-                                normalizeProductSizes={normalizeProductSizes}
-                                normalizeProductColors={normalizeProductColors}
-                                productUploading={productUploading}
-                                controlProducts={controlProducts}
-                                getProductGallery={getProductGallery}
-                                editProduct={editProduct}
-                                toggleProduct={toggleProduct}
-                                deleteProduct={deleteProduct}
+                                adminProductsManager={adminProductsManager}
                                 registeredUsersPage={registeredUsersPage}
                                 REGISTERED_USERS_PAGE_SIZE={REGISTERED_USERS_PAGE_SIZE}
                                 setRegisteredUsersPage={setRegisteredUsersPage}
@@ -4478,35 +3279,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
 
                                 <WalletUI.WalletMovementsPanel movements={walletMovements} />
 
-                                {renderUserProductsPanel()}
+                                <UserProductsUI.UserProductsPanel manager={userProductsManager} Icons={Icons} />
 
-                                {assignmentsUnlocked ? (
-                                    <>
-                                        <div><h1 className="text-3xl font-black uppercase tracking-tight">Mis <span className="text-red-500">Asignaciones</span></h1><p className="text-[10px] font-bold text-slate-400 uppercase">Ruta Activa</p></div>
-                                        <div className="space-y-4">
-                                            {pkgs.filter(p => p.op === (sessionUser.uid || sessionUser.id)).map(p => (
-                                                <div key={p.id} className="card-glass p-6 space-y-6">
-                                                    <div className="flex justify-between items-center"><h3 className="text-xl font-black text-red-600">#{p.id}</h3><span className="text-[9px] font-black uppercase text-slate-400">{p.o} → {p.d}</span></div>
-                                                    <div className="grid grid-cols-2 gap-2">
-                                                        {STEPS.map((s, i) => (
-                                                            <button key={s} onClick={() => updateAssignedPackageStatus(p, s, i)} className={`p-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${p.status === s ? 'bg-red-500 border-red-500 text-white shadow-lg' : 'border-slate-100 text-slate-400'}`}>{s}</button>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </>
-                                ) : (
-                                    <div className="card-glass p-8 text-center space-y-4">
-                                        <div className="w-14 h-14 rounded-2xl bg-red-50 text-red-500 flex items-center justify-center mx-auto">
-                                            <Icons.Menu size={22} />
-                                        </div>
-                                        <div>
-                                            <h2 className="text-xl font-black uppercase tracking-tight">Asignaciones protegidas</h2>
-                                            <p className="text-[10px] font-bold text-slate-400 uppercase mt-2 leading-relaxed">Abre el menú hamburguesa y selecciona Mis Asignaciones para validar la contraseña maestra.</p>
-                                        </div>
-                                    </div>
-                                )}
+                                <PackagesGuidesUI.UserAssignmentsPanel manager={packagesManager} Icons={Icons} />
                             </div>
                         )}
 
@@ -4523,34 +3298,11 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         )}
 
                         {view === 'login' && (
-                            <div className="w-full max-w-sm py-20 animate-slide">
-                                <div className="card-glass p-10 space-y-8">
-                                    <h2 className="text-center text-xl font-black uppercase tracking-widest">Panel Staff</h2>
-                                    <form onSubmit={handleLogin} className="space-y-4">
-                                        <input required className="input-field" placeholder="CORREO ELECTRÓNICO" type="email" value={loginForm.email} onChange={e => setLoginForm({...loginForm, email: e.target.value})} />
-                                        <input required type="password" className="input-field" placeholder="CONTRASEÑA" value={loginForm.p} onChange={e => setLoginForm({...loginForm, p: e.target.value})} />
-                                        <button type="submit" className="w-full btn-primary h-12">Entrar</button>
-                                        <button type="button" onClick={openRegisterUserModal} className="w-full btn-primary h-12">Registrar Usuario</button>
-                                    </form>
-                                </div>
-                            </div>
+                            <EmailPasswordAuthUI.EmailPasswordLogin manager={authManager} onRegister={openRegisterUserModal} />
                         )}
                     </main>
 
-                    {showAssignmentsPasswordModal && (
-                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
-                            <div className="card-glass max-w-sm w-full p-10 animate-slide">
-                                <h2 className="text-sm font-black text-center uppercase mb-2">Acceso Protegido</h2>
-                                <p className="text-[10px] font-bold text-slate-400 uppercase text-center mb-8 leading-relaxed">Ingresa la contraseña maestra del administrador central para abrir Mis Asignaciones. Al validarse, solo se guarda la autorización del usuario; la contraseña no se almacena.</p>
-                                <form onSubmit={validateAssignmentsPassword} className="space-y-4">
-                                    <input required autoFocus type="password" className="input-field" placeholder="CONTRASEÑA MAESTRA" value={assignmentsPassword} onChange={e => { setAssignmentsPassword(e.target.value); setAssignmentsPasswordError(''); }} />
-                                    {assignmentsPasswordError && <p className="text-center text-[10px] font-black text-red-500 uppercase tracking-widest">{assignmentsPasswordError}</p>}
-                                    <button disabled={assignmentsUnlocking} type="submit" className="w-full btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{assignmentsUnlocking ? 'Validando...' : 'Validar acceso'}</button>
-                                    <button disabled={assignmentsUnlocking} type="button" onClick={closeAssignmentsPasswordModal} className="w-full text-[9px] font-black text-slate-400 uppercase disabled:opacity-50">Cancelar</button>
-                                </form>
-                            </div>
-                        </div>
-                    )}
+                    <PackagesGuidesUI.AssignmentsPasswordModal manager={packagesManager} />
 
                     <UsersUI.RegisteredUserModal
                         isOpen={showUserModal}
@@ -4568,7 +3320,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         ReactDOM.createRoot(document.getElementById('root')).render(<App />);
     </script>
 </body>
-</html>       
+</html>    
 
 
 
