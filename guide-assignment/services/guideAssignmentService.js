@@ -57,21 +57,20 @@ export async function updateUserShipment({ fbase, appId, user, shipment, patch =
   const trackingRef = getTrackingGuideRef({ fbase, db, appId, guideCode });
 
   const normalizedPatch = {};
-  if ('fullName' in patch || 'phone' in patch || 'o' in patch || 'd' in patch) {
+  if ('fullName' in patch || 'phone' in patch || 'o' in patch || 'd' in patch || 'zip' in patch || 'references' in patch) {
     const normalized = normalizeShipmentForm({ ...shipment, ...patch });
     normalizedPatch.fullName = normalized.fullName;
     normalizedPatch.phone = normalized.phone;
     normalizedPatch.o = normalized.o;
     normalizedPatch.d = normalized.d;
+    normalizedPatch.zip = normalized.zip;
+    normalizedPatch.references = normalized.references;
     normalizedPatch.customer = {
       ...(shipment.customer || {}),
       fullName: normalized.fullName,
       phone: normalized.phone
     };
   }
-  if ('status' in patch) normalizedPatch.status = patch.status;
-  if ('currentStep' in patch) normalizedPatch.currentStep = Number(patch.currentStep);
-
   const nextShipment = buildShipmentRecord({
     form: { ...shipment, ...normalizedPatch },
     guideCode,
@@ -122,3 +121,4 @@ export async function deleteUserShipment({ fbase, appId, user, guideCode } = {})
     transaction.delete(trackingRef);
   });
 }
+
