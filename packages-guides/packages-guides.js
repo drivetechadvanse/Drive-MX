@@ -129,7 +129,7 @@
     onSessionProfileChange = () => {},
     activeView = 'home'
   } = {}) {
-    const sessionUserId = getUserId(sessionUser || {});
+    const sessionUserId = String(fbUser?.uid || getUserId(sessionUser || {})).trim();
     const cacheKey = sessionUser?.role === 'admin'
       ? 'driveMxPackages_admin'
       : (sessionUserId ? `driveMxPackages_${safeId(sessionUserId)}` : 'driveMxPackages_anonymous');
@@ -515,3 +515,4 @@
     }
   };
 })(window);
+
