@@ -25,6 +25,8 @@ export function createEmptyShipmentForm(overrides = {}) {
     phone: '',
     o: '',
     d: '',
+    zip: '',
+    references: '',
     op: '',
     productId: '',
     ...overrides
@@ -37,6 +39,8 @@ export function normalizeShipmentForm(form = {}) {
     phone: String(form.phone || '').trim(),
     o: String(form.o || '').trim(),
     d: String(form.d || '').trim(),
+    zip: String(form.zip || '').trim(),
+    references: String(form.references || '').trim(),
     op: String(form.op || '').trim(),
     productId: String(form.productId || '').trim()
   };
@@ -53,6 +57,10 @@ export function validateShipmentForm(form = {}, options = {}) {
   if (!normalized.o) return { valid: false, message: 'Ingresa el origen.', data: normalized };
   if (!normalized.d) return { valid: false, message: 'Ingresa el destino.', data: normalized };
   if (normalized.o.length > 240 || normalized.d.length > 500) return { valid: false, message: 'El origen o destino es demasiado largo.', data: normalized };
+  if (!normalized.zip) return { valid: false, message: 'Ingresa el código postal.', data: normalized };
+  if (normalized.zip.length > 20) return { valid: false, message: 'El código postal es demasiado largo.', data: normalized };
+  if (!normalized.references) return { valid: false, message: 'Ingresa las referencias del domicilio.', data: normalized };
+  if (normalized.references.length > 100) return { valid: false, message: 'Las referencias del domicilio solo permiten 100 caracteres.', data: normalized };
   if (requireOperator && !normalized.op) return { valid: false, message: 'Selecciona el usuario asignado.', data: normalized };
 
   return { valid: true, message: '', data: normalized };
@@ -104,6 +112,8 @@ export function buildShipmentRecord({ form = {}, guideCode = '', mode = 'admin',
     },
     o: normalized.o,
     d: normalized.d,
+    zip: normalized.zip,
+    references: normalized.references,
     op: assignedUserId,
     assignedUserId,
     productId: normalized.productId || existing?.productId || '',
@@ -137,6 +147,8 @@ export function buildTrackingGuideRecord(shipment = {}, options = {}) {
     },
     o: shipment.o || '',
     d: shipment.d || '',
+    zip: shipment.zip || '',
+    references: shipment.references || '',
     status: shipment.status || 'Recolectado',
     currentStep: Number.isFinite(Number(shipment.currentStep)) ? Number(shipment.currentStep) : 0,
     op: shipment.op || shipment.assignedUserId || '',
