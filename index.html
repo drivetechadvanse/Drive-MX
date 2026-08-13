@@ -64,6 +64,7 @@
         import "./supermercado-module/supermercado-module.js";
         import "./new-shipment/new-shipment.js";
         import "./guide-assignment/guide-assignment.js";
+        import "./conductores/conductores.js";
         import "./panel-control/panel-control.js";
         
         const firebaseConfig = {
@@ -99,6 +100,7 @@
         const Supermercado = window.DriveMxSupermercado || window.DriveMxSupermercadoCore || {};
         const NewShipmentUI = window.DriveMxNewShipment || {};
         const GuideAssignmentUI = window.DriveMxGuideAssignment || {};
+        const ConductoresUI = window.DriveMxConductores || {};
         const PanelControlUI = window.DriveMxPanelControlUI;
         const ProductsCore = window.DriveMxProductsCore;
         const AdminProductsUI = window.DriveMxAdminProducts;
@@ -3252,6 +3254,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         {showUserMenu && (
                                             <div className="absolute right-0 top-14 w-56 bg-white border border-slate-100 rounded-2xl shadow-xl p-2 z-50 animate-slide">
                                                 <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-products-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Administración de Productos</button>
+                                                <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-drivers-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Conductores</button>
                                                 <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-sales-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Ventas Realizadas</button>
                                                 <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('wallet-movements-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Movimientos</button>
                                                 <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); setView('guide-assignment'); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Asignación de Guías</button>
@@ -3280,6 +3283,16 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 <WalletUI.WalletMovementsPanel movements={walletMovements} />
 
                                 <UserProductsUI.UserProductsPanel manager={userProductsManager} Icons={Icons} />
+
+                                {ConductoresUI.ConductoresPanel && (
+                                    <ConductoresUI.ConductoresPanel
+                                        fbase={fbase}
+                                        appId={appId}
+                                        currentUser={sessionUser}
+                                        ensureAccountAllowed={ensureAccountAllowed}
+                                        onClaimed={packagesManager.onShipmentCreated}
+                                    />
+                                )}
 
                                 <PackagesGuidesUI.UserAssignmentsPanel manager={packagesManager} Icons={Icons} />
                             </div>
