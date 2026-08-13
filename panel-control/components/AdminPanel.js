@@ -16,9 +16,7 @@ export function AdminPanel(props = {}) {
   const WalletUI = props.WalletUI || globalThis.DriveMxWalletUI || {};
   const UsersUI = props.UsersUI || globalThis.DriveMxUsersUI || {};
   const AdsManager = props.AdsManager || globalThis.DriveMxAdsManager || {};
-  const ProductsCore = globalThis.DriveMxProductsCore || {};
   const AdminAdsPanel = props.AdminAdsPanel || AdsManager.AdminAdsPanel;
-  const packagesManager = props.packagesManager || {};
 
   return h('div', { className: 'w-full max-w-5xl space-y-8 animate-slide drive-mx-panel-control' },
     h(AdminHeader, {
@@ -34,11 +32,14 @@ export function AdminPanel(props = {}) {
         appId: props.appId,
         currentUser: props.sessionUser,
         users: props.users,
-        onCreated: packagesManager.onShipmentCreated
+        onCreated: props.onShipmentCreated || props.packagesManager?.onShipmentCreated
       }),
       h('div', { className: 'md:col-span-2 space-y-8' },
         h(ActiveShipmentsCard, {
-          manager: packagesManager,
+          manager: props.packagesManager,
+          pkgs: props.pkgs,
+          deletePkg: props.deletePkg,
+          findProductByTracking: props.findProductByTracking,
           Icons: props.Icons
         }),
         h(EmailSettingsCard, {
@@ -73,9 +74,9 @@ export function AdminPanel(props = {}) {
         h(PendingTransfersCard, {
           pendingSalesTransfers: props.pendingSalesTransfers,
           sessionUser: props.sessionUser,
-          transferTrackingDrafts: packagesManager.transferTrackingDrafts,
-          setTransferTrackingDrafts: packagesManager.setTransferTrackingDrafts,
-          assignTrackingToTransfer: packagesManager.assignTrackingToTransfer,
+          transferTrackingDrafts: props.transferTrackingDrafts,
+          setTransferTrackingDrafts: props.setTransferTrackingDrafts,
+          assignTrackingToTransfer: props.assignTrackingToTransfer,
           markTransferPaid: props.markTransferPaid,
           deleteTransfer: props.deleteTransfer,
           orderSending: props.orderSending,
@@ -84,8 +85,8 @@ export function AdminPanel(props = {}) {
         h(CompletedSalesCard, {
           completedSales: props.completedSales,
           deleteCompletedSale: props.deleteCompletedSale,
-          normalizeProductSizes: ProductsCore.normalizeProductSizes,
-          normalizeProductColors: ProductsCore.normalizeProductColors,
+          normalizeProductSizes: props.normalizeProductSizes,
+          normalizeProductColors: props.normalizeProductColors,
           Icons: props.Icons
         }),
         AdminAdsPanel ? h(AdminAdsPanel, {
@@ -96,8 +97,26 @@ export function AdminPanel(props = {}) {
           currentUser: props.sessionUser
         }) : null,
         h(ProductsAdminPanel, {
-          manager: props.adminProductsManager,
-          Icons: props.Icons
+          Icons: props.Icons,
+          editingProductId: props.editingProductId,
+          resetProductForm: props.resetProductForm,
+          handleProductSubmit: props.handleProductSubmit,
+          handleProductImagesSelect: props.handleProductImagesSelect,
+          productForm: props.productForm,
+          setProductForm: props.setProductForm,
+          productImageFiles: props.productImageFiles,
+          replaceExistingProductImage: props.replaceExistingProductImage,
+          removeExistingProductImage: props.removeExistingProductImage,
+          removeNewProductImage: props.removeNewProductImage,
+          PRODUCT_SIZE_OPTIONS: props.PRODUCT_SIZE_OPTIONS,
+          normalizeProductSizes: props.normalizeProductSizes,
+          normalizeProductColors: props.normalizeProductColors,
+          productUploading: props.productUploading,
+          controlProducts: props.controlProducts,
+          getProductGallery: props.getProductGallery,
+          editProduct: props.editProduct,
+          toggleProduct: props.toggleProduct,
+          deleteProduct: props.deleteProduct
         }),
         UsersUI.RegisteredUsersPanel ? h(UsersUI.RegisteredUsersPanel, {
           users: props.users,
