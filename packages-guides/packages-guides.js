@@ -430,6 +430,8 @@
                     {pkg.o} → {pkg.d}<br />
                     <span className="text-[8px] text-slate-500 uppercase">{pkg.fullName || pkg.customer?.fullName || 'Nombre no registrado'}</span>
                     <span className="text-[8px] text-slate-400"> · {pkg.phone || pkg.customer?.phone || 'Teléfono no registrado'}</span><br />
+                    <span className="text-[8px] text-slate-400 uppercase">Código postal: {pkg.zip || pkg.delivery?.zip || 'No registrado'}</span><br />
+                    <span className="text-[8px] text-slate-400 uppercase break-words">Referencias: {pkg.references || pkg.delivery?.references || 'No registradas'}</span><br />
                     <span className="text-[8px] text-slate-400 uppercase">{manager.findProductByTracking(pkg)?.name || pkg.productId || 'Sin producto'}</span>
                   </td>
                   <td className="px-6 py-4"><span className="px-2 py-1 bg-slate-100 rounded-full text-[8px] uppercase">{pkg.status}</span></td>
