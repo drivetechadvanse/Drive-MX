@@ -13,7 +13,6 @@ import {
 const h = globalThis.React?.createElement;
 const useEffect = globalThis.React?.useEffect;
 const useState = globalThis.React?.useState;
-const DEFAULT_STEPS = ['Recolectado', 'Procesando', 'En Camino', 'Entregado'];
 const EmptyIcon = () => null;
 
 function EditShipmentForm(props = {}) {
@@ -25,6 +24,8 @@ function EditShipmentForm(props = {}) {
     h('input', { required: true, type: 'tel', className: 'input-field', placeholder: 'NÚMERO DE TELÉFONO', value: form.phone || '', onChange: (event) => setForm({ ...form, phone: event.target.value }) }),
     h('input', { required: true, className: 'input-field uppercase', placeholder: 'ORIGEN', value: form.o || '', onChange: (event) => setForm({ ...form, o: event.target.value }) }),
     h('input', { required: true, className: 'input-field uppercase', placeholder: 'DESTINO', value: form.d || '', onChange: (event) => setForm({ ...form, d: event.target.value }) }),
+    h('input', { required: true, inputMode: 'numeric', autoComplete: 'postal-code', maxLength: 20, className: 'input-field', placeholder: 'CÓDIGO POSTAL', value: form.zip || '', onChange: (event) => setForm({ ...form, zip: event.target.value }) }),
+    h('textarea', { required: true, maxLength: 100, className: 'input-field sm:col-span-2 min-h-[96px] resize-none uppercase', placeholder: 'REFERENCIAS DEL DOMICILIO (MÁXIMO 100 CARACTERES)', value: form.references || '', onChange: (event) => setForm({ ...form, references: event.target.value }) }),
     props.errorMessage ? h('p', { className: 'sm:col-span-2 text-[9px] font-black text-red-500 uppercase text-center' }, props.errorMessage) : null,
     h('div', { className: 'sm:col-span-2 flex flex-col sm:flex-row gap-2' },
       h('button', { type: 'submit', disabled: props.saving, className: 'btn-primary flex-1 h-11 disabled:opacity-50' }, props.saving ? 'Guardando...' : 'Guardar cambios'),
@@ -37,7 +38,6 @@ export function GuideAssignmentPanel(props = {}) {
   if (!h || !useEffect || !useState) return null;
   const Icons = props.Icons || {};
   const TrashIcon = Icons.Trash || EmptyIcon;
-  const steps = Array.isArray(props.steps) && props.steps.length ? props.steps : DEFAULT_STEPS;
   const [shipments, setShipments] = useState([]);
   const [form, setForm] = useState(() => createEmptyShipmentForm());
   const [creating, setCreating] = useState(false);
@@ -99,7 +99,9 @@ export function GuideAssignmentPanel(props = {}) {
       fullName: shipment.fullName || shipment.customer?.fullName || '',
       phone: shipment.phone || shipment.customer?.phone || '',
       o: shipment.o || '',
-      d: shipment.d || ''
+      d: shipment.d || '',
+      zip: shipment.zip || '',
+      references: shipment.references || ''
     }));
   };
 
@@ -126,25 +128,6 @@ export function GuideAssignmentPanel(props = {}) {
     } catch (error) {
       console.error('Modificar guía de usuario:', error);
       setEditError(error?.message || 'No se pudo modificar la guía.');
-    } finally {
-      setProcessingId('');
-    }
-  };
-
-  const changeStatus = async (shipment, status, currentStep) => {
-    if (processingId || props.ensureAccountAllowed?.() === false) return;
-    setProcessingId(shipment.id);
-    try {
-      await updateUserShipment({
-        fbase: props.fbase,
-        appId: props.appId,
-        user: props.currentUser,
-        shipment,
-        patch: { status, currentStep }
-      });
-    } catch (error) {
-      console.error('Actualizar estado de guía:', error);
-      alert(error?.message || 'No se pudo actualizar el estado.');
     } finally {
       setProcessingId('');
     }
@@ -232,16 +215,9 @@ export function GuideAssignmentPanel(props = {}) {
               h('div', null, h('p', { className: 'text-[8px] font-black text-slate-400 uppercase' }, 'Nombre completo'), h('p', { className: 'text-sm font-black text-slate-800 uppercase break-anywhere' }, shipment.fullName || customer.fullName || '-')),
               h('div', null, h('p', { className: 'text-[8px] font-black text-slate-400 uppercase' }, 'Número de teléfono'), h('p', { className: 'text-sm font-black text-slate-800 break-anywhere' }, shipment.phone || customer.phone || '-')),
               h('div', null, h('p', { className: 'text-[8px] font-black text-slate-400 uppercase' }, 'Origen'), h('p', { className: 'text-sm font-black text-slate-800 uppercase break-anywhere' }, shipment.o || '-')),
-              h('div', null, h('p', { className: 'text-[8px] font-black text-slate-400 uppercase' }, 'Destino'), h('p', { className: 'text-sm font-black text-slate-800 uppercase break-anywhere' }, shipment.d || '-'))
-            ),
-            h('div', { className: 'grid grid-cols-2 gap-2' },
-              steps.map((step, index) => h('button', {
-                key: step,
-                type: 'button',
-                disabled: busy,
-                onClick: () => changeStatus(shipment, step, index),
-                className: `p-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all disabled:opacity-50 ${shipment.status === step ? 'bg-red-500 border-red-500 text-white shadow-lg' : 'border-slate-100 text-slate-400'}`
-              }, step))
+              h('div', null, h('p', { className: 'text-[8px] font-black text-slate-400 uppercase' }, 'Destino'), h('p', { className: 'text-sm font-black text-slate-800 uppercase break-anywhere' }, shipment.d || '-')),
+              h('div', null, h('p', { className: 'text-[8px] font-black text-slate-400 uppercase' }, 'Código postal'), h('p', { className: 'text-sm font-black text-slate-800 break-anywhere' }, shipment.zip || '-')),
+              h('div', { className: 'sm:col-span-2' }, h('p', { className: 'text-[8px] font-black text-slate-400 uppercase' }, 'Referencias del domicilio'), h('p', { className: 'text-sm font-black text-slate-800 uppercase break-anywhere' }, shipment.references || '-'))
             ),
             editingId === shipment.id ? h(EditShipmentForm, {
               form: editForm,
@@ -257,3 +233,4 @@ export function GuideAssignmentPanel(props = {}) {
     )
   );
 }
+
