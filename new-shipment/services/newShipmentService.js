@@ -239,13 +239,26 @@ export async function findGuideByCode({ fbase, appId, guideCode } = {}) {
 
   const db = fbase.getFirestore();
   const trackingRef = getTrackingGuideRef({ fbase, db, appId, guideCode: code });
-  const trackingSnapshot = await fbase.getDoc(trackingRef);
-  if (trackingSnapshot.exists()) return { id: trackingSnapshot.id, ...trackingSnapshot.data() };
+  const shipmentRef = getAdminShipmentRef({ fbase, db, appId, guideCode: code });
+  const [trackingSnapshot, shipmentSnapshot] = await Promise.all([
+    fbase.getDoc(trackingRef),
+    fbase.getDoc(shipmentRef)
+  ]);
 
-  // Compatibilidad con guías creadas antes de instalar el índice público.
-  const legacyRef = getAdminShipmentRef({ fbase, db, appId, guideCode: code });
-  const legacySnapshot = await fbase.getDoc(legacyRef);
-  if (legacySnapshot.exists()) return { id: legacySnapshot.id, ...legacySnapshot.data() };
+  const trackingGuide = trackingSnapshot.exists()
+    ? { id: trackingSnapshot.id, ...trackingSnapshot.data() }
+    : null;
+  const shipmentGuide = shipmentSnapshot.exists()
+    ? { id: shipmentSnapshot.id, ...shipmentSnapshot.data() }
+    : null;
+
+  if (trackingGuide && shipmentGuide) {
+    return Number(shipmentGuide.updatedAt || 0) > Number(trackingGuide.updatedAt || 0)
+      ? shipmentGuide
+      : trackingGuide;
+  }
+  if (trackingGuide) return trackingGuide;
+  if (shipmentGuide) return shipmentGuide;
 
   return null;
 }
@@ -276,13 +289,20 @@ export async function updateAdminShipmentWithTracking({ fbase, appId, shipment, 
   if ('status' in patch) trackingPatch.status = patch.status;
   if ('currentStep' in patch) trackingPatch.currentStep = Number(patch.currentStep);
 
-  await fbase.runTransaction(db, async (transaction) => {
-    // Las guías antiguas pueden no tener todavía el espejo de tracking_guides.
-    // En ese caso se actualiza packages y el rastreador público usa su fallback legado.
-    const trackingSnapshot = await transaction.get(trackingRef);
-    transaction.set(shipmentRef, shipmentPatch, { merge: true });
-    if (trackingSnapshot.exists()) transaction.set(trackingRef, trackingPatch, { merge: true });
-  });
+  // El estado principal vive en packages. Se actualiza primero para que un
+  // espejo de rastreo antiguo o incompleto no cancele el cambio de la guía.
+  await fbase.setDoc(shipmentRef, shipmentPatch, { merge: true });
+
+  try {
+    const trackingSnapshot = await fbase.getDoc(trackingRef);
+    if (trackingSnapshot.exists()) {
+      await fbase.setDoc(trackingRef, trackingPatch, { merge: true });
+    }
+  } catch (error) {
+    // La consulta pública compara ambos registros y usa el más reciente.
+    // Por eso la guía conserva el nuevo estado aunque el espejo sea legado.
+    console.warn('No se pudo sincronizar el espejo público de la guía:', error);
+  }
 
   return nextShipment;
 }
@@ -300,3 +320,6 @@ export async function deleteAdminShipmentWithTracking({ fbase, appId, guideCode 
     transaction.delete(trackingRef);
   });
 }
+
+
+
