@@ -129,7 +129,7 @@
     onSessionProfileChange = () => {},
     activeView = 'home'
   } = {}) {
-    const sessionUserId = String(fbUser?.uid || getUserId(sessionUser || {})).trim();
+    const sessionUserId = getUserId(sessionUser || {});
     const cacheKey = sessionUser?.role === 'admin'
       ? 'driveMxPackages_admin'
       : (sessionUserId ? `driveMxPackages_${safeId(sessionUserId)}` : 'driveMxPackages_anonymous');
@@ -171,10 +171,7 @@
       }
       const unsubscribe = fbase.onSnapshot(packagesQuery, (snapshot) => {
         const next = [];
-        snapshot.forEach((documentSnapshot) => {
-          const data = documentSnapshot.data() || {};
-          next.push({ ...data, id: documentSnapshot.id, firestoreId: documentSnapshot.id });
-        });
+        snapshot.forEach((documentSnapshot) => next.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
         const sorted = sortPackages(next);
         setPkgs(sorted);
         writeLocal(cacheKey, sorted);
@@ -229,6 +226,25 @@
         || tracking.order?.product
         || null;
     }, [products]);
+
+    const findAssignedUser = useCallback((shipment = {}) => {
+      const assignedUserId = String(shipment.assignedUserId || shipment.op || '').trim();
+      if (!assignedUserId) return null;
+      return (Array.isArray(users) ? users : []).find((user) => getUserId(user) === assignedUserId) || null;
+    }, [users]);
+
+    const getAssignedUserName = useCallback((shipment = {}) => {
+      const assignedUser = findAssignedUser(shipment);
+      return String(
+        shipment.assignedUserName
+        || shipment.driverName
+        || assignedUser?.name
+        || assignedUser?.email
+        || shipment.assignedUserId
+        || shipment.op
+        || ''
+      ).trim();
+    }, [findAssignedUser]);
 
     const assignTrackingToTransfer = useCallback(async (transfer = {}) => {
       if (sessionUser?.role !== 'admin') return;
@@ -351,16 +367,11 @@
         alert('Valida primero la contraseña maestra para acceder a Mis Asignaciones.');
         return;
       }
-      const guideCode = normalizeGuideCode(pkg?.firestoreId || pkg?.trackingNumber || pkg?.id);
-      if (!guideCode) {
-        alert('No se encontró el número de guía.');
-        return;
-      }
       try {
         const updatedPackage = await NewShipment.services.updateAdminShipmentWithTracking({
           fbase,
           appId,
-          shipment: { ...pkg, id: guideCode },
+          shipment: pkg,
           patch: {
             status,
             currentStep,
@@ -368,12 +379,7 @@
             updatedByUid: sessionUserId
           }
         });
-        const independentPackage = { ...updatedPackage, id: guideCode, firestoreId: guideCode };
-        replacePackages((previous) => previous.map((item) => (
-          item === pkg || (item.firestoreId && normalizeGuideCode(item.firestoreId) === guideCode)
-            ? independentPackage
-            : item
-        )));
+        replacePackages((previous) => previous.map((item) => String(item.id) === String(updatedPackage.id) ? updatedPackage : item));
       } catch (error) {
         console.error('Actualizar estado de asignación:', error);
         alert('No se pudo actualizar el estado de la guía.');
@@ -405,6 +411,8 @@
       onShipmentCreated,
       deletePackage,
       findProductByTracking,
+      findAssignedUser,
+      getAssignedUserName,
       assignTrackingToTransfer,
       assignmentsUnlocked,
       setAssignmentsUnlocked,
@@ -436,21 +444,25 @@
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <tbody className="divide-y divide-slate-50">
-              {manager.pkgs.map((pkg) => (
-                <tr key={pkg.id} className="text-[10px] font-bold text-slate-600">
-                  <td className="px-6 py-4 text-red-600 font-black">#{pkg.id}</td>
-                  <td className="px-6 py-4">
-                    {pkg.o} → {pkg.d}<br />
-                    <span className="text-[8px] text-slate-500 uppercase">{pkg.fullName || pkg.customer?.fullName || 'Nombre no registrado'}</span>
-                    <span className="text-[8px] text-slate-400"> · {pkg.phone || pkg.customer?.phone || 'Teléfono no registrado'}</span><br />
-                    <span className="text-[8px] text-slate-400 uppercase">Código postal: {pkg.zip || pkg.delivery?.zip || 'No registrado'}</span><br />
-                    <span className="text-[8px] text-slate-400 uppercase break-words">Referencias: {pkg.references || pkg.delivery?.references || 'No registradas'}</span><br />
-                    <span className="text-[8px] text-slate-400 uppercase">{manager.findProductByTracking(pkg)?.name || pkg.productId || 'Sin producto'}</span>
-                  </td>
-                  <td className="px-6 py-4"><span className="px-2 py-1 bg-slate-100 rounded-full text-[8px] uppercase">{pkg.status}</span></td>
-                  <td className="px-6 py-4 text-right"><button type="button" onClick={() => manager.deletePackage(pkg)} className="text-slate-300 hover:text-red-500"><TrashIcon /></button></td>
-                </tr>
-              ))}
+              {manager.pkgs.map((pkg) => {
+                const assignedUserName = manager.getAssignedUserName?.(pkg) || 'Sin usuario asignado';
+                return (
+                  <tr key={pkg.id} className="text-[10px] font-bold text-slate-600">
+                    <td className="px-6 py-4 text-red-600 font-black">#{pkg.id}</td>
+                    <td className="px-6 py-4">
+                      {pkg.o} → {pkg.d}<br />
+                      <span className="text-[8px] text-slate-500 uppercase">{pkg.fullName || pkg.customer?.fullName || 'Nombre no registrado'}</span>
+                      <span className="text-[8px] text-slate-400"> · {pkg.phone || pkg.customer?.phone || 'Teléfono no registrado'}</span><br />
+                      <span className="text-[8px] text-slate-400 uppercase">Código postal: {pkg.zip || pkg.delivery?.zip || 'No registrado'}</span><br />
+                      <span className="text-[8px] text-slate-400 uppercase break-words">Referencias: {pkg.references || pkg.delivery?.references || 'No registradas'}</span><br />
+                      <span className="text-[8px] text-red-500 font-black uppercase">Usuario asignado: {assignedUserName}</span><br />
+                      <span className="text-[8px] text-slate-400 uppercase">{manager.findProductByTracking(pkg)?.name || pkg.productId || 'Sin producto'}</span>
+                    </td>
+                    <td className="px-6 py-4"><span className="px-2 py-1 bg-slate-100 rounded-full text-[8px] uppercase">{pkg.status}</span></td>
+                    <td className="px-6 py-4 text-right"><button type="button" onClick={() => manager.deletePackage(pkg)} className="text-slate-300 hover:text-red-500"><TrashIcon /></button></td>
+                  </tr>
+                );
+              })}
               {manager.pkgs.length === 0 && <tr><td colSpan="4" className="px-6 py-8 text-center text-[10px] font-bold text-slate-300 uppercase">No hay envíos activos</td></tr>}
             </tbody>
           </table>
@@ -478,16 +490,33 @@
       <>
         <div><h1 className="text-3xl font-black uppercase tracking-tight">Mis <span className="text-red-500">Asignaciones</span></h1><p className="text-[10px] font-bold text-slate-400 uppercase">Ruta Activa</p></div>
         <div className="space-y-4">
-          {manager.assignedPackages.map((pkg) => (
-            <div key={pkg.id} className="card-glass p-6 space-y-6">
-              <div className="flex justify-between items-center"><h3 className="text-xl font-black text-red-600">#{pkg.id}</h3><span className="text-[9px] font-black uppercase text-slate-400">{pkg.o} → {pkg.d}</span></div>
-              <div className="grid grid-cols-2 gap-2">
-                {STEPS.map((step, index) => (
-                  <button key={step} type="button" onClick={() => manager.updateAssignedPackageStatus(pkg, step, index)} className={`p-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${pkg.status === step ? 'bg-red-500 border-red-500 text-white shadow-lg' : 'border-slate-100 text-slate-400'}`}>{step}</button>
-                ))}
+          {manager.assignedPackages.map((pkg) => {
+            const customer = pkg.customer || {};
+            return (
+              <div key={pkg.id} className="card-glass p-6 space-y-6">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2">
+                  <div>
+                    <p className="text-[8px] font-black uppercase text-slate-400">Número de guía</p>
+                    <h3 className="text-xl font-black text-red-600">#{pkg.id}</h3>
+                  </div>
+                  <span className="text-[9px] font-black uppercase text-slate-400">{pkg.status || 'Recolectado'}</span>
+                </div>
+                <div className="grid sm:grid-cols-2 gap-3 bg-slate-50 rounded-2xl p-4">
+                  <div><p className="text-[8px] font-black text-slate-400 uppercase">Nombre completo</p><p className="text-sm font-black text-slate-800 uppercase break-anywhere">{pkg.fullName || customer.fullName || '-'}</p></div>
+                  <div><p className="text-[8px] font-black text-slate-400 uppercase">Número de teléfono</p><p className="text-sm font-black text-slate-800 break-anywhere">{pkg.phone || customer.phone || '-'}</p></div>
+                  <div><p className="text-[8px] font-black text-slate-400 uppercase">Origen</p><p className="text-sm font-black text-slate-800 uppercase break-anywhere">{pkg.o || '-'}</p></div>
+                  <div><p className="text-[8px] font-black text-slate-400 uppercase">Destino</p><p className="text-sm font-black text-slate-800 uppercase break-anywhere">{pkg.d || '-'}</p></div>
+                  <div><p className="text-[8px] font-black text-slate-400 uppercase">Código postal</p><p className="text-sm font-black text-slate-800 break-anywhere">{pkg.zip || pkg.delivery?.zip || '-'}</p></div>
+                  <div className="sm:col-span-2"><p className="text-[8px] font-black text-slate-400 uppercase">Referencias del domicilio</p><p className="text-sm font-black text-slate-800 uppercase break-anywhere">{pkg.references || pkg.delivery?.references || '-'}</p></div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {STEPS.map((step, index) => (
+                    <button key={step} type="button" onClick={() => manager.updateAssignedPackageStatus(pkg, step, index)} className={`p-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${pkg.status === step ? 'bg-red-500 border-red-500 text-white shadow-lg' : 'border-slate-100 text-slate-400'}`}>{step === 'Procesando' ? 'Procesado' : step}</button>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           {manager.assignedPackages.length === 0 && <div className="card-glass p-8 text-center text-[10px] font-black uppercase text-slate-300">No tienes guías asignadas</div>}
         </div>
       </>
@@ -528,5 +557,6 @@
     }
   };
 })(window);
+
 
 
