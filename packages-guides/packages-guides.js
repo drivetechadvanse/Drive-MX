@@ -171,7 +171,10 @@
       }
       const unsubscribe = fbase.onSnapshot(packagesQuery, (snapshot) => {
         const next = [];
-        snapshot.forEach((documentSnapshot) => next.push({ id: documentSnapshot.id, ...documentSnapshot.data() }));
+        snapshot.forEach((documentSnapshot) => {
+          const data = documentSnapshot.data() || {};
+          next.push({ ...data, id: documentSnapshot.id, firestoreId: documentSnapshot.id });
+        });
         const sorted = sortPackages(next);
         setPkgs(sorted);
         writeLocal(cacheKey, sorted);
@@ -348,11 +351,16 @@
         alert('Valida primero la contraseña maestra para acceder a Mis Asignaciones.');
         return;
       }
+      const guideCode = normalizeGuideCode(pkg?.firestoreId || pkg?.trackingNumber || pkg?.id);
+      if (!guideCode) {
+        alert('No se encontró el número de guía.');
+        return;
+      }
       try {
         const updatedPackage = await NewShipment.services.updateAdminShipmentWithTracking({
           fbase,
           appId,
-          shipment: pkg,
+          shipment: { ...pkg, id: guideCode },
           patch: {
             status,
             currentStep,
@@ -360,7 +368,12 @@
             updatedByUid: sessionUserId
           }
         });
-        replacePackages((previous) => previous.map((item) => String(item.id) === String(updatedPackage.id) ? updatedPackage : item));
+        const independentPackage = { ...updatedPackage, id: guideCode, firestoreId: guideCode };
+        replacePackages((previous) => previous.map((item) => (
+          item === pkg || (item.firestoreId && normalizeGuideCode(item.firestoreId) === guideCode)
+            ? independentPackage
+            : item
+        )));
       } catch (error) {
         console.error('Actualizar estado de asignación:', error);
         alert('No se pudo actualizar el estado de la guía.');
@@ -515,4 +528,5 @@
     }
   };
 })(window);
+
 
