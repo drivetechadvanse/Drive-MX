@@ -1022,15 +1022,17 @@
                 if (code === 'auth/operation-not-allowed') return 'Firebase no permite crear cuentas con correo y contraseña.';
                 if (code === 'auth/secondary-session-not-isolated') return 'No se pudo aislar la creación del usuario. Recarga la página e intenta de nuevo.';
                 if (code === 'auth/missing-user-id') return 'Firebase no devolvió un identificador válido para el usuario.';
-                return 'No se pudo crear el usuario. Revisa los datos e intenta de nuevo.';
+                if (code === 'auth/existing-account-password-mismatch') return 'El correo ya existe. Inicia sesión con su contraseña o utiliza “¿Olvidaste tu contraseña?” para restablecerla.';
+                if (code === 'firebase-admin-not-configured') return 'El servicio de usuarios no pudo conectarse con Firebase Admin.';
+                return err?.message || 'No se pudo crear el usuario. Revisa los datos e intenta de nuevo.';
             };
 
             const getFirestoreRegistrationErrorMessage = (err) => {
                 const code = String(err?.code || '').replace('firestore/', '');
-                if (code === 'permission-denied') return 'La cuenta está en Authentication, pero Firestore rechazó el perfil. Publica también el archivo firestore.rules incluido y vuelve a guardar con el mismo correo y contraseña.';
-                if (code === 'unavailable') return 'La cuenta está en Authentication, pero Firestore no está disponible. Vuelve a guardar con el mismo correo y contraseña.';
-                if (code === 'invalid-argument') return 'La cuenta está en Authentication, pero los datos del perfil fueron rechazados. Revisa los campos y vuelve a guardar.';
-                return 'La cuenta está en Authentication, pero no se pudo guardar el perfil. Vuelve a guardar con el mismo correo y contraseña.';
+                if (code === 'permission-denied') return 'Authentication aceptó la cuenta, pero Firestore rechazó el perfil.';
+                if (code === 'unavailable') return 'Authentication aceptó la cuenta, pero Firestore no está disponible.';
+                if (code === 'invalid-argument') return 'Authentication aceptó la cuenta, pero los datos del perfil fueron rechazados.';
+                return err?.message || 'La cuenta existe en Authentication, pero no se pudo completar su perfil.';
             };
 
             const getSessionUserId = () => UserProductsUI.services.getUserProfileId(sessionUser || {});
@@ -1619,18 +1621,55 @@
                 let credential = null;
                 let profileSaved = false;
                 let primaryUserUidBefore = '';
+                let serverProvisionError = null;
+
+                const applyProfileLocally = (profile = {}) => {
+                    const userId = String(profile.uid || profile.id || '').trim();
+                    if (!userId) return;
+                    const normalizedProfile = { ...profile, id: userId, uid: userId };
+                    setUsers((previous) => {
+                        const next = [
+                            ...previous.filter((item) => {
+                                const itemId = String(item?.uid || item?.id || '').trim();
+                                const itemEmail = normalizeRegistrationEmail(item?.email);
+                                return itemId !== userId && itemEmail !== normalizedEmail;
+                            }),
+                            normalizedProfile
+                        ];
+                        writeLocal(STAFF_USERS_LOCAL_KEY, next);
+                        return next;
+                    });
+                };
 
                 try {
-                    // La sesión principal pertenece al administrador (o al visitante anónimo).
-                    // La cuenta nueva siempre se crea en otra app de Firebase para no sustituirla.
                     primaryAuth = getPrimaryAuth();
                     primaryUserUidBefore = String(primaryAuth?.currentUser?.uid || '');
-                    secondaryAuth = getSecondaryAuth();
+                    const primaryEmail = normalizeRegistrationEmail(primaryAuth?.currentUser?.email);
+                    const primaryAdminAuthenticated = primaryEmail === normalizeRegistrationEmail(ADMIN_EMAIL);
 
-                    if (!secondaryAuth?.app || secondaryAuth === primaryAuth || secondaryAuth.app?.name === primaryAuth?.app?.name) {
-                        const isolationError = new Error('La sesión secundaria de Firebase no está aislada.');
-                        isolationError.code = 'auth/secondary-session-not-isolated';
-                        throw isolationError;
+                    // Cuando el administrador está autenticado, el servidor crea o repara
+                    // Authentication, el perfil y la cartera sin cerrar su sesión principal.
+                    // Se ejecuta antes de revisar la lista local porque una corrección anterior
+                    // pudo dejar un perfil incompleto o con un ID distinto al UID de Authentication.
+                    if (primaryAdminAuthenticated && primaryAuth.currentUser) {
+                        try {
+                            const serverResult = await EmailPasswordAuthUI.services.provisionUserAccountProfile({
+                                firebaseUser: primaryAuth.currentUser,
+                                email: normalizedEmail,
+                                password,
+                                name: trimmedName,
+                                phone: trimmedPhone
+                            });
+                            const profile = serverResult.profile || {};
+                            profileSaved = true;
+                            applyProfileLocally(profile);
+                            closeRegisteredUserModal();
+                            alert('Usuario creado y perfil habilitado correctamente.');
+                            return;
+                        } catch (error) {
+                            serverProvisionError = error;
+                            console.error('Crear usuario mediante Firebase Admin:', error);
+                        }
                     }
 
                     const existingUser = await findRegisteredUserByEmail(normalizedEmail);
@@ -1639,19 +1678,28 @@
                         return;
                     }
 
+                    // Registro público o respaldo: usa una instancia secundaria para no
+                    // sustituir la sesión principal del administrador o del visitante.
+                    secondaryAuth = getSecondaryAuth();
+                    if (!secondaryAuth?.app || secondaryAuth === primaryAuth || secondaryAuth.app?.name === primaryAuth?.app?.name) {
+                        const isolationError = new Error('La sesión secundaria de Firebase no está aislada.');
+                        isolationError.code = 'auth/secondary-session-not-isolated';
+                        throw isolationError;
+                    }
+                    await fbase.signOut(secondaryAuth).catch(() => {});
+
                     try {
                         credential = await fbase.createUserWithEmailAndPassword(secondaryAuth, normalizedEmail, password);
-                    } catch(err) {
-                        if (err?.code !== 'auth/email-already-in-use') throw err;
-
-                        // Completa cuentas que quedaron creadas en Authentication durante
-                        // un intento anterior, pero todavía no tienen perfil en Firestore.
+                    } catch(authCreateError) {
+                        if (authCreateError?.code !== 'auth/email-already-in-use') throw authCreateError;
                         try {
                             credential = await fbase.signInWithEmailAndPassword(secondaryAuth, normalizedEmail, password);
-                        } catch(signInErr) {
-                            console.error('Recuperar cuenta existente sin perfil:', signInErr);
-                            alert('Ese correo ya existe en Authentication. Escribe la misma contraseña usada al crearlo para completar el perfil.');
-                            return;
+                        } catch(signInError) {
+                            console.error('Validar cuenta existente para reparar perfil:', signInError);
+                            const mismatchError = new Error('El correo ya existe y la contraseña no coincide.');
+                            mismatchError.code = 'auth/existing-account-password-mismatch';
+                            mismatchError.cause = signInError;
+                            throw mismatchError;
                         }
                     }
 
@@ -1680,87 +1728,52 @@
                         updatedAt: now
                     };
 
-                    const primaryDb = fbase.getFirestore(primaryAuth.app);
-                    const secondaryDb = fbase.getFirestore(secondaryAuth.app);
-                    const primaryAdminAuthenticated = normalizeRegistrationEmail(primaryAuth?.currentUser?.email) === normalizeRegistrationEmail(ADMIN_EMAIL);
+                    try {
+                        const serverResult = await EmailPasswordAuthUI.services.provisionUserAccountProfile({
+                            firebaseUser: credential.user,
+                            email: userEmail,
+                            name: trimmedName,
+                            phone: trimmedPhone
+                        });
+                        const profile = serverResult.profile || newUser;
+                        profileSaved = true;
+                        applyProfileLocally(profile);
+                    } catch (error) {
+                        serverProvisionError = error;
+                        console.error('Crear perfil mediante API:', error);
 
-                    // Si el administrador está dentro del panel, guarda como administrador.
-                    // En el registro público guarda como el propio UID recién autenticado.
-                    const writeAttempts = primaryAdminAuthenticated
-                        ? [
-                            { db: primaryDb, label: 'administrador' },
-                            { db: secondaryDb, label: 'usuario nuevo' }
-                          ]
-                        : [
-                            { db: secondaryDb, label: 'usuario nuevo' }
-                          ];
+                        // Respaldo directo con la sesión del propio usuario. Este camino
+                        // conserva el registro aun si la ruta de Vercel falla temporalmente.
+                        const secondaryDb = fbase.getFirestore(secondaryAuth.app);
+                        await saveDoc(STAFF_USERS_COLLECTION, userId, newUser, {
+                            throwOnError: true,
+                            applyLocalOnError: false,
+                            firestoreDb: secondaryDb
+                        });
+                        profileSaved = true;
 
-                    let profileDb = null;
-                    let profileWriteError = null;
-
-                    for (const attempt of writeAttempts) {
-                        const profileRef = fbase.doc(attempt.db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, userId);
-
-                        try {
-                            const existingProfileSnap = await fbase.getDoc(profileRef);
-                            if (existingProfileSnap.exists()) {
-                                alert('El perfil de ese correo ya está registrado. Inicia sesión.');
-                                return;
-                            }
-                        } catch(readErr) {
-                            // Algunas reglas permiten crear el perfil propio, pero no leer la
-                            // colección completa antes de crearlo. Se prueba la escritura segura.
-                            console.warn(`Verificar perfil con sesión ${attempt.label}:`, readErr);
-                        }
-
-                        try {
-                            await saveDoc(STAFF_USERS_COLLECTION, userId, newUser, {
-                                throwOnError: true,
-                                applyLocalOnError: false,
-                                firestoreDb: attempt.db
-                            });
-                            profileSaved = true;
-                            profileDb = attempt.db;
-                            break;
-                        } catch(writeErr) {
-                            profileWriteError = writeErr;
-                            console.error(`Guardar perfil con sesión ${attempt.label}:`, writeErr);
-                        }
-                    }
-
-                    if (!profileSaved || !profileDb) {
-                        throw profileWriteError || new Error('No se pudo guardar el perfil del usuario en Firestore.');
-                    }
-
-                    // La cartera se intenta con la sesión que guardó el perfil y, cuando existe,
-                    // también con la sesión administrativa. Un fallo de cartera no elimina el perfil.
-                    const walletDatabases = [profileDb];
-                    if (primaryAdminAuthenticated && !walletDatabases.includes(primaryDb)) walletDatabases.push(primaryDb);
-                    if (!walletDatabases.includes(secondaryDb)) walletDatabases.push(secondaryDb);
-
-                    let walletResult = { success: false, reason: 'not-attempted' };
-                    for (const firestoreDb of walletDatabases) {
-                        walletResult = await createOrUpdateUserWalletProfile(
+                        const walletResult = await createOrUpdateUserWalletProfile(
                             { ...newUser, id: userId },
-                            { firestoreDb }
+                            { firestoreDb: secondaryDb }
                         );
-                        if (walletResult.success) break;
-                    }
-                    if (!walletResult.success) {
-                        console.error('La cartera inicial se volverá a crear al iniciar sesión:', walletResult.error || walletResult.reason);
+                        if (!walletResult.success) {
+                            console.error('La cartera inicial se volverá a crear al iniciar sesión:', walletResult.error || walletResult.reason);
+                        }
                     }
 
                     closeRegisteredUserModal();
-                    alert('Usuario creado exitosamente.');
+                    alert('Usuario creado y perfil habilitado correctamente.');
                 } catch(err) {
                     console.error('Registrar usuario:', err);
-                    if (credential?.user?.uid && !profileSaved) {
+                    if (serverProvisionError) console.error('Error previo del servicio de usuarios:', serverProvisionError);
+                    if (err?.code === 'auth/existing-account-password-mismatch') {
+                        alert(getFirebaseAuthErrorMessage(err));
+                    } else if (credential?.user?.uid && !profileSaved) {
                         alert(getFirestoreRegistrationErrorMessage(err));
                     } else {
                         alert(getFirebaseAuthErrorMessage(err));
                     }
                 } finally {
-                    // Nunca cerrar la sesión principal. Solo se cierra la instancia secundaria.
                     if (secondaryAuth && secondaryAuth !== primaryAuth) {
                         await fbase.signOut(secondaryAuth).catch((err) => console.error('Cerrar sesión secundaria:', err));
                     }
