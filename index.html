@@ -52,7 +52,7 @@
     <div id="root"></div>
 
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { initializeApp, getApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getDocs, runTransaction } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
@@ -78,7 +78,7 @@
         };
 
         window.firebaseConfig = firebaseConfig;
-        window.FirebaseSDK = { initializeApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getDocs, runTransaction, getStorage, ref, uploadBytes, getDownloadURL };
+        window.FirebaseSDK = { initializeApp, getApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getDocs, runTransaction, getStorage, ref, uploadBytes, getDownloadURL };
     </script>
     <script src="./wallet/wallet.js"></script>
     <script src="./users/users.js"></script>
@@ -909,7 +909,7 @@
             });
 
             const saveDoc = async (col, id, data, options = {}) => {
-                const { throwOnError = false, skipLocalUpdate = false, applyLocalOnError = true } = options || {};
+                const { throwOnError = false, skipLocalUpdate = false, applyLocalOnError = true, firestoreDb = null } = options || {};
                 const applyLocalUpdate = () => {
                     if (skipLocalUpdate) return;
                     if (col === STAFF_USERS_COLLECTION) {
@@ -926,7 +926,7 @@
                     }
                 };
                 try {
-                    const db = fbase.getFirestore();
+                    const db = firestoreDb || fbase.getFirestore();
                     await fbase.setDoc(fbase.doc(db, 'artifacts', appId, 'public', 'data', col, id), data);
                     applyLocalUpdate();
                     return { success: true };
@@ -1458,13 +1458,16 @@
                 return null;
             };
 
-            const createOrUpdateUserWalletProfile = async (userData) => {
+            const createOrUpdateUserWalletProfile = async (userData, options = {}) => {
                 const userId = userData?.uid || userData?.id;
                 if (!userId) return { success: false, reason: 'missing-user-id' };
 
+                const firestoreDb = options?.firestoreDb || null;
+                const registrationFbase = firestoreDb ? { ...fbase, getFirestore: () => firestoreDb } : fbase;
+
                 try {
                     await Wallet.ensureWalletDocument({
-                        fbase,
+                        fbase: registrationFbase,
                         appId,
                         user: { ...userData, id: userId },
                         createdBy: sessionUser?.email || ADMIN_EMAIL
@@ -1475,7 +1478,7 @@
                 }
 
                 try {
-                    const db = fbase.getFirestore();
+                    const db = firestoreDb || fbase.getFirestore();
                     const walletId = Wallet.getUserWalletId({ ...userData, id: userId }) || userId;
                     const walletRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'wallets', walletId);
                     const now = Date.now();
@@ -1512,6 +1515,7 @@
             const resetRegisteredUserForm = () => {
                 setUserForm({ email: '', p: '', n: '', phone: '' });
                 setEditingRegisteredUserId(null);
+                setUserRegistrationSaving(false);
             };
 
             const closeRegisteredUserModal = () => {
@@ -1537,16 +1541,21 @@
                 setShowUserModal(true);
             };
 
-            const registerUser = async (e) => {
-                e.preventDefault();
+            const registerUser = async (event) => {
+                event?.preventDefault?.();
                 if (userRegistrationSaving) return;
 
-                const trimmedName = userForm.n.trim();
-                const normalizedEmail = normalizeRegistrationEmail(userForm.email);
-                const trimmedPhone = userForm.phone.trim();
+                const trimmedName = String(userForm?.n || '').trim();
+                const normalizedEmail = normalizeRegistrationEmail(userForm?.email);
+                const trimmedPhone = String(userForm?.phone || '').trim();
+                const password = String(userForm?.p || '');
 
                 if (editingRegisteredUserId) {
-                    if (!trimmedName || !normalizedEmail || !trimmedPhone) return;
+                    if (!trimmedName || !normalizedEmail || !trimmedPhone) {
+                        alert('Completa el nombre, correo electrónico y número de teléfono.');
+                        return;
+                    }
+
                     setUserRegistrationSaving(true);
                     try {
                         const currentUser = users.find(user => getUserProfileId(user) === editingRegisteredUserId || user.id === editingRegisteredUserId);
@@ -1569,56 +1578,68 @@
                             updatedAt: now,
                             updatedBy: sessionUser?.email || ADMIN_EMAIL
                         };
-                        await saveDoc(STAFF_USERS_COLLECTION, currentUser.id || editingRegisteredUserId, nextUser);
+                        await saveDoc(STAFF_USERS_COLLECTION, currentUser.id || editingRegisteredUserId, nextUser, { throwOnError: true });
                         await Wallet.ensureWalletDocument({ fbase, appId, user: { ...nextUser, id: currentUser.id || editingRegisteredUserId }, createdBy: sessionUser?.email || ADMIN_EMAIL }).catch((err) => console.error('Actualizar cartera de usuario:', err));
                         closeRegisteredUserModal();
                         alert('Usuario actualizado correctamente.');
+                    } catch(err) {
+                        console.error('Actualizar usuario registrado:', err);
+                        alert('No se pudo actualizar el usuario. Revisa tu conexión e intenta de nuevo.');
                     } finally {
                         setUserRegistrationSaving(false);
                     }
                     return;
                 }
 
-                if (!normalizedEmail || !userForm.p || !trimmedName || !trimmedPhone) return;
+                if (!trimmedName || !normalizedEmail || !trimmedPhone || !password) {
+                    alert('Completa nombre, correo electrónico, teléfono y contraseña.');
+                    return;
+                }
+                if (password.length < 6) {
+                    alert('La contraseña debe tener mínimo 6 caracteres.');
+                    return;
+                }
+
                 setUserRegistrationSaving(true);
-                const secondaryAuth = getSecondaryAuth();
-                let credential = null;
-                let authUserCreated = false;
+                let secondaryAuth = null;
+                let authenticatedUserReady = false;
+
                 try {
+                    secondaryAuth = getSecondaryAuth();
+
                     const existingUser = await findRegisteredUserByEmail(normalizedEmail);
                     if (existingUser) {
                         alert('El correo ya está registrado. Inicia sesión o usa otro correo.');
                         return;
                     }
 
+                    let credential = null;
                     try {
-                        credential = await fbase.createUserWithEmailAndPassword(secondaryAuth, normalizedEmail, userForm.p);
-                        authUserCreated = Boolean(credential?.user?.uid);
+                        credential = await fbase.createUserWithEmailAndPassword(secondaryAuth, normalizedEmail, password);
                     } catch(err) {
-                        if (err?.code === 'auth/email-already-in-use') {
-                            console.warn('El correo ya existía en Firebase Auth; se intentará recuperar el registro si la contraseña coincide.', err);
-                            try {
-                                credential = await fbase.signInWithEmailAndPassword(secondaryAuth, normalizedEmail, userForm.p);
-                            } catch(signInErr) {
-                                console.error('Recuperar usuario existente Firebase Auth:', signInErr);
-                                alert(getFirebaseAuthErrorMessage(err));
-                                return;
-                            }
-                        } else {
-                            console.error('Crear usuario Firebase Auth:', err);
+                        if (err?.code !== 'auth/email-already-in-use') throw err;
+
+                        console.warn('El correo ya existía en Firebase Auth; se intentará recuperar el registro si la contraseña coincide.', err);
+                        try {
+                            credential = await fbase.signInWithEmailAndPassword(secondaryAuth, normalizedEmail, password);
+                        } catch(signInErr) {
+                            console.error('Recuperar usuario existente Firebase Auth:', signInErr);
                             alert(getFirebaseAuthErrorMessage(err));
                             return;
                         }
                     }
 
                     const userId = credential?.user?.uid;
-                    if (!userId) {
-                        alert('No se pudo completar el registro del usuario.');
-                        return;
+                    if (!userId || !secondaryAuth?.app) {
+                        throw new Error('Firebase no devolvió una cuenta válida para completar el registro.');
                     }
+                    authenticatedUserReady = true;
 
-                    const db = fbase.getFirestore();
-                    const profileRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, userId);
+                    // El perfil debe guardarse con la misma app secundaria que acaba de autenticar
+                    // al usuario. Así Firestore recibe el UID correcto y no depende de la sesión
+                    // anónima o administrativa que esté abierta en la app principal.
+                    const registrationDb = fbase.getFirestore(secondaryAuth.app);
+                    const profileRef = fbase.doc(registrationDb, 'artifacts', appId, 'public', 'data', STAFF_USERS_COLLECTION, userId);
                     const existingProfileSnap = await fbase.getDoc(profileRef);
                     if (existingProfileSnap.exists()) {
                         alert('El correo ya está registrado. Inicia sesión o usa otro correo.');
@@ -1643,31 +1664,34 @@
                         updatedAt: now
                     };
 
-                    try {
-                        await saveDoc(STAFF_USERS_COLLECTION, userId, newUser, { throwOnError: true });
+                    await saveDoc(STAFF_USERS_COLLECTION, userId, newUser, {
+                        throwOnError: true,
+                        applyLocalOnError: false,
+                        firestoreDb: registrationDb
+                    });
 
-                        const profileSnap = await fbase.getDoc(profileRef);
-                        if (!profileSnap.exists()) {
-                            throw new Error('El perfil no se encontró en Firestore después de guardarlo.');
-                        }
-
-                        const walletResult = await createOrUpdateUserWalletProfile({ ...newUser, id: userId });
-                        if (!walletResult.success) {
-                            console.error('La cartera/perfil financiero no se pudo crear en este momento. El usuario podrá iniciar sesión y el sistema volverá a intentarlo automáticamente.', walletResult.error || walletResult.reason);
-                        }
-
-                        closeRegisteredUserModal();
-                        alert('Usuario creado exitosamente.');
-                    } catch(err) {
-                        console.error('Guardar perfil de usuario en Firestore:', err);
-                        if (authUserCreated) {
-                            alert(getFirestoreRegistrationErrorMessage(err));
-                        } else {
-                            alert('No se pudo completar el registro del usuario.');
-                        }
+                    const profileSnap = await fbase.getDoc(profileRef);
+                    if (!profileSnap.exists()) {
+                        throw new Error('El perfil no se encontró en Firestore después de guardarlo.');
                     }
+
+                    const walletResult = await createOrUpdateUserWalletProfile(
+                        { ...newUser, id: userId },
+                        { firestoreDb: registrationDb }
+                    );
+                    if (!walletResult.success) {
+                        console.error('La cartera/perfil financiero no se pudo crear en este momento. El usuario podrá iniciar sesión y el sistema volverá a intentarlo automáticamente.', walletResult.error || walletResult.reason);
+                    }
+
+                    closeRegisteredUserModal();
+                    alert('Usuario creado exitosamente.');
+                } catch(err) {
+                    console.error('Registrar usuario:', err);
+                    alert(authenticatedUserReady ? getFirestoreRegistrationErrorMessage(err) : getFirebaseAuthErrorMessage(err));
                 } finally {
-                    await fbase.signOut(secondaryAuth).catch(() => {});
+                    if (secondaryAuth) {
+                        await fbase.signOut(secondaryAuth).catch(() => {});
+                    }
                     setUserRegistrationSaving(false);
                 }
             };
@@ -3376,7 +3400,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         ReactDOM.createRoot(document.getElementById('root')).render(<App />);
     </script>
 </body>
-</html>   
+</html>  
 
 
 
