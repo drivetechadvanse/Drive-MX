@@ -154,7 +154,7 @@
       return h('div', { className: 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 sm:p-6' },
         h('div', { className: 'card-glass max-w-sm w-full p-6 sm:p-10 animate-slide max-h-[90vh] overflow-y-auto' },
           h('h2', { className: 'text-sm font-black text-center uppercase mb-8' }, editing ? 'Editar Usuario' : 'Nuevo Usuario'),
-          h('form', { onSubmit, className: 'space-y-4' },
+          h('form', { onSubmit, noValidate: true, className: 'space-y-4' },
             h('input', {
               required: true,
               className: 'input-field',
@@ -183,7 +183,7 @@
             !editing ? h('input', {
               required: true,
               type: 'password',
-              minLength: '6',
+              minLength: 6,
               className: 'input-field',
               placeholder: 'CONTRASEÑA',
               value: userForm.p || '',
@@ -210,3 +210,4 @@
 
   global[MODULE_NAME] = createUsersUI(global.React);
 })(window);
+          
