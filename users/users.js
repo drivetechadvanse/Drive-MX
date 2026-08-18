@@ -210,4 +210,3 @@
 
   global[MODULE_NAME] = createUsersUI(global.React);
 })(window);
-          
