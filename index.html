@@ -68,13 +68,13 @@
         import "./panel-control/panel-control.js";
         
         const firebaseConfig = {
-            apiKey: "AIzaSyDOK0wHv1gV5_wB4OSbYjDcL9lmLEg_Rdo",
-            authDomain: "drivemx-paqueteria.firebaseapp.com",
-            projectId: "drivemx-paqueteria",
-            storageBucket: "drivemx-paqueteria.firebasestorage.app",
-            messagingSenderId: "486434579543",
-            appId: "1:486434579543:web:8fe53f54b1446644236f12",
-            measurementId: "G-QDWX6CHWRM"
+            apiKey: "AIzaSyDd3WMEe3KmfHsIEMO8PEa5Cd-LMxhCBuU",
+            authDomain: "saxrecords-appcreat.firebaseapp.com",
+            projectId: "saxrecords-appcreat",
+            storageBucket: "saxrecords-appcreat.firebasestorage.app",
+            messagingSenderId: "349857441815",
+            appId: "1:349857441815:web:de6d672562566158c6d452",
+            measurementId: "G-D42L66FNSM"
         };
 
         window.firebaseConfig = firebaseConfig;
@@ -141,6 +141,14 @@
         const PRODUCT_SIZE_OPTIONS = ProductsCore.PRODUCT_SIZE_OPTIONS;
         const PAYMENT_BANK_AZTECA_ORDER_TEXT = 'Pagar solo con Banco Azteca, el nombre del titular de la cuenta debe de coincidir con el nombre registrado en el pedido para que la tranferencia sea aprobada';
         const GLOBAL_SHIPPING_FEE = 150;
+        const SUPERMARKET_SETTINGS_COLLECTION = Supermercado.SETTINGS_COLLECTION || 'supermarket_settings';
+        const SUPERMARKET_SETTINGS_DOCUMENT = Supermercado.SETTINGS_DOCUMENT || 'config';
+        const SUPERMARKET_SETTINGS_LOCAL_KEY = Supermercado.SETTINGS_LOCAL_KEY || 'driveMxSupermarketSettings';
+        const normalizeSupermarketSettings = (settings = {}) => {
+            if (typeof Supermercado.normalizeSettings === 'function') return Supermercado.normalizeSettings(settings);
+            const rawFee = Number(settings?.shippingFee ?? settings?.supermarketShippingFee ?? GLOBAL_SHIPPING_FEE);
+            return { shippingFee: Number.isFinite(rawFee) && rawFee >= 0 ? Number(rawFee.toFixed(2)) : GLOBAL_SHIPPING_FEE };
+        };
         const normalizeEmailSettings = (settings = {}) => ({
             senderEmail: String(settings?.senderEmail ?? '').trim(),
             appPassword: String(settings?.appPassword ?? '').trim(),
@@ -343,6 +351,13 @@
                     return normalizePaymentSettings();
                 }
             });
+            const [supermarketSettings, setSupermarketSettings] = useState(() => {
+                try {
+                    return normalizeSupermarketSettings(JSON.parse(localStorage.getItem(SUPERMARKET_SETTINGS_LOCAL_KEY) || '{}'));
+                } catch(e) {
+                    return normalizeSupermarketSettings();
+                }
+            });
             const [pendingTransfers, setPendingTransfers] = useState(() => readLocal('driveMxPendingTransfers'));
             const [completedSales, setCompletedSales] = useState([]);
             const [emailSaving, setEmailSaving] = useState(false);
@@ -395,7 +410,14 @@
             const publicProductsManager = ProductsCore.usePublicProducts({ fbase, appId, enabled: Boolean(fbUser) });
             const products = publicProductsManager.products;
             const adminProductsManager = AdminProductsUI.useAdminProductsManager({
-                fbase, appId, fbUser, sessionUser, publicProducts: publicProductsManager, adminEmail: ADMIN_EMAIL
+                fbase,
+                appId,
+                fbUser,
+                sessionUser,
+                publicProducts: publicProductsManager,
+                supermarketSettings,
+                setSupermarketSettings,
+                adminEmail: ADMIN_EMAIL
             });
             const controlProducts = adminProductsManager.controlProducts;
             const userProductsManager = UserProductsUI.useUserProductsManager({
@@ -408,11 +430,23 @@
                 wallets,
                 walletSettings,
                 Wallet,
+                supermarketShippingFee: supermarketSettings.shippingFee,
                 ensureAccountAllowed,
                 onSessionUserChange: authManager.setSessionUser
             });
             const currentUserProducts = userProductsManager.currentUserProducts;
             const currentUserSales = userProductsManager.currentUserSales;
+            const calculateShippingFee = useCallback((items = []) => {
+                const productsForShipping = Array.isArray(items) ? items.filter(Boolean) : [];
+                if (productsForShipping.length === 0) return 0;
+                if (typeof Supermercado.getCartShippingFee === 'function') {
+                    return Supermercado.getCartShippingFee(productsForShipping, {
+                        generalShippingFee: GLOBAL_SHIPPING_FEE,
+                        supermarketShippingFee: supermarketSettings.shippingFee
+                    });
+                }
+                return GLOBAL_SHIPPING_FEE;
+            }, [supermarketSettings.shippingFee]);
             const packagesManager = PackagesGuidesUI.usePackagesGuidesManager({
                 fbase,
                 appId,
@@ -728,6 +762,7 @@
                 const supportCol = fbase.collection(db, 'artifacts', appId, 'public', 'data', 'support_chats');
                 const mailSettingsRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'mail_settings', 'config');
                 const paymentSettingsRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'payment_settings', 'config');
+                const supermarketSettingsRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', SUPERMARKET_SETTINGS_COLLECTION, SUPERMARKET_SETTINGS_DOCUMENT);
 
                 setStaffUsersLoaded(false);
                 const unsubUsers = fbase.onSnapshot(userCol, (snapshot) => {
@@ -808,6 +843,13 @@
                     try { localStorage.setItem('driveMxPaymentSettings', JSON.stringify(next)); } catch(error) {}
                 }, (error) => console.error('Firestore configuración pagos:', error));
 
+                const unsubSupermarketSettings = fbase.onSnapshot(supermarketSettingsRef, (snapshot) => {
+                    if (!snapshot.exists()) return;
+                    const next = normalizeSupermarketSettings(snapshot.data() || {});
+                    setSupermarketSettings(next);
+                    try { localStorage.setItem(SUPERMARKET_SETTINGS_LOCAL_KEY, JSON.stringify(next)); } catch(error) {}
+                }, (error) => console.error('Firestore configuración de envío de Supermercado:', error));
+
                 return () => {
                     unsubUsers();
                     unsubTransfers();
@@ -815,6 +857,7 @@
                     unsubSupportChats();
                     unsubMailSettings();
                     unsubPaymentSettings();
+                    unsubSupermarketSettings();
                 };
             }, [fbUser, sessionUser?.role, sessionUser?.uid, sessionUser?.id]);
 
@@ -1186,7 +1229,7 @@
                 ? checkoutProductIds.map(id => hydrateCartProduct(cartItems.find(item => String(item.id) === String(id)) || findProductById(id))).filter(Boolean).slice(0, CART_MAX_ITEMS)
                 : (selectedCheckoutProduct ? [selectedCheckoutProduct] : []);
             const checkoutSubtotal = checkoutProducts.reduce((total, product) => total + getProductLineTotal(product, product.quantity), 0);
-            const checkoutShippingFee = checkoutProducts.length > 0 ? GLOBAL_SHIPPING_FEE : 0;
+            const checkoutShippingFee = calculateShippingFee(checkoutProducts);
             const checkoutTotal = checkoutSubtotal + checkoutShippingFee;
             const checkoutTotalQuantity = checkoutProducts.reduce((total, product) => total + Number(product.quantity || 0), 0);
             const checkoutProduct = checkoutProducts[0] || null;
@@ -1741,7 +1784,7 @@
                 }).filter(product => product.id && product.name && Number.isFinite(product.price) && Number(product.quantity || 0) > 0).slice(0, CART_MAX_ITEMS);
                 const primaryProduct = orderProducts[0] || {};
                 const orderSubtotal = Number(orderProducts.reduce((total, product) => total + finiteFirestoreNumber(product.lineTotal ?? product.totalPrice, 0), 0).toFixed(2));
-                const orderShippingFee = orderProducts.length > 0 ? finiteFirestoreNumber(GLOBAL_SHIPPING_FEE, 0) : 0;
+                const orderShippingFee = calculateShippingFee(orderProducts);
                 const orderTotal = Number((orderSubtotal + orderShippingFee).toFixed(2));
                 const orderTotalQuantity = orderProducts.reduce((total, product) => total + Math.max(1, Math.floor(finiteFirestoreNumber(product.quantity, 1))), 0);
                 return sanitizeFirestoreData({
@@ -1877,7 +1920,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         productPrice: Number(product.lineTotal || product.totalPrice || 0)
                     }));
                 const enrichedSubtotal = enrichedProducts.reduce((total, product) => total + Number(product.lineTotal || product.totalPrice || 0), 0);
-                const enrichedShippingFee = enrichedProducts.length > 0 ? GLOBAL_SHIPPING_FEE : 0;
+                const enrichedShippingFee = calculateShippingFee(enrichedProducts);
                 const enrichedTotal = enrichedSubtotal + enrichedShippingFee;
                 const enrichedQuantityTotal = enrichedProducts.reduce((total, product) => total + Number(product.quantity || 0), 0);
                 return {
@@ -2155,7 +2198,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             const registerCompletedSale = async ({ payload = {}, paymentMethod = '', saleId = '', transferId = '', soldAt = Date.now() }) => {
                 const payloadProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
                 const orderSubtotal = payloadProducts.reduce((total, product) => total + Number(product.lineTotal || product.totalPrice || product.productTotal || (Number(product.price || product.unitPrice || 0) * Number(product.quantity || 1)) || 0), 0);
-                const orderShippingFee = Number(payload.cart?.shippingFee ?? (payloadProducts.length > 0 ? GLOBAL_SHIPPING_FEE : 0));
+                const orderShippingFee = Number(payload.cart?.shippingFee ?? calculateShippingFee(payloadProducts));
                 const orderTotal = Number(payload.cart?.total ?? (orderSubtotal + orderShippingFee));
                 const orderQuantityTotal = payloadProducts.reduce((total, product) => total + Number(product.quantity || product.productQuantity || 1), 0);
                 const baseId = String(saleId || `sale_${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -3077,7 +3120,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         </div>
                                         <div className="grid md:grid-cols-2 gap-4">
                                             {[
-                                                ['transfer', 'Transferencia bancaria', 'Queda Pendiente hasta que el administrador confirme el pago. Gastos de envio 150 pesos.']
+                                                ['transfer', 'Transferencia bancaria', 'Queda Pendiente hasta que el administrador confirme el pago. El costo de envío se calcula según la categoría de los productos.']
                                             ].map(([value, title, desc]) => (
                                                 <label key={value} className={`border-2 rounded-2xl p-5 cursor-pointer hover:border-red-200 transition-all bg-white ${selectedPaymentMethod === value ? 'border-red-400' : 'border-slate-100'}`}>
                                                     <div className="flex items-start gap-3">
@@ -3333,7 +3376,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         ReactDOM.createRoot(document.getElementById('root')).render(<App />);
     </script>
 </body>
-</html>    
+</html>   
 
 
 
