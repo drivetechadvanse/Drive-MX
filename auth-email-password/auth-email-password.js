@@ -26,16 +26,20 @@
   };
 
   const findRegisteredUserProfile = (users = [], target = {}) => {
+    const list = Array.isArray(users) ? users : [];
     const targetId = getUserId(target);
     const targetEmail = getUserEmail(target);
-    return (Array.isArray(users) ? users : []).find((user) => {
-      const userId = getUserId(user);
-      const userEmail = getUserEmail(user);
-      return Boolean(
-        (targetId && userId && userId === targetId)
-        || (targetEmail && userEmail && userEmail === targetEmail)
-      );
-    }) || null;
+
+    // El UID de Authentication es la identidad principal. Solo se usa el
+    // correo como respaldo para documentos antiguos que todavía no tengan UID.
+    if (targetId) {
+      const exactIdMatch = list.find((user) => getUserId(user) === targetId);
+      if (exactIdMatch) return exactIdMatch;
+    }
+    if (targetEmail) {
+      return list.find((user) => getUserEmail(user) === targetEmail) || null;
+    }
+    return null;
   };
 
   const SECONDARY_AUTH_APP_NAME = 'DriveMxSecondaryAuthApp';
@@ -125,6 +129,66 @@
     return secondaryAuth;
   };
 
+
+  const provisionUserAccountProfile = async ({
+    firebaseUser,
+    email = '',
+    password = '',
+    name = '',
+    phone = ''
+  } = {}) => {
+    if (!firebaseUser || typeof firebaseUser.getIdToken !== 'function') {
+      const error = new Error('No existe una sesión autenticada para crear el perfil.');
+      error.code = 'profile/missing-authenticated-user';
+      throw error;
+    }
+    if (typeof global.fetch !== 'function') {
+      const error = new Error('El navegador no permite conectar con el servicio de usuarios.');
+      error.code = 'profile/fetch-unavailable';
+      throw error;
+    }
+
+    const token = await firebaseUser.getIdToken(true);
+    if (!token) {
+      const error = new Error('No se pudo validar la sesión de Firebase.');
+      error.code = 'profile/missing-id-token';
+      throw error;
+    }
+
+    const payload = {
+      email: normalizeEmail(email || firebaseUser.email || ''),
+      name: String(name || '').trim(),
+      phone: String(phone || '').trim()
+    };
+    if (password) payload.password = String(password);
+
+    let response;
+    try {
+      response = await global.fetch('/api/create-user', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (networkError) {
+      const error = new Error('No se pudo conectar con el servicio que crea los perfiles.');
+      error.code = 'profile/api-network-error';
+      error.cause = networkError;
+      throw error;
+    }
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.success || !data?.profile) {
+      const error = new Error(data?.error || 'No se pudo crear o reparar el perfil del usuario.');
+      error.code = data?.code || `profile/api-${response.status || 'error'}`;
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  };
+
   function useEmailPasswordAuth({
     fbase,
     appId,
@@ -144,6 +208,7 @@
     const [loginProcessing, setLoginProcessing] = useState(false);
     const sessionUserRef = useRef(null);
     const blockedAccountHandledRef = useRef(false);
+    const loginProfileGraceUntilRef = useRef(0);
 
     const setSessionUser = useCallback((nextValue) => {
       setSessionUserState((previous) => {
@@ -187,11 +252,12 @@
       const profileRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', usersCollection, firebaseUser.uid);
 
       let profileSnapshot = null;
+      let directProfileReadError = null;
       try {
         profileSnapshot = await fbase.getDoc(profileRef);
       } catch (error) {
-        if (!centralAdmin) throw error;
-        console.error('Leer perfil del administrador:', error);
+        directProfileReadError = error;
+        console.error('Leer perfil de acceso:', error);
       }
 
       if (centralAdmin) {
@@ -214,8 +280,6 @@
         try {
           await fbase.setDoc(profileRef, adminProfile, { merge: true });
         } catch (error) {
-          // La autenticación del administrador ya fue validada por Firebase Auth.
-          // No se bloquea su entrada al panel por un fallo temporal al leer/escribir su perfil.
           console.error('Restaurar perfil del administrador:', error);
         }
         return { id: firebaseUser.uid, ...adminProfile };
@@ -231,39 +295,89 @@
         };
       }
 
-      const localProfile = findRegisteredUserProfile(users, firebaseUser);
-      if (localProfile) {
-        return {
-          ...localProfile,
-          id: localProfile.id || localProfile.uid || firebaseUser.uid,
-          uid: firebaseUser.uid,
-          email: firebaseUser.email || localProfile.email || ''
-        };
-      }
+      let recoverySeed = findRegisteredUserProfile(users, firebaseUser) || null;
 
-      const usersRef = fbase.collection(db, 'artifacts', appId, 'public', 'data', usersCollection);
-      const queryCandidates = [
-        fbase.query(usersRef, fbase.where('emailNormalized', '==', normalizedEmail)),
-        fbase.query(usersRef, fbase.where('email', '==', normalizedEmail))
-      ];
+      if (!recoverySeed) {
+        const usersRef = fbase.collection(db, 'artifacts', appId, 'public', 'data', usersCollection);
+        const queryCandidates = [
+          fbase.query(usersRef, fbase.where('emailNormalized', '==', normalizedEmail)),
+          fbase.query(usersRef, fbase.where('email', '==', normalizedEmail))
+        ];
 
-      for (const profileQuery of queryCandidates) {
-        try {
-          const snapshot = await fbase.getDocs(profileQuery);
-          if (!snapshot.empty) {
-            const documentSnapshot = snapshot.docs[0];
-            return {
-              id: documentSnapshot.id,
-              ...documentSnapshot.data(),
-              uid: firebaseUser.uid,
-              email: firebaseUser.email || documentSnapshot.data()?.email || ''
-            };
+        for (const profileQuery of queryCandidates) {
+          try {
+            const snapshot = await fbase.getDocs(profileQuery);
+            if (!snapshot.empty) {
+              const documentSnapshot = snapshot.docs[0];
+              recoverySeed = {
+                id: documentSnapshot.id,
+                ...documentSnapshot.data()
+              };
+              break;
+            }
+          } catch (error) {
+            console.error('Buscar perfil de acceso por correo:', error);
           }
-        } catch (error) {
-          console.error('Buscar perfil de acceso por correo:', error);
         }
       }
-      return null;
+
+      const now = Date.now();
+      const recoveryName = String(
+        recoverySeed?.name
+        || firebaseUser.displayName
+        || normalizedEmail.split('@')[0]
+        || 'Usuario'
+      ).trim();
+      const recoveryPhone = String(recoverySeed?.phone || '').trim();
+
+      try {
+        const result = await provisionUserAccountProfile({
+          firebaseUser,
+          email: firebaseUser.email || normalizedEmail,
+          name: recoveryName,
+          phone: recoveryPhone
+        });
+        const repairedProfile = result.profile || {};
+        return {
+          ...repairedProfile,
+          id: firebaseUser.uid,
+          uid: firebaseUser.uid,
+          email: firebaseUser.email || repairedProfile.email || normalizedEmail
+        };
+      } catch (apiError) {
+        console.error('Reparar perfil mediante API:', apiError);
+
+        const blocked = recoverySeed?.blocked === true || recoverySeed?.isBlocked === true;
+        const fallbackProfile = {
+          ...(recoverySeed || {}),
+          uid: firebaseUser.uid,
+          email: firebaseUser.email || normalizedEmail,
+          emailNormalized: normalizedEmail,
+          name: recoveryName,
+          phone: recoveryPhone,
+          saleNotificationEmail: normalizeEmail(recoverySeed?.saleNotificationEmail || firebaseUser.email || normalizedEmail),
+          role: 'usuario',
+          active: recoverySeed?.active === false ? false : !blocked,
+          blocked,
+          accountStatus: recoverySeed?.accountStatus || (blocked ? 'Bloqueado' : 'Activo'),
+          assignmentsAuthorized: recoverySeed?.assignmentsAuthorized === true,
+          createdAt: recoverySeed?.createdAt || now,
+          updatedAt: now
+        };
+
+        try {
+          await fbase.setDoc(profileRef, fallbackProfile, { merge: true });
+          return { id: firebaseUser.uid, ...fallbackProfile };
+        } catch (clientWriteError) {
+          console.error('Reparar perfil directamente en Firestore:', clientWriteError);
+          const error = new Error('La cuenta existe en Authentication, pero no se pudo crear su perfil en Firestore.');
+          error.code = 'profile/recovery-failed';
+          error.apiError = apiError;
+          error.firestoreError = clientWriteError;
+          error.initialReadError = directProfileReadError;
+          throw error;
+        }
+      }
     }, [fbase, firebaseConfig, appId, usersCollection, users, adminEmail]);
 
     const restoreAnonymousSession = useCallback(async (auth) => {
@@ -284,16 +398,19 @@
       }
 
       setLoginProcessing(true);
+      let auth = null;
+      let authenticationSucceeded = false;
       try {
         const app = ensureDefaultFirebaseApp(fbase, firebaseConfig);
-        const auth = fbase.getAuth(app);
+        auth = fbase.getAuth(app);
         const credential = await fbase.signInWithEmailAndPassword(auth, email, password);
+        authenticationSucceeded = true;
         const profile = await getStaffProfile(credential.user);
 
         if (!profile) {
           await restoreAnonymousSession(auth);
-          setLoginForm({ email: '', p: '' });
-          alert('Tu cuenta no tiene acceso activo al panel.');
+          setLoginForm((previous) => ({ ...previous, p: '' }));
+          alert('La cuenta existe, pero no se pudo recuperar su perfil de acceso.');
           return;
         }
         if (profile.role !== 'admin' && isUserBlocked(profile)) {
@@ -304,13 +421,19 @@
         }
 
         blockedAccountHandledRef.current = false;
+        loginProfileGraceUntilRef.current = Date.now() + 10000;
         setSessionUser(profile);
         setLoginForm({ email: '', p: '' });
         onLogin(profile);
       } catch (error) {
         console.error('Inicio de sesión con correo y contraseña:', error);
         setLoginForm((previous) => ({ ...previous, p: '' }));
-        alert('Correo o contraseña incorrectos.');
+        if (authenticationSucceeded) {
+          if (auth) await restoreAnonymousSession(auth);
+          alert('La contraseña es correcta, pero no se pudo completar el perfil del usuario.');
+        } else {
+          alert('Correo o contraseña incorrectos.');
+        }
       } finally {
         setLoginProcessing(false);
       }
@@ -321,6 +444,7 @@
       const app = ensureDefaultFirebaseApp(fbase, firebaseConfig);
       const auth = fbase.getAuth(app);
       blockedAccountHandledRef.current = false;
+      loginProfileGraceUntilRef.current = 0;
       onLogoutStart();
       setSessionUser(null);
       setLoginForm({ email: '', p: '' });
@@ -333,6 +457,7 @@
       if (!sessionUser || sessionUser.role === 'admin') return;
       const profile = findRegisteredUserProfile(users, sessionUser);
       if (!profile) {
+        if (Date.now() < loginProfileGraceUntilRef.current) return;
         if (staffUsersLoaded) {
           if (!blockedAccountHandledRef.current) {
             blockedAccountHandledRef.current = true;
@@ -353,6 +478,7 @@
       }
 
       blockedAccountHandledRef.current = false;
+      loginProfileGraceUntilRef.current = 0;
       const mergedProfile = {
         ...(sessionUser || {}),
         ...profile,
@@ -467,9 +593,9 @@
       findRegisteredUserProfile,
       ensureDefaultFirebaseApp,
       getPrimaryAuth,
-      getSecondaryAuth
+      getSecondaryAuth,
+      provisionUserAccountProfile
     }
   };
 })(window);
-
 
