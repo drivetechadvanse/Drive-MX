@@ -44,11 +44,37 @@
     return global.driveMxFirebaseApp;
   };
 
-  const getSecondaryAuth = ({ fbase, firebaseConfig }) => {
-    if (!global.driveMxSecondaryAuthApp) {
-      global.driveMxSecondaryAuthApp = fbase.initializeApp(firebaseConfig, 'DriveMxSecondaryAuthApp');
+  const SECONDARY_AUTH_APP_NAME = 'DriveMxSecondaryAuthApp';
+
+  const getSecondaryAuth = ({ fbase, firebaseConfig } = {}) => {
+    if (!fbase || typeof fbase.initializeApp !== 'function' || typeof fbase.getAuth !== 'function') {
+      const error = new Error('Firebase Authentication no está disponible para crear usuarios.');
+      error.code = 'auth/firebase-sdk-unavailable';
+      throw error;
     }
-    return fbase.getAuth(global.driveMxSecondaryAuthApp);
+    if (!firebaseConfig || typeof firebaseConfig !== 'object') {
+      const error = new Error('La configuración de Firebase no está disponible.');
+      error.code = 'auth/firebase-config-unavailable';
+      throw error;
+    }
+    if (global.driveMxSecondaryAuth) return global.driveMxSecondaryAuth;
+
+    let secondaryApp = global.driveMxSecondaryAuthApp || null;
+    if (!secondaryApp) {
+      try {
+        secondaryApp = fbase.initializeApp(firebaseConfig, SECONDARY_AUTH_APP_NAME);
+      } catch(error) {
+        if (error?.code === 'app/duplicate-app' && typeof fbase.getApp === 'function') {
+          secondaryApp = fbase.getApp(SECONDARY_AUTH_APP_NAME);
+        } else {
+          throw error;
+        }
+      }
+      global.driveMxSecondaryAuthApp = secondaryApp;
+    }
+
+    global.driveMxSecondaryAuth = fbase.getAuth(secondaryApp);
+    return global.driveMxSecondaryAuth;
   };
 
   function useEmailPasswordAuth({
@@ -374,3 +400,4 @@
     }
   };
 })(window);
+
