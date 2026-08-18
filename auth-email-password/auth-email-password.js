@@ -38,17 +38,11 @@
     }) || null;
   };
 
-  const ensureDefaultFirebaseApp = (fbase, firebaseConfig) => {
-    if (global.driveMxFirebaseApp) return global.driveMxFirebaseApp;
-    global.driveMxFirebaseApp = fbase.initializeApp(firebaseConfig);
-    return global.driveMxFirebaseApp;
-  };
-
   const SECONDARY_AUTH_APP_NAME = 'DriveMxSecondaryAuthApp';
 
-  const getSecondaryAuth = ({ fbase, firebaseConfig } = {}) => {
+  const requireFirebaseAuthSdk = (fbase, firebaseConfig) => {
     if (!fbase || typeof fbase.initializeApp !== 'function' || typeof fbase.getAuth !== 'function') {
-      const error = new Error('Firebase Authentication no está disponible para crear usuarios.');
+      const error = new Error('Firebase Authentication no está disponible.');
       error.code = 'auth/firebase-sdk-unavailable';
       throw error;
     }
@@ -57,24 +51,78 @@
       error.code = 'auth/firebase-config-unavailable';
       throw error;
     }
-    if (global.driveMxSecondaryAuth) return global.driveMxSecondaryAuth;
+  };
 
-    let secondaryApp = global.driveMxSecondaryAuthApp || null;
-    if (!secondaryApp) {
-      try {
-        secondaryApp = fbase.initializeApp(firebaseConfig, SECONDARY_AUTH_APP_NAME);
-      } catch(error) {
-        if (error?.code === 'app/duplicate-app' && typeof fbase.getApp === 'function') {
-          secondaryApp = fbase.getApp(SECONDARY_AUTH_APP_NAME);
-        } else {
-          throw error;
+  const findExistingFirebaseApp = (fbase, name) => {
+    if (!fbase || typeof fbase.getApp !== 'function') return null;
+    try {
+      return name ? fbase.getApp(name) : fbase.getApp();
+    } catch (error) {
+      return null;
+    }
+  };
+
+  const ensureDefaultFirebaseApp = (fbase, firebaseConfig) => {
+    requireFirebaseAuthSdk(fbase, firebaseConfig);
+
+    const cachedApp = global.driveMxFirebaseApp;
+    if (cachedApp && (!cachedApp.name || cachedApp.name === '[DEFAULT]')) return cachedApp;
+
+    const existingApp = findExistingFirebaseApp(fbase);
+    if (existingApp) {
+      global.driveMxFirebaseApp = existingApp;
+      return existingApp;
+    }
+
+    try {
+      global.driveMxFirebaseApp = fbase.initializeApp(firebaseConfig);
+    } catch (error) {
+      if (error?.code === 'app/duplicate-app') {
+        const recoveredApp = findExistingFirebaseApp(fbase);
+        if (recoveredApp) global.driveMxFirebaseApp = recoveredApp;
+        else throw error;
+      } else {
+        throw error;
+      }
+    }
+    return global.driveMxFirebaseApp;
+  };
+
+  const getPrimaryAuth = ({ fbase, firebaseConfig } = {}) => {
+    const app = ensureDefaultFirebaseApp(fbase, firebaseConfig);
+    return fbase.getAuth(app);
+  };
+
+  const getSecondaryAuth = ({ fbase, firebaseConfig } = {}) => {
+    requireFirebaseAuthSdk(fbase, firebaseConfig);
+
+    let secondaryApp = global.driveMxSecondaryAuthApp;
+    if (!secondaryApp || secondaryApp.name !== SECONDARY_AUTH_APP_NAME) {
+      secondaryApp = findExistingFirebaseApp(fbase, SECONDARY_AUTH_APP_NAME);
+      if (!secondaryApp) {
+        try {
+          secondaryApp = fbase.initializeApp(firebaseConfig, SECONDARY_AUTH_APP_NAME);
+        } catch (error) {
+          if (error?.code === 'app/duplicate-app') {
+            secondaryApp = findExistingFirebaseApp(fbase, SECONDARY_AUTH_APP_NAME);
+          }
+          if (!secondaryApp) throw error;
         }
       }
       global.driveMxSecondaryAuthApp = secondaryApp;
+      global.driveMxSecondaryAuth = null;
     }
 
-    global.driveMxSecondaryAuth = fbase.getAuth(secondaryApp);
-    return global.driveMxSecondaryAuth;
+    const secondaryAuth = global.driveMxSecondaryAuth || fbase.getAuth(secondaryApp);
+    const primaryAuth = getPrimaryAuth({ fbase, firebaseConfig });
+    if (!secondaryAuth || secondaryAuth === primaryAuth || secondaryAuth?.app?.name !== SECONDARY_AUTH_APP_NAME) {
+      const error = new Error('No se pudo aislar la sesión usada para crear el usuario.');
+      error.code = 'auth/secondary-session-not-isolated';
+      throw error;
+    }
+
+    global.driveMxSecondaryAuth = secondaryAuth;
+    return secondaryAuth;
   };
 
   function useEmailPasswordAuth({
@@ -131,11 +179,49 @@
 
     const getStaffProfile = useCallback(async (firebaseUser) => {
       if (!firebaseUser?.uid) return null;
-      const db = fbase.getFirestore();
+
+      const app = ensureDefaultFirebaseApp(fbase, firebaseConfig);
+      const db = fbase.getFirestore(app);
       const normalizedEmail = getUserEmail(firebaseUser);
+      const centralAdmin = normalizedEmail === normalizeEmail(adminEmail);
       const profileRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', usersCollection, firebaseUser.uid);
-      const profileSnapshot = await fbase.getDoc(profileRef);
-      if (profileSnapshot.exists()) {
+
+      let profileSnapshot = null;
+      try {
+        profileSnapshot = await fbase.getDoc(profileRef);
+      } catch (error) {
+        if (!centralAdmin) throw error;
+        console.error('Leer perfil del administrador:', error);
+      }
+
+      if (centralAdmin) {
+        const storedProfile = profileSnapshot?.exists?.() ? (profileSnapshot.data() || {}) : {};
+        const now = Date.now();
+        const adminProfile = {
+          ...storedProfile,
+          uid: firebaseUser.uid,
+          email: firebaseUser.email || adminEmail,
+          emailNormalized: normalizedEmail,
+          name: storedProfile.name || 'Admin Central',
+          role: 'admin',
+          active: true,
+          blocked: false,
+          accountStatus: 'Activo',
+          createdAt: storedProfile.createdAt || now,
+          updatedAt: now
+        };
+
+        try {
+          await fbase.setDoc(profileRef, adminProfile, { merge: true });
+        } catch (error) {
+          // La autenticación del administrador ya fue validada por Firebase Auth.
+          // No se bloquea su entrada al panel por un fallo temporal al leer/escribir su perfil.
+          console.error('Restaurar perfil del administrador:', error);
+        }
+        return { id: firebaseUser.uid, ...adminProfile };
+      }
+
+      if (profileSnapshot?.exists?.()) {
         const storedProfile = profileSnapshot.data() || {};
         return {
           ...storedProfile,
@@ -143,23 +229,6 @@
           uid: firebaseUser.uid,
           email: firebaseUser.email || storedProfile.email || ''
         };
-      }
-
-      if (normalizedEmail === normalizeEmail(adminEmail)) {
-        const now = Date.now();
-        const adminProfile = {
-          uid: firebaseUser.uid,
-          email: firebaseUser.email || adminEmail,
-          emailNormalized: normalizedEmail,
-          name: 'Admin Central',
-          role: 'admin',
-          active: true,
-          blocked: false,
-          createdAt: now,
-          updatedAt: now
-        };
-        await fbase.setDoc(profileRef, adminProfile, { merge: true });
-        return { id: firebaseUser.uid, ...adminProfile };
       }
 
       const localProfile = findRegisteredUserProfile(users, firebaseUser);
@@ -195,7 +264,7 @@
         }
       }
       return null;
-    }, [fbase, appId, usersCollection, users, adminEmail]);
+    }, [fbase, firebaseConfig, appId, usersCollection, users, adminEmail]);
 
     const restoreAnonymousSession = useCallback(async (auth) => {
       try { await fbase.signOut(auth); } catch (error) {}
@@ -396,8 +465,11 @@
       getUserEmail,
       isUserBlocked,
       findRegisteredUserProfile,
+      ensureDefaultFirebaseApp,
+      getPrimaryAuth,
       getSecondaryAuth
     }
   };
 })(window);
+
 
