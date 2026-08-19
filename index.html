@@ -99,6 +99,7 @@
         const HomeProducts = window.DriveMxHomeProducts || {};
         const ProductDetails = window.DriveMxProductDetails || {};
         const Supermercado = window.DriveMxSupermercado || window.DriveMxSupermercadoCore || {};
+        const CostoEnvio = window.DriveMxCostoEnvio || {};
         const NewShipmentUI = window.DriveMxNewShipment || {};
         const GuideAssignmentUI = window.DriveMxGuideAssignment || {};
         const ConductoresUI = window.DriveMxConductores || {};
@@ -142,10 +143,11 @@
         const PRODUCT_SIZE_OPTIONS = ProductsCore.PRODUCT_SIZE_OPTIONS;
         const PAYMENT_BANK_AZTECA_ORDER_TEXT = 'Pagar solo con Banco Azteca, el nombre del titular de la cuenta debe de coincidir con el nombre registrado en el pedido para que la tranferencia sea aprobada';
         const GLOBAL_SHIPPING_FEE = 150;
-        const SUPERMARKET_SETTINGS_COLLECTION = Supermercado.SETTINGS_COLLECTION || 'supermarket_settings';
-        const SUPERMARKET_SETTINGS_DOCUMENT = Supermercado.SETTINGS_DOCUMENT || 'config';
-        const SUPERMARKET_SETTINGS_LOCAL_KEY = Supermercado.SETTINGS_LOCAL_KEY || 'driveMxSupermarketSettings';
+        const SUPERMARKET_SETTINGS_COLLECTION = CostoEnvio.SETTINGS_COLLECTION || Supermercado.SETTINGS_COLLECTION || 'supermarket_settings';
+        const SUPERMARKET_SETTINGS_DOCUMENT = CostoEnvio.SETTINGS_DOCUMENT || Supermercado.SETTINGS_DOCUMENT || 'config';
+        const SUPERMARKET_SETTINGS_LOCAL_KEY = CostoEnvio.SETTINGS_LOCAL_KEY || Supermercado.SETTINGS_LOCAL_KEY || 'driveMxSupermarketSettings';
         const normalizeSupermarketSettings = (settings = {}) => {
+            if (typeof CostoEnvio.normalizeSettings === 'function') return CostoEnvio.normalizeSettings(settings);
             if (typeof Supermercado.normalizeSettings === 'function') return Supermercado.normalizeSettings(settings);
             const rawFee = Number(settings?.shippingFee ?? settings?.supermarketShippingFee ?? GLOBAL_SHIPPING_FEE);
             return { shippingFee: Number.isFinite(rawFee) && rawFee >= 0 ? Number(rawFee.toFixed(2)) : GLOBAL_SHIPPING_FEE };
@@ -217,11 +219,23 @@
         const clampProductQuantity = (quantity = 1, product = {}) => ProductDetails.clampQuantity ? ProductDetails.clampQuantity(quantity, product) : Math.min(Math.max(1, Math.floor(Number(quantity || 1))), getProductStock(product));
         const getProductUnitPrice = (product = {}) => ProductDetails.getProductUnitPrice ? ProductDetails.getProductUnitPrice(product) : Number(product?.unitPrice ?? product?.price ?? 0);
         const getProductLineTotal = (product = {}, quantity = product?.quantity || 1) => ProductDetails.getProductLineTotal ? ProductDetails.getProductLineTotal(product, quantity) : Number((getProductUnitPrice(product) * Math.max(1, Math.floor(Number(quantity || 1)))).toFixed(2));
+        const copyProductCommerceFields = (target = {}, source = {}) => {
+            const categorized = typeof Supermercado.copyCategory === 'function'
+                ? Supermercado.copyCategory(target, source)
+                : { ...target, category: source?.category || source?.productCategory || source?.categoria || '' };
+            return typeof CostoEnvio.copyProductShipping === 'function'
+                ? CostoEnvio.copyProductShipping(categorized, source)
+                : categorized;
+        };
+        const formatCheckoutShippingFee = (value = 0) => {
+            const normalized = Number(value || 0);
+            return normalized === 0 ? '$0' : `$${normalized.toFixed(2)}`;
+        };
         const normalizeCartItems = (items = []) => Array.isArray(items) ? items.filter(Boolean).slice(0, CART_MAX_ITEMS).map(item => {
             const quantity = Math.max(1, Math.floor(Number(item.quantity || item.selectedQuantity || item.productQuantity || 1)) || 1);
             const unitPrice = Number(item.unitPrice ?? item.productUnitPrice ?? item.price ?? 0);
             const lineTotal = Number((unitPrice * quantity).toFixed(2));
-            return Supermercado.copyCategory({
+            return copyProductCommerceFields({
                 id: String(item.id || '').trim(),
                 name: String(item.name || '').trim(),
                 price: unitPrice,
@@ -440,6 +454,12 @@
             const calculateShippingFee = useCallback((items = []) => {
                 const productsForShipping = Array.isArray(items) ? items.filter(Boolean) : [];
                 if (productsForShipping.length === 0) return 0;
+                if (typeof CostoEnvio.getCartShippingFee === 'function') {
+                    return CostoEnvio.getCartShippingFee(productsForShipping, {
+                        generalShippingFee: GLOBAL_SHIPPING_FEE,
+                        supermarketShippingFee: supermarketSettings.shippingFee
+                    });
+                }
                 if (typeof Supermercado.getCartShippingFee === 'function') {
                     return Supermercado.getCartShippingFee(productsForShipping, {
                         generalShippingFee: GLOBAL_SHIPPING_FEE,
@@ -448,10 +468,6 @@
                 }
                 return GLOBAL_SHIPPING_FEE;
             }, [supermarketSettings.shippingFee]);
-            const formatCheckoutShippingFee = (value = 0) => {
-                const amount = Number(value || 0);
-                return amount === 0 ? '$0' : `$${amount.toFixed(2)}`;
-            };
             const packagesManager = PackagesGuidesUI.usePackagesGuidesManager({
                 fbase,
                 appId,
@@ -1324,7 +1340,7 @@
                 const selectedQuantity = clampProductQuantity(quantity, product);
                 const unitPrice = getProductUnitPrice(product);
                 const lineTotal = Number((unitPrice * selectedQuantity).toFixed(2));
-                return Supermercado.copyCategory({
+                return copyProductCommerceFields({
                     id: product.id || '',
                     name: product.name || '',
                     price: unitPrice,
@@ -1882,7 +1898,7 @@
                     const quantity = Math.max(1, requestedQuantity || 1);
                     const unitPrice = Math.max(0, finiteFirestoreNumber(getProductUnitPrice(product || {}), 0));
                     const lineTotal = Number((unitPrice * quantity).toFixed(2));
-                    return Supermercado.copyCategory({
+                    return copyProductCommerceFields({
                         id: cleanFirestoreText(product?.id, 180),
                         name: cleanFirestoreText(product?.name, 180),
                         price: unitPrice,
@@ -1997,7 +2013,7 @@
                     const requestedQuantity = Number(payloadProduct.quantity || payloadProduct.productQuantity || 1);
                     const quantity = Math.max(1, Math.floor(requestedQuantity) || 1);
                     const lineTotal = Number((unitPrice * quantity).toFixed(2));
-                    return Supermercado.copyCategory({
+                    return copyProductCommerceFields({
                         ...payloadProduct,
                         id: payloadProduct.id || sourceProduct.id || '',
                         name: payloadProduct.name || sourceProduct.name || '',
