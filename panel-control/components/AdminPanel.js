@@ -16,8 +16,8 @@ export function AdminPanel(props = {}) {
   const WalletUI = props.WalletUI || globalThis.DriveMxWalletUI || {};
   const UsersUI = props.UsersUI || globalThis.DriveMxUsersUI || {};
   const AdsManager = props.AdsManager || globalThis.DriveMxAdsManager || {};
-  const CostoEnvio = globalThis.DriveMxCostoEnvio || {};
   const AdminAdsPanel = props.AdminAdsPanel || AdsManager.AdminAdsPanel;
+  const CostoEnvio = globalThis.DriveMxCostoEnvio || {};
 
   return h('div', { className: 'w-full max-w-5xl space-y-8 animate-slide drive-mx-panel-control' },
     h(AdminHeader, {
@@ -99,26 +99,7 @@ export function AdminPanel(props = {}) {
         }) : null,
         h(ProductsAdminPanel, {
           manager: props.adminProductsManager,
-          Icons: props.Icons,
-          editingProductId: props.editingProductId,
-          resetProductForm: props.resetProductForm,
-          handleProductSubmit: props.handleProductSubmit,
-          handleProductImagesSelect: props.handleProductImagesSelect,
-          productForm: props.productForm,
-          setProductForm: props.setProductForm,
-          productImageFiles: props.productImageFiles,
-          replaceExistingProductImage: props.replaceExistingProductImage,
-          removeExistingProductImage: props.removeExistingProductImage,
-          removeNewProductImage: props.removeNewProductImage,
-          PRODUCT_SIZE_OPTIONS: props.PRODUCT_SIZE_OPTIONS,
-          normalizeProductSizes: props.normalizeProductSizes,
-          normalizeProductColors: props.normalizeProductColors,
-          productUploading: props.productUploading,
-          controlProducts: props.controlProducts,
-          getProductGallery: props.getProductGallery,
-          editProduct: props.editProduct,
-          toggleProduct: props.toggleProduct,
-          deleteProduct: props.deleteProduct
+          Icons: props.Icons
         }),
         CostoEnvio.AdminShippingCostPanel ? h(CostoEnvio.AdminShippingCostPanel, {
           manager: props.adminProductsManager
