@@ -417,6 +417,9 @@
       if (typeof CostoEnvio.applyShippingToProduct !== 'function') {
         throw new Error('No se encontró el módulo Costo de envío.');
       }
+      if (!fbase || typeof fbase.runTransaction !== 'function') {
+        throw new Error('Firebase runTransaction no está disponible para guardar el costo de envío de forma segura.');
+      }
 
       const updatedAt = Date.now();
       const updatedProduct = CostoEnvio.applyShippingToProduct({
@@ -431,6 +434,7 @@
         defaultCost: defaultSupermarketShippingCost,
         requireAccepted: true
       });
+
       const shippingModeField = CostoEnvio.SHIPPING_MODE_FIELD || 'supermarketShippingMode';
       const shippingCostField = CostoEnvio.SHIPPING_COST_FIELD || 'supermarketShippingCost';
       const shippingPatch = {
@@ -446,37 +450,56 @@
         'artifacts', appId, 'public', 'data',
         Core.PUBLIC_PRODUCTS_COLLECTION, normalized.id
       );
-      await fbase.setDoc(publicProductRef, shippingPatch, { merge: true });
-      publicProducts.patchLocal(normalized.id, shippingPatch);
 
-      if (Core.isControlPanelProduct(updatedProduct)) {
-        try {
-          const adminProductRef = fbase.doc(
-            db,
-            'artifacts', appId, 'public', 'data',
-            Core.ADMIN_PRODUCTS_COLLECTION, normalized.id
-          );
-          await fbase.setDoc(adminProductRef, shippingPatch, { merge: true });
-          patchInventoryLocal(normalized.id, shippingPatch);
-        } catch (error) {
-          console.error('Guardar espejo de costo de envío del producto del Panel de Control:', error);
-        }
-      } else if (Core.isUserPanelPublication(updatedProduct)) {
+      const isUserPublication = Core.isUserPanelPublication(updatedProduct);
+      let mirrorProductRef;
+      if (isUserPublication) {
         const ownerDocId = Core.safeDocumentId(Core.getProductOwnerId(updatedProduct));
-        if (ownerDocId) {
-          try {
-            const userProductRef = fbase.doc(
-              db,
-              'artifacts', appId, 'public', 'data',
-              Core.USER_PRODUCTS_COLLECTION, ownerDocId, 'items', updatedProduct.id
-            );
-            await fbase.setDoc(userProductRef, shippingPatch, { merge: true });
-          } catch (error) {
-            console.error('Guardar espejo de costo de envío del producto de usuario:', error);
-          }
+        if (!ownerDocId) {
+          throw new Error('No se encontró el usuario propietario del producto.');
         }
+        mirrorProductRef = fbase.doc(
+          db,
+          'artifacts', appId, 'public', 'data',
+          Core.USER_PRODUCTS_COLLECTION, ownerDocId, 'items', updatedProduct.id
+        );
+      } else {
+        mirrorProductRef = fbase.doc(
+          db,
+          'artifacts', appId, 'public', 'data',
+          Core.ADMIN_PRODUCTS_COLLECTION, updatedProduct.id
+        );
       }
 
+      await fbase.runTransaction(db, async (transaction) => {
+        // Todas las lecturas se realizan antes de escribir para conservar de
+        // forma atómica el documento público y su espejo correspondiente.
+        const publicSnapshot = await transaction.get(publicProductRef);
+        const mirrorSnapshot = await transaction.get(mirrorProductRef);
+        const publicBase = publicSnapshot.exists()
+          ? Core.ensureProductId(publicSnapshot.data() || {}, normalized.id)
+          : normalized;
+        const completeProduct = {
+          ...publicBase,
+          ...shippingPatch,
+          id: normalized.id
+        };
+
+        if (publicSnapshot.exists()) {
+          transaction.set(publicProductRef, shippingPatch, { merge: true });
+        } else {
+          transaction.set(publicProductRef, completeProduct);
+        }
+
+        if (mirrorSnapshot.exists()) {
+          transaction.set(mirrorProductRef, shippingPatch, { merge: true });
+        } else {
+          transaction.set(mirrorProductRef, completeProduct);
+        }
+      });
+
+      publicProducts.patchLocal(normalized.id, shippingPatch);
+      if (!isUserPublication) patchInventoryLocal(normalized.id, shippingPatch);
       return { ...normalized, ...shippingPatch };
     }, [sessionUser, adminEmail, defaultSupermarketShippingCost, publicProducts, patchInventoryLocal, fbase, appId]);
 
@@ -677,3 +700,4 @@
     AdminProductsPanel
   };
 })(window);
+
