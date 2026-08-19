@@ -16,6 +16,7 @@ export function AdminPanel(props = {}) {
   const WalletUI = props.WalletUI || globalThis.DriveMxWalletUI || {};
   const UsersUI = props.UsersUI || globalThis.DriveMxUsersUI || {};
   const AdsManager = props.AdsManager || globalThis.DriveMxAdsManager || {};
+  const CostoEnvio = globalThis.DriveMxCostoEnvio || {};
   const AdminAdsPanel = props.AdminAdsPanel || AdsManager.AdminAdsPanel;
 
   return h('div', { className: 'w-full max-w-5xl space-y-8 animate-slide drive-mx-panel-control' },
@@ -97,6 +98,7 @@ export function AdminPanel(props = {}) {
           currentUser: props.sessionUser
         }) : null,
         h(ProductsAdminPanel, {
+          manager: props.adminProductsManager,
           Icons: props.Icons,
           editingProductId: props.editingProductId,
           resetProductForm: props.resetProductForm,
@@ -118,6 +120,9 @@ export function AdminPanel(props = {}) {
           toggleProduct: props.toggleProduct,
           deleteProduct: props.deleteProduct
         }),
+        CostoEnvio.AdminShippingCostPanel ? h(CostoEnvio.AdminShippingCostPanel, {
+          manager: props.adminProductsManager
+        }) : null,
         UsersUI.RegisteredUsersPanel ? h(UsersUI.RegisteredUsersPanel, {
           users: props.users,
           page: props.registeredUsersPage,
