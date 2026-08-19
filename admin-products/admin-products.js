@@ -28,12 +28,18 @@
     try { global.URL.revokeObjectURL(item.preview); } catch (error) {}
   };
 
-  const createFormState = (overrides = {}) => {
+  const createFormState = (overrides = {}, options = {}) => {
     const Supermercado = global.DriveMxSupermercado || global.DriveMxSupermercadoCore || {};
-    if (typeof Supermercado.createProductFormState === 'function') {
-      return Supermercado.createProductFormState({ ...EMPTY_FORM, ...overrides }, overrides);
+    const CostoEnvio = global.DriveMxCostoEnvio || {};
+    const categoryForm = typeof Supermercado.createProductFormState === 'function'
+      ? Supermercado.createProductFormState({ ...EMPTY_FORM, ...overrides }, overrides)
+      : { ...EMPTY_FORM, ...overrides };
+    if (typeof CostoEnvio.createProductFormState === 'function') {
+      return CostoEnvio.createProductFormState(categoryForm, overrides, {
+        defaultCost: options.defaultShippingCost
+      });
     }
-    return { ...EMPTY_FORM, ...overrides };
+    return categoryForm;
   };
 
   function useAdminProductsManager({
@@ -42,13 +48,20 @@
     fbUser,
     sessionUser,
     publicProducts,
+    supermarketSettings = {},
     adminEmail = 'admin@drivemx.com'
   } = {}) {
     const [adminProducts, setAdminProducts] = useState(() => {
       const cached = Core.readLocal(Core.ADMIN_PRODUCTS_LOCAL_KEY, []);
       return Array.isArray(cached) ? Core.sortProducts(cached.map((item) => Core.ensureProductId(item)).filter((item) => item.id)) : [];
     });
-    const [productForm, setProductForm] = useState(() => createFormState());
+    const configuredSupermarketShippingCost = Number(supermarketSettings?.shippingFee);
+    const defaultSupermarketShippingCost = Number.isFinite(configuredSupermarketShippingCost) && configuredSupermarketShippingCost >= 0
+      ? configuredSupermarketShippingCost
+      : 150;
+    const [productForm, setProductForm] = useState(() => createFormState({}, {
+      defaultShippingCost: defaultSupermarketShippingCost
+    }));
     const [productImageFiles, setProductImageFiles] = useState([]);
     const [productUploading, setProductUploading] = useState(false);
     const [editingProductId, setEditingProductId] = useState(null);
@@ -108,15 +121,19 @@
       return Core.sortProducts(Array.from(byId.values()));
     }, [adminProducts, publicList]);
 
+    const allProducts = useMemo(() => Core.sortProducts(publicList), [publicList]);
+
     const resetProductForm = useCallback(() => {
-      setProductForm(createFormState());
+      setProductForm(createFormState({}, {
+        defaultShippingCost: defaultSupermarketShippingCost
+      }));
       setProductImageFiles((previous) => {
         previous.forEach(revokePreview);
         return [];
       });
       setProductUploading(false);
       setEditingProductId(null);
-    }, []);
+    }, [defaultSupermarketShippingCost]);
 
     const uploadSingleProductImage = useCallback(async (productId, file) => {
       if (!file || !String(file.type || '').startsWith('image/')) throw new Error('Selecciona un archivo de imagen válido.');
@@ -224,6 +241,17 @@
         alert('Ingresa el nombre del producto.');
         return;
       }
+      const CostoEnvio = global.DriveMxCostoEnvio || {};
+      if (typeof CostoEnvio.validateProductShipping === 'function') {
+        const shippingValidation = CostoEnvio.validateProductShipping(productForm, {
+          defaultCost: defaultSupermarketShippingCost,
+          requireAccepted: true
+        });
+        if (!shippingValidation.ok) {
+          alert(shippingValidation.message);
+          return;
+        }
+      }
       setProductUploading(true);
       try {
         const Supermercado = global.DriveMxSupermercado || global.DriveMxSupermercadoCore || {};
@@ -260,9 +288,15 @@
           createdAt: existing?.createdAt || Date.now(),
           createdBy: existing?.createdBy || sessionUser?.email || adminEmail
         };
-        const product = typeof Supermercado.applyCategoryToProduct === 'function'
+        const categorizedProduct = typeof Supermercado.applyCategoryToProduct === 'function'
           ? Supermercado.applyCategoryToProduct(baseProduct, productForm)
           : baseProduct;
+        const product = typeof CostoEnvio.applyShippingToProduct === 'function'
+          ? CostoEnvio.applyShippingToProduct(categorizedProduct, productForm, {
+              defaultCost: defaultSupermarketShippingCost,
+              requireAccepted: true
+            })
+          : categorizedProduct;
         // El documento público es la fuente principal. El espejo del panel se
         // conserva como respaldo, pero un fallo aislado del espejo no duplica
         // publicaciones ni deja el formulario reportando un falso error.
@@ -274,7 +308,7 @@
         alert('No se pudo guardar el producto. Intenta nuevamente.');
         setProductUploading(false);
       }
-    }, [sessionUser, editingProductId, productForm, controlProducts, uploadPendingProductImages, adminEmail, saveAdminMirror, publicProducts, resetProductForm]);
+    }, [sessionUser, editingProductId, productForm, controlProducts, uploadPendingProductImages, adminEmail, saveAdminMirror, publicProducts, resetProductForm, defaultSupermarketShippingCost]);
 
     const editProduct = useCallback((product) => {
       if (!Core.isControlPanelProduct(product)) {
@@ -283,6 +317,10 @@
       }
       const images = Core.getProductGallery(product);
       const colors = Core.normalizeProductColors(product.colors || product.colores);
+      const CostoEnvio = global.DriveMxCostoEnvio || {};
+      const shippingFields = typeof CostoEnvio.copyProductShipping === 'function'
+        ? CostoEnvio.copyProductShipping({}, product)
+        : {};
       setProductForm(createFormState({
         id: product.id,
         name: product.name || '',
@@ -296,14 +334,17 @@
         image: images[0] || '',
         imageUrl: images[0] || '',
         active: product.active !== false,
-        category: product.category || product.productCategory || ''
+        category: product.category || product.productCategory || product.categoria || product.product_category || '',
+        ...shippingFields
+      }, {
+        defaultShippingCost: defaultSupermarketShippingCost
       }));
       setProductImageFiles((previous) => {
         previous.forEach(revokePreview);
         return [];
       });
       setEditingProductId(product.id);
-    }, []);
+    }, [defaultSupermarketShippingCost]);
 
     const toggleProduct = useCallback(async (product) => {
       if (!Core.isControlPanelProduct(product)) {
@@ -362,9 +403,89 @@
       }
     }, [adminProducts, publicList, replaceAdminProducts, publicProducts, fbase, appId, editingProductId, resetProductForm, upsertAdminLocal]);
 
+    const saveProductShippingConfiguration = useCallback(async (product = {}, shippingSource = {}) => {
+      if (sessionUser?.role !== 'admin') throw new Error('Solo el administrador puede configurar el costo de envío.');
+      const normalized = Core.ensureProductId(product);
+      if (!normalized.id) throw new Error('El producto no tiene un ID válido.');
+
+      const Supermercado = global.DriveMxSupermercado || global.DriveMxSupermercadoCore || {};
+      if (typeof Supermercado.isSupermarketProduct === 'function' && !Supermercado.isSupermarketProduct(normalized)) {
+        throw new Error('La configuración de costo de envío solo aplica a productos de Supermercado.');
+      }
+
+      const CostoEnvio = global.DriveMxCostoEnvio || {};
+      if (typeof CostoEnvio.applyShippingToProduct !== 'function') {
+        throw new Error('No se encontró el módulo Costo de envío.');
+      }
+
+      const updatedAt = Date.now();
+      const updatedProduct = CostoEnvio.applyShippingToProduct({
+        ...normalized,
+        updatedAt,
+        updatedBy: sessionUser?.email || adminEmail
+      }, {
+        ...normalized,
+        ...shippingSource,
+        category: normalized.category || normalized.productCategory || normalized.categoria || ''
+      }, {
+        defaultCost: defaultSupermarketShippingCost,
+        requireAccepted: true
+      });
+      const shippingModeField = CostoEnvio.SHIPPING_MODE_FIELD || 'supermarketShippingMode';
+      const shippingCostField = CostoEnvio.SHIPPING_COST_FIELD || 'supermarketShippingCost';
+      const shippingPatch = {
+        [shippingModeField]: updatedProduct[shippingModeField],
+        [shippingCostField]: updatedProduct[shippingCostField],
+        updatedAt,
+        updatedBy: updatedProduct.updatedBy
+      };
+
+      const db = fbase.getFirestore();
+      const publicProductRef = fbase.doc(
+        db,
+        'artifacts', appId, 'public', 'data',
+        Core.PUBLIC_PRODUCTS_COLLECTION, normalized.id
+      );
+      await fbase.setDoc(publicProductRef, shippingPatch, { merge: true });
+      publicProducts.patchLocal(normalized.id, shippingPatch);
+
+      if (Core.isControlPanelProduct(updatedProduct)) {
+        try {
+          const adminProductRef = fbase.doc(
+            db,
+            'artifacts', appId, 'public', 'data',
+            Core.ADMIN_PRODUCTS_COLLECTION, normalized.id
+          );
+          await fbase.setDoc(adminProductRef, shippingPatch, { merge: true });
+          patchInventoryLocal(normalized.id, shippingPatch);
+        } catch (error) {
+          console.error('Guardar espejo de costo de envío del producto del Panel de Control:', error);
+        }
+      } else if (Core.isUserPanelPublication(updatedProduct)) {
+        const ownerDocId = Core.safeDocumentId(Core.getProductOwnerId(updatedProduct));
+        if (ownerDocId) {
+          try {
+            const userProductRef = fbase.doc(
+              db,
+              'artifacts', appId, 'public', 'data',
+              Core.USER_PRODUCTS_COLLECTION, ownerDocId, 'items', updatedProduct.id
+            );
+            await fbase.setDoc(userProductRef, shippingPatch, { merge: true });
+          } catch (error) {
+            console.error('Guardar espejo de costo de envío del producto de usuario:', error);
+          }
+        }
+      }
+
+      return { ...normalized, ...shippingPatch };
+    }, [sessionUser, adminEmail, defaultSupermarketShippingCost, publicProducts, patchInventoryLocal, fbase, appId]);
+
     return {
       adminProducts,
       controlProducts,
+      allProducts,
+      publicProducts: publicList,
+      supermarketSettings,
       productForm,
       setProductForm,
       productImageFiles,
@@ -381,7 +502,8 @@
       deleteProduct,
       patchInventoryLocal,
       upsertAdminLocal,
-      saveAdminMirror
+      saveAdminMirror,
+      saveProductShippingConfiguration
     };
   }
 
@@ -389,6 +511,7 @@
     if (!manager) return null;
     const TrashIcon = Icons.Trash || (() => null);
     const Supermercado = global.DriveMxSupermercado || global.DriveMxSupermercadoCore || {};
+    const CostoEnvio = global.DriveMxCostoEnvio || {};
     const {
       productForm,
       setProductForm,
@@ -457,6 +580,14 @@
               <Supermercado.ProductCategorySelect
                 value={productForm.category || ''}
                 onChange={(category) => setProductForm((previous) => ({ ...previous, category }))}
+              />
+            )}
+
+            {CostoEnvio.ProductShippingCostFields && (
+              <CostoEnvio.ProductShippingCostFields
+                productForm={productForm}
+                setProductForm={setProductForm}
+                defaultCost={manager.supermarketSettings?.shippingFee ?? 150}
               />
             )}
 
