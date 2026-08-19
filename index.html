@@ -62,6 +62,7 @@
         import "./home-products/home-products.js";
         import "./product-details/product-details.js";
         import "./supermercado-module/supermercado-module.js";
+        import "./costo-envio/costo-envio.js";
         import "./new-shipment/new-shipment.js";
         import "./guide-assignment/guide-assignment.js";
         import "./conductores/conductores.js";
@@ -447,6 +448,10 @@
                 }
                 return GLOBAL_SHIPPING_FEE;
             }, [supermarketSettings.shippingFee]);
+            const formatCheckoutShippingFee = (value = 0) => {
+                const amount = Number(value || 0);
+                return amount === 0 ? '$0' : `$${amount.toFixed(2)}`;
+            };
             const packagesManager = PackagesGuidesUI.usePackagesGuidesManager({
                 fbase,
                 appId,
@@ -3158,7 +3163,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             {checkoutProducts.length > 0 && (
                                                 <div className="flex items-center justify-between gap-3 text-sm font-bold border-t border-slate-200 pt-3">
                                                     <span className="text-slate-700">Gastos de envio</span>
-                                                    <span className="text-red-500 font-black">${Number(checkoutShippingFee || 0).toFixed(2)}</span>
+                                                    <span className="text-red-500 font-black">{formatCheckoutShippingFee(checkoutShippingFee)}</span>
                                                 </div>
                                             )}
                                             <div className="border-t border-slate-200 pt-3 flex items-center justify-between">
@@ -3232,7 +3237,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             ))}
                                             <div className="flex items-center justify-between gap-3 text-sm font-bold border-t border-slate-200 pt-3">
                                                 <span className="text-slate-700">Gastos de envio</span>
-                                                <span className="text-red-500 font-black">${Number(checkoutShippingFee || 0).toFixed(2)}</span>
+                                                <span className="text-red-500 font-black">{formatCheckoutShippingFee(checkoutShippingFee)}</span>
                                             </div>
                                         </div>
                                         <div className="grid md:grid-cols-2 gap-4">
@@ -3262,7 +3267,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         <div className="bg-slate-50 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 checkout-submit-bar">
                                             <div>
                                                 <p className="text-[9px] font-black text-slate-400 uppercase">Total</p>
-                                                <p className="text-[10px] font-bold text-slate-400 uppercase">Productos: ${Number(checkoutSubtotal || 0).toFixed(2)} · Envío: ${Number(checkoutShippingFee || 0).toFixed(2)} · Unidades: {checkoutTotalQuantity}</p>
+                                                <p className="text-[10px] font-bold text-slate-400 uppercase">Productos: ${Number(checkoutSubtotal || 0).toFixed(2)} · Envío: {formatCheckoutShippingFee(checkoutShippingFee)} · Unidades: {checkoutTotalQuantity}</p>
                                                 <p className="text-3xl font-black text-red-500">${Number(checkoutTotal || 0).toFixed(2)}</p>
                                             </div>
                                             <button type="button" onClick={createPendingTransfer} disabled={orderSending || !paymentSettings.bankAccount} className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed checkout-submit-button">{orderSending ? 'Registrando...' : 'Registrar transferencia pendiente'}</button>
