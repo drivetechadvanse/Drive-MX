@@ -3,6 +3,7 @@ const SupermercadoEmail = require("../supermercado-module/supermercado-email.js"
 
 const SALE_NOTIFICATION_MESSAGE =
   "Tu producto ha sido vendido. Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.";
+const SUPERMARKET_MINIMUM_QUANTITY = 5;
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -120,6 +121,134 @@ function productsText(orderProducts = []) {
         `Producto ${index + 1}\nID: ${item.id}\nNombre: ${item.name}\nCantidad comprada: ${Number(item.quantity || 1)}\nPrecio unitario: $${money(item.unitPrice ?? item.price)}\nTotal del producto: $${money(item.lineTotal ?? item.totalPrice ?? item.productTotal)}${productOptionsText(item) ? `\n${productOptionsText(item)}` : ''}`
     )
     .join("\n\n");
+}
+
+function isSupermarketProduct(product = {}) {
+  return typeof SupermercadoEmail.isSupermarketProduct === "function"
+    ? SupermercadoEmail.isSupermarketProduct(product)
+    : false;
+}
+
+function getSupermarketQuantity(orderProducts = []) {
+  return orderProducts
+    .filter(isSupermarketProduct)
+    .reduce((total, item) => total + normalizeQuantity(item.quantity || item.productQuantity || 1), 0);
+}
+
+function buildDriveMxBuyerNotification({
+  orderProducts = [],
+  delivery = {},
+  cart = {},
+  transferId = "",
+  paymentStatus = "",
+} = {}) {
+  if (!isValidEmail(delivery.email) || orderProducts.length === 0) return null;
+
+  const hasSupermarketProducts = orderProducts.some(isSupermarketProduct);
+  const hasGeneralProducts = orderProducts.some((product) => !isSupermarketProduct(product));
+  const notificationType = hasSupermarketProducts && hasGeneralProducts ? "mixta" : "drive-mx";
+  const orderLabel = notificationType === "mixta"
+    ? "Productos Drive MX y Supermercado"
+    : "Productos Drive MX";
+  const status = clean(paymentStatus).toLowerCase() === "pagado" ? "Pago confirmado" : "Pedido recibido";
+  const reference = clean(transferId);
+  const subtotal = Number(
+    cart.subtotal ?? orderProducts.reduce(
+      (total, product) => total + Number(product.lineTotal ?? product.totalPrice ?? product.productTotal ?? 0),
+      0
+    )
+  );
+  const shippingFee = Number(cart.shippingFee ?? 0);
+  const total = Number(cart.total ?? subtotal + shippingFee);
+  const totalQuantity = orderProducts.reduce(
+    (quantityTotal, product) => quantityTotal + normalizeQuantity(product.quantity || product.productQuantity || 1),
+    0
+  );
+  const address = [delivery.street, delivery.neighborhood, delivery.municipality, delivery.state, delivery.zip]
+    .map(clean)
+    .filter(Boolean)
+    .join(", ");
+  const subject = notificationType === "mixta"
+    ? "Compra confirmada - Drive MX y Supermercado"
+    : "Compra confirmada - Productos Drive MX";
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;color:#111827;line-height:1.5;">
+      <h2>Compra confirmada</h2>
+      <p>Hola ${escapeHtml(delivery.fullName || "cliente")}, Drive MX confirmó tu compra de ${escapeHtml(orderLabel)}.</p>
+      <p><b>Estado:</b> ${escapeHtml(status)}</p>
+      ${reference ? `<p><b>Referencia:</b> ${escapeHtml(reference)}</p>` : ""}
+      <h3>Productos de la compra</h3>
+      ${productsHtml(orderProducts)}
+      <p><b>Cantidad total comprada:</b> ${totalQuantity}</p>
+      <p><b>Subtotal del pedido:</b> $${money(subtotal)}</p>
+      <p><b>Gastos de envío:</b> $${money(shippingFee)}</p>
+      <p><b>Total del pedido:</b> $${money(total)}</p>
+      <hr />
+      <h3>Datos de entrega</h3>
+      <p><b>Nombre:</b> ${escapeHtml(delivery.fullName)}</p>
+      <p><b>Dirección:</b> ${escapeHtml(address)}</p>
+      <p><b>Teléfono:</b> ${escapeHtml(delivery.phone)}</p>
+      <p><b>Correo:</b> ${escapeHtml(delivery.email)}</p>
+      <p><b>Referencias:</b> ${escapeHtml(delivery.references)}</p>
+      <p>Conserva este correo como confirmación de tu compra.</p>
+    </div>`;
+
+  const text = [
+    subject,
+    `Hola ${clean(delivery.fullName || "cliente")}, Drive MX confirmó tu compra de ${orderLabel}.`,
+    `Estado: ${status}`,
+    reference ? `Referencia: ${reference}` : "",
+    "",
+    "Productos de la compra:",
+    productsText(orderProducts),
+    "",
+    `Cantidad total comprada: ${totalQuantity}`,
+    `Subtotal del pedido: $${money(subtotal)}`,
+    `Gastos de envío: $${money(shippingFee)}`,
+    `Total del pedido: $${money(total)}`,
+    "",
+    `Dirección de entrega: ${address}`,
+    `Teléfono: ${clean(delivery.phone)}`,
+    `Correo: ${clean(delivery.email)}`,
+    `Referencias: ${clean(delivery.references)}`,
+    "",
+    "Conserva este correo como confirmación de tu compra.",
+  ].filter((line, index, lines) => line !== "" || (index > 0 && lines[index - 1] !== "")).join("\n");
+
+  return {
+    to: clean(delivery.email),
+    subject,
+    text,
+    html,
+    productCount: orderProducts.length,
+    totalQuantity,
+    type: notificationType,
+    containsSupermarket: hasSupermarketProducts,
+  };
+}
+
+function buildBuyerNotification(context = {}) {
+  const orderProducts = Array.isArray(context.orderProducts) ? context.orderProducts : [];
+  const hasSupermarketProducts = orderProducts.some(isSupermarketProduct);
+  const hasGeneralProducts = orderProducts.some((product) => !isSupermarketProduct(product));
+
+  if (hasSupermarketProducts && !hasGeneralProducts) {
+    const notification = SupermercadoEmail.buildBuyerNotification(context);
+    return notification
+      ? {
+          ...notification,
+          totalQuantity: orderProducts.reduce(
+            (total, product) => total + normalizeQuantity(product.quantity || product.productQuantity || 1),
+            0
+          ),
+          type: "supermercado",
+          containsSupermarket: true,
+        }
+      : null;
+  }
+
+  return buildDriveMxBuyerNotification(context);
 }
 
 function normalizeAppPassword(value) {
@@ -355,6 +484,18 @@ module.exports = async function handler(req, res) {
     );
     const orderTotal = Number(cart.total ?? orderSubtotal + orderShippingFee);
     const totalQuantity = orderProducts.reduce((total, item) => total + Number(item.quantity || 1), 0);
+    const supermarketQuantity = getSupermarketQuantity(orderProducts);
+    if (supermarketQuantity > 0 && supermarketQuantity < SUPERMARKET_MINIMUM_QUANTITY) {
+      return res.status(400).json({
+        success: false,
+        requestId,
+        stage,
+        code: "SUPERMARKET_MINIMUM_QUANTITY",
+        supermarketQuantity,
+        supermarketMinimumQuantity: SUPERMARKET_MINIMUM_QUANTITY,
+        error: `La compra de Supermercado requiere mínimo ${SUPERMARKET_MINIMUM_QUANTITY} unidades en total.`,
+      });
+    }
     const itemCount = Number(cart.totalQuantity || cart.quantityTotal || totalQuantity || cart.itemCount || orderProducts.length);
     const productSubject =
       orderProducts.length > 1 ? `${orderProducts.length} productos` : orderProducts[0].name;
@@ -435,6 +576,7 @@ module.exports = async function handler(req, res) {
       authSource,
       receiverSource,
       saleNotificationTargets: targetsByEmail.size,
+      supermarketQuantity,
     });
 
     const transporter = nodemailer.createTransport({
@@ -557,7 +699,7 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    const supermarketBuyerNotification = SupermercadoEmail.buildBuyerNotification({
+    const buyerNotification = buildBuyerNotification({
       orderProducts,
       delivery,
       cart: {
@@ -569,52 +711,71 @@ module.exports = async function handler(req, res) {
       transferId,
       paymentStatus,
     });
-    const supermarketBuyerNotificationRequired = Boolean(supermarketBuyerNotification);
-    let supermarketBuyerNotificationSent = false;
-    let supermarketBuyerNotificationCount = 0;
-    let supermarketBuyerNotificationError = null;
+    const buyerNotificationRequired = Boolean(buyerNotification);
+    const buyerNotificationType = clean(buyerNotification?.type) || "drive-mx";
+    const buyerNotificationContainsSupermarket = Boolean(buyerNotification?.containsSupermarket);
+    let buyerNotificationSent = false;
+    let buyerNotificationCount = 0;
+    let buyerNotificationError = null;
 
-    if (supermarketBuyerNotification) {
-      stage = "notificacion-comprador-supermercado";
+    if (buyerNotification) {
+      stage = buyerNotificationType === "supermercado"
+        ? "notificacion-comprador-supermercado"
+        : "notificacion-comprador-drive-mx";
       try {
         const buyerInfo = await transporter.sendMail({
           from: `"Drive MX" <${senderEmail}>`,
-          to: supermarketBuyerNotification.to,
-          subject: supermarketBuyerNotification.subject,
-          text: supermarketBuyerNotification.text,
-          html: supermarketBuyerNotification.html,
+          to: buyerNotification.to,
+          subject: buyerNotification.subject,
+          text: buyerNotification.text,
+          html: buyerNotification.html,
           replyTo: receiverEmail,
         });
-        supermarketBuyerNotificationSent = true;
-        supermarketBuyerNotificationCount = 1;
-        console.info("[send-order-email] Confirmación de Supermercado enviada al comprador.", {
+        buyerNotificationSent = true;
+        buyerNotificationCount = 1;
+        console.info("[send-order-email] Confirmación de compra enviada al comprador.", {
           requestId,
-          recipient: maskEmail(supermarketBuyerNotification.to),
-          productCount: supermarketBuyerNotification.productCount,
+          notificationType: buyerNotificationType,
+          recipient: maskEmail(buyerNotification.to),
+          productCount: buyerNotification.productCount,
+          totalQuantity: buyerNotification.totalQuantity || totalQuantity,
           messageId: clean(buyerInfo?.messageId),
         });
       } catch (buyerError) {
-        supermarketBuyerNotificationError = mailErrorDetails(buyerError);
-        console.error("[send-order-email] Error enviando confirmación de Supermercado al comprador.", {
+        buyerNotificationError = mailErrorDetails(buyerError);
+        console.error("[send-order-email] Error enviando confirmación de compra al comprador.", {
           requestId,
-          recipient: maskEmail(supermarketBuyerNotification.to),
-          ...supermarketBuyerNotificationError,
+          notificationType: buyerNotificationType,
+          recipient: maskEmail(buyerNotification.to),
+          ...buyerNotificationError,
         }, buyerError);
       }
     }
 
-    if (saleNotificationErrors.length > 0 || supermarketBuyerNotificationError) {
-      const bothFailed = saleNotificationErrors.length > 0 && Boolean(supermarketBuyerNotificationError);
+    const supermarketBuyerNotificationRequired = buyerNotificationContainsSupermarket && buyerNotificationRequired;
+    const supermarketBuyerNotificationSent = buyerNotificationContainsSupermarket && buyerNotificationSent;
+    const supermarketBuyerNotificationCount = buyerNotificationContainsSupermarket ? buyerNotificationCount : 0;
+    const supermarketBuyerNotificationError = buyerNotificationContainsSupermarket ? buyerNotificationError : null;
+
+    if (saleNotificationErrors.length > 0 || buyerNotificationError) {
+      const bothFailed = saleNotificationErrors.length > 0 && Boolean(buyerNotificationError);
+      const buyerFailureName = buyerNotificationContainsSupermarket
+        ? "la confirmación de compra de Supermercado al comprador"
+        : "la confirmación de compra de Productos Drive MX al comprador";
       const code = bothFailed
-        ? "SALE_AND_SUPERMARKET_BUYER_NOTIFICATION_PARTIAL_FAILURE"
+        ? buyerNotificationContainsSupermarket
+          ? "SALE_AND_SUPERMARKET_BUYER_NOTIFICATION_PARTIAL_FAILURE"
+          : "SALE_AND_BUYER_NOTIFICATION_PARTIAL_FAILURE"
         : saleNotificationErrors.length > 0
           ? "SALE_NOTIFICATION_PARTIAL_FAILURE"
-          : "SUPERMARKET_BUYER_NOTIFICATION_FAILURE";
+          : buyerNotificationContainsSupermarket
+            ? "SUPERMARKET_BUYER_NOTIFICATION_FAILURE"
+            : "BUYER_NOTIFICATION_FAILURE";
       const error = bothFailed
-        ? "La compra fue notificada al correo base, pero fallaron notificaciones de venta y la confirmación de Supermercado al comprador."
+        ? `La compra fue notificada al correo base, pero fallaron notificaciones de venta y ${buyerFailureName}.`
         : saleNotificationErrors.length > 0
           ? "La compra fue notificada al correo base, pero falló una o más notificaciones de venta."
-          : "La compra fue notificada al correo base y a los vendedores, pero falló la confirmación de Supermercado al comprador.";
+          : `La compra fue notificada al correo base y a los vendedores, pero falló ${buyerFailureName}.`;
       return res.status(502).json({
         success: false,
         partialSuccess: true,
@@ -625,6 +786,11 @@ module.exports = async function handler(req, res) {
         baseMessageId,
         saleNotificationCount,
         saleNotificationErrors,
+        buyerNotificationRequired,
+        buyerNotificationSent,
+        buyerNotificationCount,
+        buyerNotificationType,
+        buyerNotificationError,
         supermarketBuyerNotificationRequired,
         supermarketBuyerNotificationSent,
         supermarketBuyerNotificationCount,
@@ -642,6 +808,11 @@ module.exports = async function handler(req, res) {
       saleNotificationSent: saleNotificationCount > 0,
       saleNotificationCount,
       saleNotificationError: "",
+      buyerNotificationRequired,
+      buyerNotificationSent,
+      buyerNotificationCount,
+      buyerNotificationType,
+      buyerNotificationError: null,
       supermarketBuyerNotificationRequired,
       supermarketBuyerNotificationSent,
       supermarketBuyerNotificationCount,
