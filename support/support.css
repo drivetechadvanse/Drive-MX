@@ -1,0 +1,62 @@
+.drive-mx-support-card {
+  min-height: 620px;
+}
+
+.drive-mx-support-sidebar-list,
+.drive-mx-support-messages {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+.drive-mx-support-messages {
+  min-height: 18rem;
+}
+
+.drive-mx-support-message-text,
+.drive-mx-support-user-label {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+@media (max-width: 767px) {
+  .drive-mx-support-card {
+    min-height: 0;
+  }
+
+  .drive-mx-support-sidebar {
+    max-height: 17rem;
+    overflow: hidden;
+    border-right: 0;
+    border-bottom: 1px solid #f1f5f9;
+  }
+
+  .drive-mx-support-sidebar-list {
+    max-height: 12rem;
+  }
+
+  .drive-mx-support-chat {
+    min-height: min(34rem, calc(100dvh - 8rem));
+  }
+
+  .drive-mx-support-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .drive-mx-support-admin-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .drive-mx-support-compose {
+    align-items: stretch;
+    flex-direction: column;
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+  }
+
+  .drive-mx-support-compose .btn-primary {
+    width: 100%;
+    min-height: 3rem;
+  }
+}
