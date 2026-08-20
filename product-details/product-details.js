@@ -46,6 +46,19 @@ function clampQuantity(value, product = {}) {
   return Math.min(normalizeQuantity(value, 1), stock);
 }
 
+function normalizeSelectionQuantity(value, fallback = 0) {
+  const quantity = Math.floor(Number(value ?? fallback));
+  if (Number.isFinite(quantity) && quantity >= 0) return quantity;
+  const fallbackQuantity = Math.floor(Number(fallback ?? 0));
+  return Number.isFinite(fallbackQuantity) && fallbackQuantity >= 0 ? fallbackQuantity : 0;
+}
+
+function clampSelectionQuantity(value, product = {}) {
+  const stock = getProductStock(product);
+  if (stock <= 0) return 0;
+  return Math.min(normalizeSelectionQuantity(value, 0), stock);
+}
+
 function getProductUnitPrice(product = {}) {
   const value = Number(product.unitPrice ?? product.productUnitPrice ?? product.price ?? 0);
   return Number.isFinite(value) && value > 0 ? value : 0;
@@ -60,8 +73,10 @@ function getProductLineTotal(product = {}, quantity = product.quantity ?? produc
   return roundMoney(getProductUnitPrice(product) * normalizeQuantity(quantity, 1));
 }
 
-function createPurchaseSummary(product = {}, quantity = 1) {
-  const selectedQuantity = clampQuantity(quantity, product);
+function createPurchaseSummary(product = {}, quantity = 1, options = {}) {
+  const selectedQuantity = options.allowZero === true
+    ? clampSelectionQuantity(quantity, product)
+    : clampQuantity(quantity, product);
   const unitPrice = getProductUnitPrice(product);
   const lineTotal = selectedQuantity > 0 ? roundMoney(unitPrice * selectedQuantity) : 0;
   return {
@@ -101,9 +116,18 @@ function ProductDetail(props = {}) {
   const ChevronRight = Icons.ChevronRight || EmptyIcon;
   const sizesText = typeof props.productSizesText === 'function' ? props.productSizesText(product) : '';
   const colorsText = typeof props.productColorsText === 'function' ? props.productColorsText(product) : '';
-  const summary = createPurchaseSummary(product, props.quantity ?? 1);
-  const canBuy = summary.inStock;
+  const allowZeroQuantity = props.allowZeroQuantity === true;
+  const minimumQuantity = allowZeroQuantity ? 0 : 1;
+  const summary = createPurchaseSummary(
+    product,
+    props.quantity ?? minimumQuantity,
+    { allowZero: allowZeroQuantity }
+  );
+  const productAvailable = summary.stock > 0;
+  const canBuy = productAvailable && summary.quantity > 0;
   const addLabel = props.isInCart ? 'En el carrito' : 'Agregar al carrito';
+  const buyButtonLabel = !productAvailable ? 'Agotado' : canBuy ? 'Comprar' : 'Selecciona cantidad';
+  const cartButtonLabel = !productAvailable ? 'Sin disponibilidad' : canBuy ? addLabel : 'Selecciona cantidad';
 
   const setImageIndex = (index) => {
     if (!gallery.length || typeof props.setCurrentImageIndex !== 'function') return;
@@ -147,7 +171,9 @@ function ProductDetail(props = {}) {
   };
 
   const setQuantity = (value) => {
-    const nextQuantity = clampQuantity(value, product);
+    const nextQuantity = allowZeroQuantity
+      ? clampSelectionQuantity(value, product)
+      : clampQuantity(value, product);
     if (typeof props.onQuantityChange === 'function') props.onQuantityChange(nextQuantity);
   };
 
@@ -161,26 +187,26 @@ function ProductDetail(props = {}) {
         h('button', {
           type: 'button',
           className: 'drive-mx-product-quantity-button w-11 h-11 text-xl font-black text-slate-500 hover:text-red-500 disabled:opacity-40 disabled:cursor-not-allowed',
-          disabled: !canBuy || summary.quantity <= 1,
+          disabled: !productAvailable || summary.quantity <= minimumQuantity,
           onClick: () => setQuantity(summary.quantity - 1),
           'aria-label': 'Reducir cantidad'
         }, '−'),
         h('input', {
           type: 'number',
-          min: summary.stock > 0 ? 1 : 0,
+          min: productAvailable ? minimumQuantity : 0,
           max: summary.stock,
           step: 1,
           inputMode: 'numeric',
           className: 'drive-mx-product-quantity-input w-16 h-11 text-center text-sm font-black bg-white outline-none',
           value: summary.quantity,
-          disabled: !canBuy,
+          disabled: !productAvailable,
           onChange: (event) => setQuantity(event.target.value),
           'aria-label': 'Cantidad seleccionada'
         }),
         h('button', {
           type: 'button',
           className: 'drive-mx-product-quantity-button w-11 h-11 text-xl font-black text-slate-500 hover:text-red-500 disabled:opacity-40 disabled:cursor-not-allowed',
-          disabled: !canBuy || summary.quantity >= summary.stock,
+          disabled: !productAvailable || summary.quantity >= summary.stock,
           onClick: () => setQuantity(summary.quantity + 1),
           'aria-label': 'Aumentar cantidad'
         }, '+')
@@ -272,8 +298,8 @@ function ProductDetail(props = {}) {
             h('p', { className: 'text-sm font-semibold text-slate-600 leading-relaxed whitespace-pre-line' }, product.specifications || 'Sin especificaciones registradas.')
           ),
           h('div', { className: 'flex flex-col sm:flex-row gap-3' },
-            h('button', { type: 'button', disabled: !canBuy, onClick: () => canBuy && props.onBuy?.(product, summary.quantity), className: 'btn-primary w-full sm:w-auto h-12 disabled:opacity-50 disabled:cursor-not-allowed' }, canBuy ? 'Comprar' : 'Agotado'),
-            h('button', { type: 'button', disabled: !canBuy, onClick: () => canBuy && props.onAddToCart?.(product, summary.quantity), className: 'w-full sm:w-auto h-12 px-6 rounded-xl border-2 border-red-100 bg-red-50 text-red-600 text-[10px] font-black uppercase tracking-widest hover:bg-red-500 hover:text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-red-50 disabled:hover:text-red-600' }, canBuy ? addLabel : 'Sin disponibilidad')
+            h('button', { type: 'button', disabled: !canBuy, onClick: () => canBuy && props.onBuy?.(product, summary.quantity), className: 'btn-primary w-full sm:w-auto h-12 disabled:opacity-50 disabled:cursor-not-allowed' }, buyButtonLabel),
+            h('button', { type: 'button', disabled: !canBuy, onClick: () => canBuy && props.onAddToCart?.(product, summary.quantity), className: 'w-full sm:w-auto h-12 px-6 rounded-xl border-2 border-red-100 bg-red-50 text-red-600 text-[10px] font-black uppercase tracking-widest hover:bg-red-500 hover:text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-red-50 disabled:hover:text-red-600' }, cartButtonLabel)
           )
         )
       )
@@ -292,6 +318,8 @@ globalThis.DriveMxProductDetails = {
   getProductStock,
   normalizeQuantity,
   clampQuantity,
+  normalizeSelectionQuantity,
+  clampSelectionQuantity,
   getProductUnitPrice,
   getProductLineTotal,
   createPurchaseSummary,
