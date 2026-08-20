@@ -23,8 +23,9 @@
   scroll-behavior: smooth;
   scroll-snap-type: x mandatory;
   -webkit-overflow-scrolling: touch;
-  overscroll-behavior-inline: contain;
-  touch-action: pan-x;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
+  touch-action: pan-x pan-y pinch-zoom;
   scrollbar-width: thin;
 }
 
@@ -95,3 +96,4 @@
     height: 2.5rem;
   }
 }
+
