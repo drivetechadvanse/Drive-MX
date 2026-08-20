@@ -117,7 +117,7 @@ function ProductsRail({ products, blockIndex, totalBlocks, ads, getProductGaller
   const React = getReact();
   if (!React) return null;
   const railRef = React.useRef(null);
-  const pointerState = React.useRef({ active: false, pointerId: null, startX: 0, scrollLeft: 0, moved: false });
+  const pointerState = React.useRef({ active: false, pointerId: null, startX: 0, startY: 0, scrollLeft: 0, moved: false, axis: null });
 
   const scrollRail = (direction) => {
     const rail = railRef.current;
@@ -133,8 +133,10 @@ function ProductsRail({ products, blockIndex, totalBlocks, ads, getProductGaller
       active: true,
       pointerId: event.pointerId,
       startX: event.clientX,
+      startY: event.clientY,
       scrollLeft: rail.scrollLeft,
-      moved: false
+      moved: false,
+      axis: null
     };
   };
 
@@ -142,13 +144,18 @@ function ProductsRail({ products, blockIndex, totalBlocks, ads, getProductGaller
     const rail = railRef.current;
     const state = pointerState.current;
     if (!rail || !state.active || state.pointerId !== event.pointerId) return;
-    const delta = event.clientX - state.startX;
-    if (Math.abs(delta) > 6) state.moved = true;
-    rail.scrollLeft = state.scrollLeft - delta;
+    const deltaX = event.clientX - state.startX;
+    const deltaY = event.clientY - state.startY;
+    if (!state.axis && Math.max(Math.abs(deltaX), Math.abs(deltaY)) > 6) {
+      state.axis = Math.abs(deltaX) > Math.abs(deltaY) ? 'horizontal' : 'vertical';
+    }
+    if (state.axis !== 'horizontal') return;
+    state.moved = true;
+    rail.scrollLeft = state.scrollLeft - deltaX;
   };
 
   const finishPointer = () => {
-    pointerState.current = { active: false, pointerId: null, startX: 0, scrollLeft: 0, moved: false };
+    pointerState.current = { active: false, pointerId: null, startX: 0, startY: 0, scrollLeft: 0, moved: false, axis: null };
   };
 
   const ad = getAdForBlock(ads, blockIndex);
@@ -243,4 +250,3 @@ globalThis.DriveMxHomeProducts = {
   getAdForBlock,
   HomeProductsSection
 };
-
