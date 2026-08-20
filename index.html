@@ -135,6 +135,7 @@
         const PRODUCT_ORIGIN_USER = ProductsCore.PRODUCT_ORIGIN_USER;
         const STAFF_USERS_LOCAL_KEY = 'driveMxOperators';
         const CART_MAX_ITEMS = 2;
+        const SUPERMARKET_MINIMUM_QUANTITY = 5;
         const REGISTERED_USERS_PAGE_SIZE = 20;
         const CART_TTL_MS = 30 * 60 * 1000;
         const CART_LOCAL_PREFIX = 'driveMxVisitorCart';
@@ -146,6 +147,49 @@
         const SUPERMARKET_SETTINGS_COLLECTION = CostoEnvio.SETTINGS_COLLECTION || Supermercado.SETTINGS_COLLECTION || 'supermarket_settings';
         const SUPERMARKET_SETTINGS_DOCUMENT = CostoEnvio.SETTINGS_DOCUMENT || Supermercado.SETTINGS_DOCUMENT || 'config';
         const SUPERMARKET_SETTINGS_LOCAL_KEY = CostoEnvio.SETTINGS_LOCAL_KEY || Supermercado.SETTINGS_LOCAL_KEY || 'driveMxSupermarketSettings';
+        const isSupermarketPurchaseProduct = (product = {}) => {
+            if (typeof Supermercado.isSupermarketProduct === 'function') {
+                return Supermercado.isSupermarketProduct(product);
+            }
+            const category = String(product?.category ?? product?.categoria ?? product?.productCategory ?? product?.product_category ?? '')
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase()
+                .replace(/[\s_-]+/g, ' ')
+                .trim();
+            return category === 'supermercado';
+        };
+        const getSupermarketPurchaseQuantity = (items = []) => (Array.isArray(items) ? items : [])
+            .filter(Boolean)
+            .filter(isSupermarketPurchaseProduct)
+            .reduce((total, product) => {
+                const quantity = Math.floor(Number(product?.quantity ?? product?.productQuantity ?? product?.selectedQuantity ?? 0));
+                return total + (Number.isFinite(quantity) && quantity > 0 ? quantity : 0);
+            }, 0);
+        const getSupermarketMinimumPurchaseError = (items = []) => {
+            const productsToValidate = (Array.isArray(items) ? items : []).filter(Boolean);
+            if (!productsToValidate.some(isSupermarketPurchaseProduct)) return '';
+            const supermarketQuantity = getSupermarketPurchaseQuantity(productsToValidate);
+            if (supermarketQuantity >= SUPERMARKET_MINIMUM_QUANTITY) return '';
+            return `La compra de Supermercado requiere mínimo ${SUPERMARKET_MINIMUM_QUANTITY} unidades en total. Actualmente seleccionaste ${supermarketQuantity}.`;
+        };
+        const createBuyerMailLogFields = (mailResult = {}) => ({
+            buyerNotificationRequired: mailResult.buyerNotificationRequired === true,
+            buyerNotificationSent: mailResult.buyerNotificationSent === true,
+            buyerNotificationCount: Math.max(0, Number(mailResult.buyerNotificationCount || 0)),
+            buyerNotificationType: String(mailResult.buyerNotificationType || '')
+        });
+        const createBuyerTransferEmailAudit = (mailResult = {}) => {
+            const rawError = mailResult?.buyerNotificationError;
+            const errorText = String(rawError?.message || rawError?.response || rawError || '').trim().slice(0, 500);
+            return {
+                emailBuyerNotificationRequired: mailResult.buyerNotificationRequired === true,
+                emailBuyerNotificationSent: mailResult.buyerNotificationSent === true,
+                emailBuyerNotificationCount: Math.max(0, Number(mailResult.buyerNotificationCount || 0)),
+                emailBuyerNotificationType: String(mailResult.buyerNotificationType || '').trim().slice(0, 60),
+                emailBuyerNotificationError: errorText
+            };
+        };
         const normalizeSupermarketSettings = (settings = {}) => {
             if (typeof CostoEnvio.normalizeSettings === 'function') return CostoEnvio.normalizeSettings(settings);
             if (typeof Supermercado.normalizeSettings === 'function') return Supermercado.normalizeSettings(settings);
@@ -219,6 +263,11 @@
         const clampProductQuantity = (quantity = 1, product = {}) => ProductDetails.clampQuantity ? ProductDetails.clampQuantity(quantity, product) : Math.min(Math.max(1, Math.floor(Number(quantity || 1))), getProductStock(product));
         const getProductUnitPrice = (product = {}) => ProductDetails.getProductUnitPrice ? ProductDetails.getProductUnitPrice(product) : Number(product?.unitPrice ?? product?.price ?? 0);
         const getProductLineTotal = (product = {}, quantity = product?.quantity || 1) => ProductDetails.getProductLineTotal ? ProductDetails.getProductLineTotal(product, quantity) : Number((getProductUnitPrice(product) * Math.max(1, Math.floor(Number(quantity || 1)))).toFixed(2));
+        const getInitialProductPurchaseQuantity = (product = {}) => {
+            if (!isSupermarketPurchaseProduct(product)) return 1;
+            const stock = getProductStock(product);
+            return stock > 0 ? Math.min(SUPERMARKET_MINIMUM_QUANTITY, stock) : 1;
+        };
         const copyProductCommerceFields = (target = {}, source = {}) => {
             const categorized = typeof Supermercado.copyCategory === 'function'
                 ? Supermercado.copyCategory(target, source)
@@ -1250,6 +1299,9 @@
             const selectedPurchaseQuantity = selectedProduct ? clampProductQuantity(selectedProductQuantity, selectedProduct) : 1;
             const selectedCheckoutProduct = selectedProduct ? createPurchasableProduct(selectedProduct, selectedPurchaseQuantity) : null;
             const cartProducts = cartItems.map(hydrateCartProduct).filter(Boolean).slice(0, CART_MAX_ITEMS);
+            const cartSubtotal = cartProducts.reduce((total, product) => total + getProductLineTotal(product, product.quantity), 0);
+            const cartTotalQuantity = cartProducts.reduce((total, product) => total + Number(product.quantity || 0), 0);
+            const cartSupermarketQuantity = getSupermarketPurchaseQuantity(cartProducts);
             const checkoutProducts = checkoutProductIds.length > 0
                 ? checkoutProductIds.map(id => hydrateCartProduct(cartItems.find(item => String(item.id) === String(id)) || findProductById(id))).filter(Boolean).slice(0, CART_MAX_ITEMS)
                 : (selectedCheckoutProduct ? [selectedCheckoutProduct] : []);
@@ -1257,6 +1309,7 @@
             const checkoutShippingFee = calculateShippingFee(checkoutProducts);
             const checkoutTotal = checkoutSubtotal + checkoutShippingFee;
             const checkoutTotalQuantity = checkoutProducts.reduce((total, product) => total + Number(product.quantity || 0), 0);
+            const checkoutSupermarketQuantity = getSupermarketPurchaseQuantity(checkoutProducts);
             const checkoutProduct = checkoutProducts[0] || null;
             const checkoutProductNames = checkoutProducts.map(product => `${product.name}${Number(product.quantity || 0) > 1 ? ` x${product.quantity}` : ''}`).filter(Boolean).join(', ');
             const checkoutProductIdsLabel = checkoutProducts.map(product => product.id).filter(Boolean).join(', ');
@@ -1283,6 +1336,13 @@
                     }
                 }
                 return true;
+            };
+
+            const ensureSupermarketMinimumAllowed = (productsToValidate = checkoutProducts) => {
+                const validationMessage = getSupermarketMinimumPurchaseError(productsToValidate);
+                if (!validationMessage) return true;
+                alert(validationMessage);
+                return false;
             };
 
             const ensureCheckoutWalletsAllowed = (productsToValidate = checkoutProducts) => {
@@ -1409,6 +1469,7 @@
                     return;
                 }
                 const checkoutItem = createPurchasableProduct(product, quantity);
+                if (!ensureSupermarketMinimumAllowed([checkoutItem])) return;
                 if (!ensureCheckoutInventoryAllowed([checkoutItem])) return;
                 if (!ensureCheckoutWalletsAllowed([checkoutItem])) return;
                 setCheckoutProductIds([]);
@@ -1424,6 +1485,7 @@
                     alert('El carrito está vacío.');
                     return;
                 }
+                if (!ensureSupermarketMinimumAllowed(validCartProducts)) return;
                 if (!ensureCheckoutInventoryAllowed(validCartProducts)) return;
                 if (!ensureCheckoutWalletsAllowed(validCartProducts)) return;
                 const nextCart = validCartProducts.map(product => createCartItemFromProduct(product, product.quantity || 1));
@@ -1973,6 +2035,8 @@
                         return `La cantidad de ${product?.name || 'uno de los productos'} no es válida.`;
                     }
                 }
+                const supermarketMinimumError = getSupermarketMinimumPurchaseError(orderProducts);
+                if (supermarketMinimumError) return supermarketMinimumError;
                 const delivery = payload.delivery || {};
                 const requiredFields = [
                     ['street', 'La calle es obligatoria.'],
@@ -2443,6 +2507,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                             requestId,
                             baseEmailSent: data.baseEmailSent !== false,
                             saleNotificationCount: Number(data.saleNotificationCount || 0),
+                            ...createBuyerMailLogFields(data),
                             ...Supermercado.createMailLogFields(data)
                         });
                         return data;
@@ -2536,6 +2601,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     alert('Falta configurar el número de cuenta bancaria en el Panel Admin.');
                     return;
                 }
+                if (!ensureSupermarketMinimumAllowed(checkoutProducts)) return;
                 if (!ensureCheckoutInventoryAllowed(checkoutProducts)) return;
                 if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
                 setOrderSending(true);
@@ -2681,6 +2747,12 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         error.code = 'TRANSFER_PRODUCTS_MISSING';
                         throw error;
                     }
+                    const supermarketMinimumError = getSupermarketMinimumPurchaseError(transferProducts);
+                    if (supermarketMinimumError) {
+                        const error = new Error(supermarketMinimumError);
+                        error.code = 'SUPERMARKET_MINIMUM_QUANTITY';
+                        throw error;
+                    }
 
                     if (currentTransfer.status === 'Pendiente') {
                         stage = 'validar-saldo-y-comision';
@@ -2741,6 +2813,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         emailRequestId: mailResult.requestId || `transfer_${transferId}`,
                         emailBaseSent: mailResult.baseEmailSent !== false,
                         emailSaleNotificationCount: Number(mailResult.saleNotificationCount || 0),
+                        ...createBuyerTransferEmailAudit(mailResult),
                         ...Supermercado.createTransferEmailAudit(mailResult)
                     }, { expected: { status: 'Pagado', emailStatus: 'Enviado' } });
 
@@ -2784,6 +2857,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 emailLastAttemptAt: Date.now(),
                                 emailError: String(details.message || 'No se pudo enviar el correo.').slice(0, 500),
                                 emailErrorCode: String(details.code || err?.stage || 'EMAIL_ERROR').slice(0, 120),
+                                ...createBuyerTransferEmailAudit(err?.responseData || {}),
                                 ...Supermercado.createTransferEmailAudit(err?.responseData || {})
                             }, { expected: { status: 'Pagado', emailStatus: 'Error' } });
                         } catch(statusError) {
@@ -2901,6 +2975,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     alert('No se encontraron productos seleccionados.');
                     return;
                 }
+                if (!ensureSupermarketMinimumAllowed(checkoutProducts)) return;
                 if (!validateDeliveryForm()) return;
                 if (!ensureCheckoutInventoryAllowed(checkoutProducts)) return;
                 if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
@@ -3041,7 +3116,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     <div>
                                         <p className="text-[9px] text-red-500 font-black uppercase tracking-widest">Carrito de compra</p>
                                         <h2 className="text-xl font-black tracking-tight">Productos seleccionados</h2>
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">Máximo {CART_MAX_ITEMS} productos · se limpia automáticamente en {Math.round(CART_TTL_MS / 60000)} minutos</p>
+                                        <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">Máximo {CART_MAX_ITEMS} publicaciones · Supermercado: mínimo {SUPERMARKET_MINIMUM_QUANTITY} unidades · se limpia automáticamente en {Math.round(CART_TTL_MS / 60000)} minutos</p>
                                     </div>
                                     <button type="button" onClick={() => setIsCartOpen(false)} className="w-9 h-9 rounded-xl bg-white text-slate-400 hover:text-red-500 font-black">×</button>
                                 </div>
@@ -3073,9 +3148,10 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     <div className="bg-white border border-slate-100 rounded-2xl p-4 flex items-center justify-between gap-4">
                                         <div>
                                             <p className="text-[9px] font-black text-slate-400 uppercase">Total acumulado</p>
-                                            <p className="text-[9px] font-bold text-slate-300 uppercase">{cartProducts.length} producto{cartProducts.length === 1 ? '' : 's'} · {cartProducts.reduce((total, product) => total + Number(product.quantity || 0), 0)} unidad{cartProducts.reduce((total, product) => total + Number(product.quantity || 0), 0) === 1 ? '' : 'es'}</p>
+                                            <p className="text-[9px] font-bold text-slate-300 uppercase">{cartProducts.length} producto{cartProducts.length === 1 ? '' : 's'} · {cartTotalQuantity} unidad{cartTotalQuantity === 1 ? '' : 'es'}</p>
+                                            {cartSupermarketQuantity > 0 && <p className={`text-[9px] font-black uppercase ${cartSupermarketQuantity >= SUPERMARKET_MINIMUM_QUANTITY ? 'text-slate-400' : 'text-red-500'}`}>Supermercado: {cartSupermarketQuantity}/{SUPERMARKET_MINIMUM_QUANTITY} unidades mínimas</p>}
                                         </div>
-                                        <p className="text-2xl font-black text-red-500">${cartProducts.reduce((total, product) => total + getProductLineTotal(product, product.quantity), 0).toFixed(2)}</p>
+                                        <p className="text-2xl font-black text-red-500">${cartSubtotal.toFixed(2)}</p>
                                     </div>
 
                                     <button type="button" onClick={startCartCheckout} disabled={cartProducts.length === 0 || cartProducts.some(product => Number(product.quantity || 0) < 1 || getProductStock(product) <= 0)} className="btn-primary w-full h-12 disabled:opacity-50 disabled:cursor-not-allowed">Quiero comprar</button>
@@ -3110,7 +3186,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                 products={activeProducts}
                                                 ads={ads}
                                                 getProductGallery={getProductGallery}
-                                                onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(1); setCurrentImageIndex(0); setView('product-detail'); }}
+                                                onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
                                             />
                                         )}
 
@@ -3118,7 +3194,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             <Supermercado.SupermercadoHomeSection
                                                 products={supermarketProducts}
                                                 getProductGallery={getProductGallery}
-                                                onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(1); setCurrentImageIndex(0); setView('product-detail'); }}
+                                                onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
                                             />
                                         )}
                                     </div>
@@ -3166,6 +3242,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                 <p className="text-[9px] font-black text-slate-400 uppercase">Resumen de compra</p>
                                                 <p className="text-[9px] font-black text-red-500 uppercase">{checkoutProducts.length}/{CART_MAX_ITEMS} productos · {checkoutTotalQuantity} unidad{checkoutTotalQuantity === 1 ? '' : 'es'}</p>
                                             </div>
+                                            {checkoutSupermarketQuantity > 0 && <p className="text-[9px] font-black text-red-500 uppercase">Supermercado: {checkoutSupermarketQuantity}/{SUPERMARKET_MINIMUM_QUANTITY} unidades mínimas</p>}
                                             {checkoutProducts.map(product => (
                                                 <div key={product.id} className="flex items-center justify-between gap-3 text-sm font-bold checkout-summary-row">
                                                     <span className="text-slate-700">{product.name} <span className="text-[10px] text-slate-400 uppercase">x{Number(product.quantity || 0)} · unitario ${Number(product.unitPrice || product.price || 0).toFixed(2)}</span></span>
