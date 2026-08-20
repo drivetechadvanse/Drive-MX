@@ -2560,6 +2560,62 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         }
     };
 
+    const applyPendingPurchaseTransferLocal = (id, data) => {
+        setPendingTransfers(prev => {
+            const current = Array.isArray(prev) ? prev : [];
+            const next = [{ id, ...data }, ...current.filter(item => String(item?.id || item?.transferId || '') !== String(id))];
+            writeLocal('driveMxPendingTransfers', next);
+            return next;
+        });
+    };
+
+    const registerPendingPurchaseTransferApi = async (id, transferData) => {
+        const endpoint = '/api/register-pending-transfer';
+        const maxAttempts = 2;
+        let lastError = null;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            try {
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ transferId: id, transfer: transferData }),
+                    signal: controller.signal
+                });
+                const responseData = await response.json().catch(() => ({}));
+                if (!response.ok || responseData.success !== true) {
+                    const error = new Error(responseData.error || `No se pudo registrar la transferencia en el servidor (${response.status}).`);
+                    error.code = responseData.code || `HTTP_${response.status}`;
+                    error.httpStatus = response.status;
+                    error.responseData = responseData;
+                    throw error;
+                }
+                return responseData;
+            } catch(err) {
+                const normalizedError = err?.name === 'AbortError'
+                    ? Object.assign(new Error('El registro de la transferencia excedió el tiempo máximo de espera.'), { code: 'REGISTER_TRANSFER_TIMEOUT' })
+                    : err;
+                lastError = normalizedError;
+                const httpStatus = Number(normalizedError?.httpStatus || 0);
+                const retryable = !httpStatus || httpStatus === 408 || httpStatus === 429 || httpStatus >= 500;
+                console.error('[Transferencias][Servidor] No se pudo registrar la transferencia pendiente.', {
+                    transferId: id,
+                    attempt,
+                    retryable,
+                    ...getOperationErrorDetails(normalizedError)
+                }, normalizedError);
+                if (attempt >= maxAttempts || !retryable) throw normalizedError;
+                await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        }
+
+        throw lastError || new Error('No se pudo registrar la transferencia pendiente en el servidor.');
+    };
+
     const createPendingTransfer = async () => {
         const normalizedPaymentSettings = normalizePaymentSettings(paymentSettings);
         if (!normalizedPaymentSettings.bankAccount) {
@@ -2600,7 +2656,26 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 createdAt: now,
                 updatedAt: now
             });
-            await saveDoc('bank_transfers', id, transferData, { throwOnError: true, applyLocalOnError: false });
+            try {
+                await registerPendingPurchaseTransferApi(id, transferData);
+                applyPendingPurchaseTransferLocal(id, transferData);
+            } catch(serverError) {
+                const serverStatus = Number(serverError?.httpStatus || 0);
+                const canUseDirectFirestoreFallback = !serverStatus || serverStatus === 404 || serverStatus === 405 || serverStatus >= 500;
+                if (!canUseDirectFirestoreFallback) throw serverError;
+
+                console.warn('[Transferencias][Registro] Se usará la escritura directa de respaldo en Firestore.', {
+                    transferId: id,
+                    serverStatus: serverStatus || null,
+                    ...getOperationErrorDetails(serverError)
+                });
+                try {
+                    await saveDoc('bank_transfers', id, transferData, { throwOnError: true, applyLocalOnError: false });
+                } catch(firestoreError) {
+                    firestoreError.serverRegistrationError = getOperationErrorDetails(serverError);
+                    throw firestoreError;
+                }
+            }
             alert('Transferencia registrada como Pendiente. Tu solicitud se procesará cuando el administrador confirme el pago.');
             clearCompletedCartIfNeeded();
             resetPublicFlow();
@@ -3480,3 +3555,4 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
 };
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
