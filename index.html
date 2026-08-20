@@ -185,7 +185,7 @@
             const productsToValidate = (Array.isArray(items) ? items : []).filter(Boolean);
             const supermarketProductCount = getSupermarketPurchaseProductCount(productsToValidate);
             if (supermarketProductCount === 0 || supermarketProductCount >= SUPERMARKET_MINIMUM_PRODUCTS) return '';
-            return `La compra de Supermercado requiere seleccionar mínimo ${SUPERMARKET_MINIMUM_PRODUCTS} productos distintos en el carrito. Actualmente seleccionaste ${supermarketProductCount}. La cantidad de cada producto puede elegirse libremente según disponibilidad.`;
+            return `La compra de Supermercado requiere seleccionar mínimo ${SUPERMARKET_MINIMUM_PRODUCTS} productos en el carrito. Actualmente seleccionaste ${supermarketProductCount}. La cantidad de cada producto puede elegirse libremente según disponibilidad.`;
         };
         const getDriveMxMaximumPurchaseError = (items = []) => {
             const driveMxProductCount = getDriveMxPurchaseProductCount(items);
@@ -280,9 +280,16 @@
         };
         const getProductStock = (product = {}) => ProductDetails.getProductStock ? ProductDetails.getProductStock(product) : Math.max(0, Math.floor(Number(product?.stock || product?.availableStock || 0)));
         const clampProductQuantity = (quantity = 1, product = {}) => ProductDetails.clampQuantity ? ProductDetails.clampQuantity(quantity, product) : Math.min(Math.max(1, Math.floor(Number(quantity || 1))), getProductStock(product));
+        const clampProductSelectionQuantity = (quantity = 0, product = {}) => {
+            const stock = getProductStock(product);
+            if (stock <= 0) return 0;
+            const numericQuantity = Math.floor(Number(quantity));
+            if (!Number.isFinite(numericQuantity) || numericQuantity <= 0) return 0;
+            return Math.min(numericQuantity, stock);
+        };
         const getProductUnitPrice = (product = {}) => ProductDetails.getProductUnitPrice ? ProductDetails.getProductUnitPrice(product) : Number(product?.unitPrice ?? product?.price ?? 0);
         const getProductLineTotal = (product = {}, quantity = product?.quantity || 1) => ProductDetails.getProductLineTotal ? ProductDetails.getProductLineTotal(product, quantity) : Number((getProductUnitPrice(product) * Math.max(1, Math.floor(Number(quantity || 1)))).toFixed(2));
-        const getInitialProductPurchaseQuantity = () => 1;
+        const getInitialProductPurchaseQuantity = () => 0;
         const copyProductCommerceFields = (target = {}, source = {}) => {
             const categorized = typeof Supermercado.copyCategory === 'function'
                 ? Supermercado.copyCategory(target, source)
@@ -411,7 +418,7 @@
             const [registeredUsersPage, setRegisteredUsersPage] = useState(1);
             const [selectedProductId, setSelectedProductId] = useState(null);
             const [currentImageIndex, setCurrentImageIndex] = useState(0);
-            const [selectedProductQuantity, setSelectedProductQuantity] = useState(1);
+            const [selectedProductQuantity, setSelectedProductQuantity] = useState(0);
             const [cartItems, setCartItems] = useState(() => readVisitorCart());
             const [isCartOpen, setIsCartOpenState] = useState(false);
             const [checkoutProductIds, setCheckoutProductIds] = useState([]);
@@ -1311,7 +1318,7 @@
                 const liveProduct = findProductById(item.id);
                 return createPurchasableProduct(liveProduct || item, item.quantity || 1, item);
             };
-            const selectedPurchaseQuantity = selectedProduct ? clampProductQuantity(selectedProductQuantity, selectedProduct) : 1;
+            const selectedPurchaseQuantity = selectedProduct ? clampProductSelectionQuantity(selectedProductQuantity, selectedProduct) : 0;
             const selectedCheckoutProduct = selectedProduct ? createPurchasableProduct(selectedProduct, selectedPurchaseQuantity) : null;
             const cartProducts = cartItems.map(hydrateCartProduct).filter(Boolean);
             const cartSubtotal = cartProducts.reduce((total, product) => total + getProductLineTotal(product, product.quantity), 0);
@@ -1448,19 +1455,24 @@
 
             const isProductInCart = (productId) => cartItems.some(item => String(item.id) === String(productId));
 
-            const addProductToCart = (product, quantity = 1) => {
+            const addProductToCart = (product, quantity = 0) => {
                 if (!product?.id) return;
-                const cartItem = createCartItemFromProduct(product, quantity);
+                const requestedQuantity = clampProductSelectionQuantity(quantity, product);
+                if (requestedQuantity < 1) {
+                    alert('Selecciona una cantidad mayor a cero antes de agregar el producto al carrito.');
+                    return;
+                }
+                const cartItem = createCartItemFromProduct(product, requestedQuantity);
                 if (!ensureCheckoutInventoryAllowed([cartItem])) return;
                 if (isProductInCart(product.id)) {
-                    const nextItems = cartItems.map(item => String(item.id) === String(product.id) ? createCartItemFromProduct(product, quantity) : item);
+                    const nextItems = cartItems.map(item => String(item.id) === String(product.id) ? createCartItemFromProduct(product, requestedQuantity) : item);
                     persistCart(nextItems);
                     alert('Cantidad actualizada en el carrito.');
                     setIsCartOpen(true);
                     return;
                 }
                 if (!isSupermarketPurchaseProduct(cartItem) && getDriveMxPurchaseProductCount(cartItems) >= CART_MAX_ITEMS) {
-                    alert(`Productos Drive MX permiten máximo ${CART_MAX_ITEMS} productos distintos por compra. Los productos de Supermercado no usan este límite y requieren mínimo ${SUPERMARKET_MINIMUM_PRODUCTS} productos distintos.`);
+                    alert(`Productos Drive MX permiten máximo ${CART_MAX_ITEMS} productos distintos por compra. Los productos de Supermercado no usan este límite y requieren mínimo ${SUPERMARKET_MINIMUM_PRODUCTS} productos seleccionados en el carrito.`);
                     setIsCartOpen(true);
                     return;
                 }
@@ -1502,7 +1514,12 @@
                     alert('No se encontró el producto seleccionado.');
                     return;
                 }
-                const checkoutItem = createPurchasableProduct(product, quantity);
+                const requestedQuantity = clampProductSelectionQuantity(quantity, product);
+                if (requestedQuantity < 1) {
+                    alert('Selecciona una cantidad mayor a cero antes de comprar.');
+                    return;
+                }
+                const checkoutItem = createPurchasableProduct(product, requestedQuantity);
                 if (!ensureSupermarketMinimumAllowed([checkoutItem])) return;
                 if (!ensureCheckoutInventoryAllowed([checkoutItem])) return;
                 if (!ensureCheckoutWalletsAllowed([checkoutItem])) return;
@@ -1538,7 +1555,7 @@
                 packagesManager.resetTracking();
                 setSelectedProductId(null);
                 setCheckoutProductIds([]);
-                setSelectedProductQuantity(1);
+                setSelectedProductQuantity(0);
                 setCurrentImageIndex(0);
                 setSelectedPaymentMethod('transfer');
                 setIsCartOpen(false);
@@ -3154,7 +3171,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     <div>
                                         <p className="text-[9px] text-red-500 font-black uppercase tracking-widest">Carrito de compra</p>
                                         <h2 className="text-xl font-black tracking-tight">Productos seleccionados</h2>
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">Drive MX: máximo {CART_MAX_ITEMS} productos · Supermercado: mínimo {SUPERMARKET_MINIMUM_PRODUCTS} productos distintos · la cantidad de cada producto es libre · se limpia automáticamente en {Math.round(CART_TTL_MS / 60000)} minutos</p>
+                                        <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">Drive MX: máximo {CART_MAX_ITEMS} productos · Supermercado: mínimo {SUPERMARKET_MINIMUM_PRODUCTS} productos en el carrito · la cantidad de cada producto es libre · se limpia automáticamente en {Math.round(CART_TTL_MS / 60000)} minutos</p>
                                     </div>
                                     <button type="button" onClick={() => setIsCartOpen(false)} className="w-9 h-9 rounded-xl bg-white text-slate-400 hover:text-red-500 font-black">×</button>
                                 </div>
@@ -3194,7 +3211,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                             <p className="text-[9px] font-black text-slate-400 uppercase">Total acumulado</p>
                                             <p className="text-[9px] font-bold text-slate-300 uppercase">{cartProducts.length} producto{cartProducts.length === 1 ? '' : 's'} · {cartTotalQuantity} unidad{cartTotalQuantity === 1 ? '' : 'es'}</p>
                                             {cartDriveMxProductCount > 0 && <p className="text-[9px] font-black uppercase text-slate-400">Drive MX: {cartDriveMxProductCount}/{CART_MAX_ITEMS} productos máximos</p>}
-                                            {cartSupermarketProductCount > 0 && <p className={`text-[9px] font-black uppercase ${cartSupermarketProductCount >= SUPERMARKET_MINIMUM_PRODUCTS ? 'text-slate-400' : 'text-red-500'}`}>Supermercado: {cartSupermarketProductCount}/{SUPERMARKET_MINIMUM_PRODUCTS} productos distintos mínimos</p>}
+                                            {cartSupermarketProductCount > 0 && <p className={`text-[9px] font-black uppercase ${cartSupermarketProductCount >= SUPERMARKET_MINIMUM_PRODUCTS ? 'text-slate-400' : 'text-red-500'}`}>Supermercado: {cartSupermarketProductCount}/{SUPERMARKET_MINIMUM_PRODUCTS} productos mínimos en el carrito</p>}
                                         </div>
                                         <p className="text-2xl font-black text-red-500">${cartSubtotal.toFixed(2)}</p>
                                     </div>
@@ -3254,6 +3271,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 currentImageIndex={currentImageIndex}
                                 setCurrentImageIndex={setCurrentImageIndex}
                                 quantity={selectedPurchaseQuantity}
+                                allowZeroQuantity={true}
                                 onQuantityChange={setSelectedProductQuantity}
                                 Icons={Icons}
                                 productSizesText={productSizesText}
@@ -3288,7 +3306,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                 <p className="text-[9px] font-black text-red-500 uppercase">{checkoutProducts.length} producto{checkoutProducts.length === 1 ? '' : 's'} · {checkoutTotalQuantity} unidad{checkoutTotalQuantity === 1 ? '' : 'es'}</p>
                                             </div>
                                             {checkoutDriveMxProductCount > 0 && <p className="text-[9px] font-black text-slate-400 uppercase">Drive MX: {checkoutDriveMxProductCount}/{CART_MAX_ITEMS} productos máximos</p>}
-                                            {checkoutSupermarketProductCount > 0 && <p className={`text-[9px] font-black uppercase ${checkoutSupermarketProductCount >= SUPERMARKET_MINIMUM_PRODUCTS ? 'text-slate-400' : 'text-red-500'}`}>Supermercado: {checkoutSupermarketProductCount}/{SUPERMARKET_MINIMUM_PRODUCTS} productos distintos mínimos</p>}
+                                            {checkoutSupermarketProductCount > 0 && <p className={`text-[9px] font-black uppercase ${checkoutSupermarketProductCount >= SUPERMARKET_MINIMUM_PRODUCTS ? 'text-slate-400' : 'text-red-500'}`}>Supermercado: {checkoutSupermarketProductCount}/{SUPERMARKET_MINIMUM_PRODUCTS} productos mínimos en el carrito</p>}
                                             {checkoutProducts.map(product => (
                                                 <div key={product.id} className="flex items-center justify-between gap-3 text-sm font-bold checkout-summary-row">
                                                     <span className="text-slate-700">{product.name} <span className="text-[10px] text-slate-400 uppercase">x{Number(product.quantity || 0)} · unitario ${Number(product.unitPrice || product.price || 0).toFixed(2)}</span></span>
