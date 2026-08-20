@@ -3,7 +3,8 @@ const SupermercadoEmail = require("../supermercado-module/supermercado-email.js"
 
 const SALE_NOTIFICATION_MESSAGE =
   "Tu producto ha sido vendido. Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.";
-const SUPERMARKET_MINIMUM_QUANTITY = 5;
+const DRIVE_MX_CART_MAX_PRODUCTS = 2;
+const SUPERMARKET_MINIMUM_PRODUCTS = 5;
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -129,9 +130,38 @@ function isSupermarketProduct(product = {}) {
     : false;
 }
 
+function getUniqueProducts(orderProducts = [], predicate = () => true) {
+  const uniqueProducts = [];
+  const seenIds = new Set();
+  (Array.isArray(orderProducts) ? orderProducts : []).forEach((product, index) => {
+    if (!product || !predicate(product)) return;
+    const productId = clean(product.id);
+    const uniqueKey = productId || `__product_${index}`;
+    if (seenIds.has(uniqueKey)) return;
+    seenIds.add(uniqueKey);
+    uniqueProducts.push(product);
+  });
+  return uniqueProducts;
+}
+
+function getSupermarketProducts(orderProducts = []) {
+  return getUniqueProducts(orderProducts, isSupermarketProduct);
+}
+
+function getDriveMxProducts(orderProducts = []) {
+  return getUniqueProducts(orderProducts, (product) => !isSupermarketProduct(product));
+}
+
+function getSupermarketProductCount(orderProducts = []) {
+  return getSupermarketProducts(orderProducts).length;
+}
+
+function getDriveMxProductCount(orderProducts = []) {
+  return getDriveMxProducts(orderProducts).length;
+}
+
 function getSupermarketQuantity(orderProducts = []) {
-  return orderProducts
-    .filter(isSupermarketProduct)
+  return getSupermarketProducts(orderProducts)
     .reduce((total, item) => total + normalizeQuantity(item.quantity || item.productQuantity || 1), 0);
 }
 
@@ -442,13 +472,16 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    if (orderProducts.length > 2) {
+    const driveMxProductCount = getDriveMxProductCount(orderProducts);
+    if (driveMxProductCount > DRIVE_MX_CART_MAX_PRODUCTS) {
       return res.status(400).json({
         success: false,
         requestId,
         stage,
-        code: "ORDER_PRODUCTS_LIMIT",
-        error: "El carrito permite máximo 2 productos por compra.",
+        code: "DRIVE_MX_PRODUCTS_LIMIT",
+        driveMxProductCount,
+        driveMxMaximumProducts: DRIVE_MX_CART_MAX_PRODUCTS,
+        error: `Productos Drive MX permiten máximo ${DRIVE_MX_CART_MAX_PRODUCTS} productos distintos por compra.`,
       });
     }
 
@@ -484,19 +517,21 @@ module.exports = async function handler(req, res) {
     );
     const orderTotal = Number(cart.total ?? orderSubtotal + orderShippingFee);
     const totalQuantity = orderProducts.reduce((total, item) => total + Number(item.quantity || 1), 0);
+    const supermarketProductCount = getSupermarketProductCount(orderProducts);
     const supermarketQuantity = getSupermarketQuantity(orderProducts);
-    if (supermarketQuantity > 0 && supermarketQuantity < SUPERMARKET_MINIMUM_QUANTITY) {
+    if (supermarketProductCount > 0 && supermarketProductCount < SUPERMARKET_MINIMUM_PRODUCTS) {
       return res.status(400).json({
         success: false,
         requestId,
         stage,
-        code: "SUPERMARKET_MINIMUM_QUANTITY",
+        code: "SUPERMARKET_MINIMUM_PRODUCTS",
+        supermarketProductCount,
+        supermarketMinimumProducts: SUPERMARKET_MINIMUM_PRODUCTS,
         supermarketQuantity,
-        supermarketMinimumQuantity: SUPERMARKET_MINIMUM_QUANTITY,
-        error: `La compra de Supermercado requiere mínimo ${SUPERMARKET_MINIMUM_QUANTITY} unidades en total.`,
+        error: `La compra de Supermercado requiere seleccionar mínimo ${SUPERMARKET_MINIMUM_PRODUCTS} productos en el carrito. La cantidad de cada producto puede elegirse libremente según disponibilidad.`,
       });
     }
-    const itemCount = Number(cart.totalQuantity || cart.quantityTotal || totalQuantity || cart.itemCount || orderProducts.length);
+    const itemCount = Number(cart.itemCount || orderProducts.length);
     const productSubject =
       orderProducts.length > 1 ? `${orderProducts.length} productos` : orderProducts[0].name;
 
@@ -576,6 +611,8 @@ module.exports = async function handler(req, res) {
       authSource,
       receiverSource,
       saleNotificationTargets: targetsByEmail.size,
+      driveMxProductCount,
+      supermarketProductCount,
       supermarketQuantity,
     });
 
@@ -596,7 +633,8 @@ module.exports = async function handler(req, res) {
         <p><b>Subtotal productos:</b> $${money(orderSubtotal)}</p>
         <p><b>Gastos de envío:</b> $${money(orderShippingFee)}</p>
         <p><b>Total acumulado:</b> $${money(orderTotal)}</p>
-        <p><b>Cantidad de productos:</b> ${itemCount}</p>
+        <p><b>Productos distintos:</b> ${itemCount}</p>
+        <p><b>Unidades totales:</b> ${totalQuantity}</p>
 
         <hr />
 
@@ -667,7 +705,7 @@ module.exports = async function handler(req, res) {
         orderSubtotal
       )}\nGastos de envío: $${money(orderShippingFee)}\nTotal acumulado: $${money(
         orderTotal
-      )}\nCantidad total comprada: ${itemCount}\n\nComprador:\nNombre: ${clean(delivery.fullName)}\nTeléfono: ${clean(
+      )}\nProductos distintos: ${itemCount}\nUnidades totales: ${totalQuantity}\n\nComprador:\nNombre: ${clean(delivery.fullName)}\nTeléfono: ${clean(
         delivery.phone
       )}\nCorreo: ${clean(delivery.email)}\nReferencias: ${clean(delivery.references)}`;
 
@@ -856,7 +894,6 @@ module.exports = async function handler(req, res) {
     });
   }
 };
-
 
 
 
