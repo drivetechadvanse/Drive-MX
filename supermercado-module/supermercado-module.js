@@ -172,5 +172,7 @@ globalThis.DriveMxSupermercado = {
   ...Core,
   PRODUCTS_PER_RAIL,
   ProductCategorySelect,
+  SupermarketProductCard,
   SupermercadoHomeSection
 };
+
