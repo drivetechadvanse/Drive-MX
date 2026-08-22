@@ -490,6 +490,7 @@
         phone: sessionUser.phone || '',
         saleNotificationEmail: sessionUser.saleNotificationEmail || '',
         assignmentsAuthorized: sessionUser.assignmentsAuthorized === true,
+        supermarketProductsAuthorized: sessionUser.supermarketProductsAuthorized === true,
         accountStatus: sessionUser.accountStatus || '',
         active: sessionUser.active !== false,
         blocked: sessionUser.blocked === true
@@ -499,6 +500,7 @@
         phone: mergedProfile.phone || '',
         saleNotificationEmail: mergedProfile.saleNotificationEmail || '',
         assignmentsAuthorized: mergedProfile.assignmentsAuthorized === true,
+        supermarketProductsAuthorized: mergedProfile.supermarketProductsAuthorized === true,
         accountStatus: mergedProfile.accountStatus || '',
         active: mergedProfile.active !== false,
         blocked: mergedProfile.blocked === true
@@ -598,4 +600,5 @@
     }
   };
 })(window);
+
 
