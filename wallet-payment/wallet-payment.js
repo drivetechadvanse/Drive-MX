@@ -6,8 +6,6 @@
 
   const { useState, useCallback, useRef } = React;
   const SECONDARY_APP_NAME = 'DriveMxWalletPaymentAuthApp';
-  const PAYMENT_ENDPOINT = '/api/pay-with-wallet';
-  const MAX_ATTEMPTS = 2;
   const persistencePromises = new WeakMap();
 
   const clean = (value) => String(value ?? '').trim();
@@ -148,47 +146,6 @@
     };
   }
 
-  async function postWalletPayment({ token, paymentId, order } = {}) {
-    let lastError = null;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-      const controller = new AbortController();
-      const timeoutId = global.setTimeout(() => controller.abort(), 45000);
-      try {
-        const response = await fetch(PAYMENT_ENDPOINT, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`
-          },
-          body: JSON.stringify({ paymentId, order }),
-          signal: controller.signal
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok || payload.success !== true) {
-          const error = publicError(payload.error || `No se pudo procesar el pago (${response.status}).`, payload.code || `HTTP_${response.status}`);
-          error.httpStatus = response.status;
-          error.details = payload.details || null;
-          error.serverPayload = payload;
-          throw error;
-        }
-        return payload;
-      } catch (error) {
-        const normalized = error?.name === 'AbortError'
-          ? publicError('El cobro excedió el tiempo máximo de espera.', 'wallet-payment-timeout')
-          : error;
-        lastError = normalized;
-        const status = Number(normalized.httpStatus || 0);
-        const retryable = !status || status === 408 || status === 429 || status >= 500;
-        if (attempt >= MAX_ATTEMPTS || !retryable) throw normalized;
-        await new Promise((resolve) => global.setTimeout(resolve, 600 * attempt));
-      } finally {
-        global.clearTimeout(timeoutId);
-      }
-    }
-    throw lastError || publicError('No se pudo procesar el pago.', 'wallet-payment-error');
-  }
-
-
   const CLIENT_MAX_PRODUCTS = 40;
   const GENERAL_SHIPPING_FEE = 150;
   const DEFAULT_CASHBACK_AMOUNT = 10;
@@ -205,6 +162,20 @@
 
   function hasOwn(source, field) {
     return Boolean(source && typeof source === 'object' && Object.prototype.hasOwnProperty.call(source, field));
+  }
+
+  function createOrderSignature(source = '') {
+    const value = String(source || '');
+    let first = 2166136261;
+    let second = 2246822519;
+    for (let index = 0; index < value.length; index += 1) {
+      const code = value.charCodeAt(index);
+      first ^= code;
+      first = Math.imul(first, 16777619);
+      second ^= code + index;
+      second = Math.imul(second, 3266489917);
+    }
+    return `${(first >>> 0).toString(16).padStart(8, '0')}${(second >>> 0).toString(16).padStart(8, '0')}`;
   }
 
   function clientPaymentError(message, code = 'wallet-payment-error', details = null) {
@@ -348,7 +319,8 @@
     if (!Number.isFinite(clientTotal) || clientTotal <= 0) {
       throw clientPaymentError('El total de la compra no es válido.', 'wallet-total-zero');
     }
-    const orderSignature = JSON.stringify({ products: [...products].sort((a, b) => a.id.localeCompare(b.id)), delivery, total: clientTotal });
+    const orderSignatureSource = JSON.stringify({ products: [...products].sort((a, b) => a.id.localeCompare(b.id)), delivery, total: clientTotal });
+    const orderSignature = createOrderSignature(orderSignatureSource);
     return { products, delivery, clientTotal, orderSignature };
   }
 
@@ -392,6 +364,10 @@
   async function processWalletPaymentInFirestore({ fbase, appId, credentialUser, firebaseApp, paymentId, order, Wallet } = {}) {
     if (!fbase?.runTransaction || !fbase?.getFirestore || !fbase?.doc) {
       throw clientPaymentError('Firebase no está disponible para realizar el cobro.', 'wallet-firebase-unavailable');
+    }
+    paymentId = clean(paymentId);
+    if (!/^WP-\d{10,}-[A-Z0-9]{6}$/.test(paymentId)) {
+      throw clientPaymentError('El identificador del pago no es válido.', 'invalid-payment-id');
     }
     const buyerId = safeId(credentialUser?.uid);
     const buyerEmail = normalizeEmail(credentialUser?.email);
@@ -461,12 +437,16 @@
             };
         const supermarketSettings = supermarketSettingsSnapshot?.exists() ? (supermarketSettingsSnapshot.data() || {}) : {};
         const commissionPercent = roundMoney(Math.max(0, Math.min(100, Number(walletSettings.globalCommissionPercent || 0))));
-        const configuredCashback = Number(walletSettings.globalCashbackAmount ?? DEFAULT_CASHBACK_AMOUNT);
-        const cashbackAmount = roundMoney(Number.isFinite(configuredCashback) && configuredCashback >= 0 ? Math.min(configuredCashback, 1000000) : DEFAULT_CASHBACK_AMOUNT);
+        const configuredCashbackValue = Number(walletSettings.globalCashbackAmount ?? DEFAULT_CASHBACK_AMOUNT);
+        const configuredCashback = roundMoney(Number.isFinite(configuredCashbackValue) && configuredCashbackValue >= 0
+          ? Math.min(configuredCashbackValue, 1000000)
+          : DEFAULT_CASHBACK_AMOUNT);
         const supermarketFallback = normalizeShippingFee(supermarketSettings.shippingFee, GENERAL_SHIPPING_FEE);
         const subtotal = roundMoney(liveItems.reduce((sum, item) => sum + item.lineTotal, 0));
         const shippingFee = calculateShippingFee(liveItems, supermarketFallback);
         const total = roundMoney(subtotal + shippingFee);
+        // Nunca se acredita más Cash Back que el importe efectivamente cobrado.
+        const cashbackAmount = roundMoney(Math.min(configuredCashback, total));
         const totalQuantity = liveItems.reduce((sum, item) => sum + item.requested.quantity, 0);
         if (total <= 0) throw clientPaymentError('El total de la compra debe ser mayor a $0.00.', 'wallet-total-zero');
         if (Math.abs(total - normalizedOrder.clientTotal) > 0.01) {
@@ -479,9 +459,8 @@
           .filter(Boolean)));
         const ownerProfileRefs = ownerIds.map((ownerId) => dataDoc(fbase, db, appId, 'operators', ownerId));
         const ownerWalletRefs = ownerIds.map((ownerId) => dataDoc(fbase, db, appId, 'wallets', ownerId));
-        // El comprador no tiene permiso para leer el espejo privado user_products
-        // de otro vendedor. Solo se leen perfiles y carteras; el espejo correcto se
-        // actualiza directamente dentro de la misma transacción.
+        // El comprador no necesita leer los espejos privados de publicaciones.
+        // La transacción usa products como fuente principal de inventario.
         const relatedSnapshots = await getTransactionSnapshots(transaction, [...ownerProfileRefs, ...ownerWalletRefs]);
 
         const buyerWalletRaw = buyerWalletSnapshot.data() || {};
@@ -599,6 +578,7 @@
             lastSoldQuantity: item.requested.quantity,
             lastWalletPaymentId: paymentId,
             lastWalletPaymentBuyerId: buyerId,
+            lastWalletPaymentItemIndex: index,
             lastWalletPaymentUnitPrice: item.unitPrice,
             lastWalletPaymentLineTotal: item.lineTotal,
             lastWalletPaymentOrderTotal: total
@@ -663,20 +643,11 @@
           sales.push({ id: saleId, ...sale });
           inventoryUpdates.push({ productId: item.product.id, ownerId: ownerDocId, patch: inventoryPatch });
 
+          // El documento público products es la fuente principal de inventario.
+          // No se escriben aquí los espejos admin_products/user_products: si uno
+          // no existe, una escritura merge sería un CREATE y podría cancelar todo
+          // el cobro aun cuando la cartera y el producto fueran válidos.
           transaction.set(item.productRef, inventoryPatch, { merge: true });
-          if (ownerDocId) {
-            transaction.set(
-              dataDoc(fbase, db, appId, 'user_products', ownerDocId, 'items', item.product.id),
-              inventoryPatch,
-              { merge: true }
-            );
-          } else {
-            transaction.set(
-              dataDoc(fbase, db, appId, 'admin_products', item.product.id),
-              inventoryPatch,
-              { merge: true }
-            );
-          }
           transaction.set(dataDoc(fbase, db, appId, 'completed_sales', saleId), sale);
           if (ownerDocId) transaction.set(dataDoc(fbase, db, appId, 'user_sales', ownerDocId, 'items', saleId), { id: saleId, ...sale, visibleToUserId: ownerDocId });
 
@@ -721,41 +692,46 @@
           transaction.set(write.commissionRef, write.record);
         });
 
-        walletStates.forEach((state, walletId) => {
+        walletStates.forEach((state) => {
           if (!state.changed && !state.isBuyer) return;
           const current = state.wallet;
           const raw = state.raw || {};
           const isBuyer = state.isBuyer;
-          const nextWallet = {
-            ...raw,
-            id: walletId,
-            uid: walletId,
-            userId: walletId,
-            userName: clean(raw.userName || current.userName || 'Usuario'),
-            userEmail: normalizeEmail(raw.userEmail || current.userEmail),
-            userPhone: clean(raw.userPhone || current.userPhone || ''),
-            currency: 'MXN',
+          const walletPatch = {
             balance: roundMoney(state.currentBalance),
-            activated: current.activated === true,
-            firstRechargeCompleted: current.firstRechargeCompleted === true,
-            rechargeCount: Number(current.rechargeCount || 0),
-            totalRecharged: roundMoney(current.totalRecharged || 0),
+            activated: true,
+            firstRechargeCompleted: true,
             totalCommissions: roundMoney(Number(current.totalCommissions || 0) + state.commissionTotal),
-            createdAt: raw.createdAt ?? current.createdAt ?? now,
             updatedAt: now,
             updatedBy: buyerEmail,
             status: state.currentBalance > 0 ? 'Activa' : 'Sin saldo'
           };
-          if (isBuyer) {
-            nextWallet.totalPurchases = roundMoney(Number(current.totalPurchases || 0) + total);
-            nextWallet.totalCashback = roundMoney(Number(current.totalCashback || 0) + cashbackAmount);
-            nextWallet.lastPurchaseAt = now;
-            nextWallet.lastCashbackAt = cashbackAmount > 0 ? now : (raw.lastCashbackAt ?? current.lastCashbackAt ?? null);
-            nextWallet.lastWalletPaymentId = paymentId;
+          // Las carteras antiguas de vendedores pueden no contener todavía todos
+          // los campos del esquema actual. Se normalizan dentro de la misma
+          // transacción sin modificar la identidad ni el saldo fuera del cobro.
+          if (!isBuyer) {
+            walletPatch.id = clean(current.id || state.ref.id);
+            walletPatch.uid = clean(current.uid || current.userId || state.ref.id);
+            walletPatch.userId = clean(current.userId || current.uid || state.ref.id);
+            walletPatch.userName = clean(current.userName || 'Usuario');
+            walletPatch.userEmail = normalizeEmail(current.userEmail || '');
+            walletPatch.userPhone = clean(current.userPhone || '');
+            walletPatch.currency = 'MXN';
+            walletPatch.rechargeCount = Math.max(0, Math.floor(Number(current.rechargeCount || 0)));
+            walletPatch.totalRecharged = roundMoney(current.totalRecharged || 0);
+            walletPatch.createdAt = current.createdAt || raw.createdAt || now;
           }
-          if (state.commissionTotal > 0) nextWallet.lastCommissionAt = now;
-          transaction.set(state.ref, nextWallet, { merge: true });
-          state.nextWallet = nextWallet;
+          if (isBuyer) {
+            walletPatch.totalPurchases = roundMoney(Number(current.totalPurchases || 0) + total);
+            walletPatch.totalCashback = roundMoney(Number(current.totalCashback || 0) + cashbackAmount);
+            walletPatch.lastPurchaseAt = now;
+            if (cashbackAmount > 0) walletPatch.lastCashbackAt = now;
+            else if (Object.prototype.hasOwnProperty.call(raw, 'lastCashbackAt')) walletPatch.lastCashbackAt = raw.lastCashbackAt;
+            walletPatch.lastWalletPaymentId = paymentId;
+          }
+          if (state.commissionTotal > 0) walletPatch.lastCommissionAt = now;
+          transaction.set(state.ref, walletPatch, { merge: true });
+          state.nextWallet = { ...raw, ...walletPatch };
         });
 
         const buyerBalanceAfter = roundMoney(buyerState.currentBalance);
@@ -806,14 +782,18 @@
           buyerCommissionAmount,
           balanceBefore: buyerBalanceBefore,
           balanceAfter: buyerBalanceAfter,
-          products: liveItems.map((item) => ({
+          products: liveItems.map((item, index) => ({
+            index,
             id: item.product.id,
             name: clean(item.product.name || item.product.id).slice(0, 180),
             category: clean(item.product.category || item.product.productCategory || item.product.categoria || ''),
             quantity: item.requested.quantity,
             unitPrice: item.unitPrice,
             lineTotal: item.lineTotal,
-            ownerId: item.ownerId ? safeId(item.ownerId) : ''
+            stockBefore: item.stock,
+            stockAfter: Math.max(0, item.stock - item.requested.quantity),
+            ownerId: item.ownerId ? safeId(item.ownerId) : '',
+            saleId: safeId(`wallet_${paymentId}_${index + 1}`)
           })),
           delivery: normalizedOrder.delivery,
           saleIds: clientResult.saleIds,
@@ -833,7 +813,14 @@
       // intento conserva el mismo paymentId. La escritura existente será rechazada
       // como update; en ese caso se recupera el resultado ya pagado sin volver a cobrar.
       const rawCode = clean(error?.code).toLowerCase();
-      if (rawCode.includes('permission-denied') && typeof fbase?.getDoc === 'function') {
+      const paymentMayAlreadyExist = [
+        'permission-denied',
+        'unavailable',
+        'aborted',
+        'deadline-exceeded',
+        'unknown'
+      ].some((code) => rawCode.includes(code));
+      if (paymentMayAlreadyExist && typeof fbase?.getDoc === 'function') {
         try {
           const existingPaymentSnapshot = await fbase.getDoc(paymentRef);
           if (existingPaymentSnapshot.exists()) {
@@ -856,30 +843,27 @@
     }
   }
 
-  function shouldTryServerPayment(error = {}) {
-    const code = clean(error.code).toLowerCase();
-    return code.includes('permission-denied')
-      || code.includes('failed-precondition')
-      || code.includes('unavailable')
-      || code.includes('network');
-  }
-
   async function processWalletPayment({ fbase, appId, credentialUser, firebaseApp, paymentId, order, Wallet } = {}) {
-    let directError = null;
+    // El cobro se ejecuta directamente con el usuario de cartera que acaba de
+    // autenticarse. No depende de /api/pay-with-wallet, Firebase Admin ni de
+    // variables privadas de Vercel.
     try {
-      return await processWalletPaymentInFirestore({ fbase, appId, credentialUser, firebaseApp, paymentId, order, Wallet });
-    } catch (error) {
-      directError = error;
-      if (!shouldTryServerPayment(error)) throw error;
-    }
-
-    try {
-      const token = await credentialUser.getIdToken(true);
-      return await postWalletPayment({ token, paymentId, order });
-    } catch (serverError) {
-      const serverCode = clean(serverError.code).toLowerCase();
-      if (serverCode.includes('firebase-admin') || Number(serverError.httpStatus || 0) >= 500) throw directError || serverError;
-      throw serverError;
+      const result = await processWalletPaymentInFirestore({
+        fbase,
+        appId,
+        credentialUser,
+        firebaseApp,
+        paymentId,
+        order,
+        Wallet
+      });
+      return { ...result, paymentTransport: 'firestore-transaction' };
+    } catch (directError) {
+      const normalized = normalizeFirestorePaymentError(directError);
+      if (clean(normalized.code).toLowerCase().includes('permission-denied')) {
+        normalized.message = 'El cobro fue rechazado por las reglas de Firestore. Publica el archivo firestore.rules incluido en esta corrección.';
+      }
+      throw normalized;
     }
   }
 
@@ -1087,8 +1071,8 @@
   }
 
   global.DriveMxWalletPayment = {
+    BUILD: '2026-08-22-wallet-direct-no-admin-v5',
     SECONDARY_APP_NAME,
-    PAYMENT_ENDPOINT,
     clean,
     normalizeEmail,
     roundMoney,
@@ -1096,7 +1080,6 @@
     formatMoney,
     getSecondaryAuth,
     prepareSecondaryAuth,
-    postWalletPayment,
     processWalletPaymentInFirestore,
     processWalletPayment,
     useWalletPayment,
@@ -1104,3 +1087,4 @@
     WalletBalanceBadge
   };
 })(window);
+
