@@ -8,6 +8,7 @@
   const MOVEMENTS_COLLECTION = 'movements';
   const SETTINGS_DOC_ID = 'config';
   const MIN_FIRST_RECHARGE = 100;
+  const DEFAULT_CASHBACK_AMOUNT = 10;
   const MIN_RECHARGE_AFTER_THREE_PRODUCTS = 500;
   const PRODUCT_RECHARGE_THRESHOLD = 3;
   const getMinimumRecharge = (settings = {}, productCount = 0) => {
@@ -97,8 +98,12 @@
       rechargeCount,
       totalRecharged,
       totalCommissions: roundMoney(wallet?.totalCommissions || 0),
+      totalPurchases: roundMoney(wallet?.totalPurchases || 0),
+      totalCashback: roundMoney(wallet?.totalCashback || 0),
       lastRechargeAt: wallet?.lastRechargeAt || null,
       lastCommissionAt: wallet?.lastCommissionAt || null,
+      lastPurchaseAt: wallet?.lastPurchaseAt || null,
+      lastCashbackAt: wallet?.lastCashbackAt || null,
       createdAt: wallet?.createdAt || now(),
       updatedAt: wallet?.updatedAt || now(),
       status: wallet?.status || ''
@@ -110,6 +115,7 @@
   function defaultSettings() {
     return {
       globalCommissionPercent: 0,
+      globalCashbackAmount: DEFAULT_CASHBACK_AMOUNT,
       minimumFirstRecharge: MIN_FIRST_RECHARGE,
       currency: CURRENCY,
       updatedAt: null,
@@ -122,6 +128,10 @@
       ...defaultSettings(),
       ...settings,
       globalCommissionPercent: normalizePercent(settings.globalCommissionPercent ?? settings.commissionPercent ?? 0),
+      globalCashbackAmount: (() => {
+        const amount = Number(settings.globalCashbackAmount ?? settings.cashbackAmount ?? DEFAULT_CASHBACK_AMOUNT);
+        return Number.isFinite(amount) && amount >= 0 && amount <= 1000000 ? roundMoney(amount) : DEFAULT_CASHBACK_AMOUNT;
+      })(),
       minimumFirstRecharge: getMinimumRecharge(settings),
       currency: settings.currency || CURRENCY
     };
@@ -254,15 +264,14 @@
     const snap = await fbase.getDoc(ref);
     if (snap.exists()) {
       const current = normalizeWallet({ id: snap.id, ...snap.data() }, user);
-      const next = {
-        ...current,
+      const metadataPatch = {
         userName: getUserName(user) || current.userName,
         userEmail: getUserEmail(user) || current.userEmail,
         userPhone: getUserPhone(user) || current.userPhone,
         updatedAt: now()
       };
-      await fbase.setDoc(ref, next, { merge: true });
-      return next;
+      await fbase.setDoc(ref, metadataPatch, { merge: true });
+      return { ...current, ...metadataPatch };
     }
     const wallet = normalizeWallet({ id: walletId, uid: walletId, userId: walletId, activated: false, firstRechargeCompleted: false, createdAt: now(), updatedAt: now(), createdBy }, user);
     wallet.balance = 0;
@@ -565,6 +574,7 @@
     MOVEMENTS_COLLECTION,
     SETTINGS_DOC_ID,
     MIN_FIRST_RECHARGE,
+    DEFAULT_CASHBACK_AMOUNT,
     MIN_RECHARGE_AFTER_THREE_PRODUCTS,
     PRODUCT_RECHARGE_THRESHOLD,
     getMinimumRecharge,
