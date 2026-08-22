@@ -14,6 +14,7 @@ const h = globalThis.React?.createElement;
 export function AdminPanel(props = {}) {
   if (!h) return null;
   const WalletUI = props.WalletUI || globalThis.DriveMxWalletUI || {};
+  const CashbackUI = props.CashbackUI || globalThis.DriveMxCashback || {};
   const UsersUI = props.UsersUI || globalThis.DriveMxUsersUI || {};
   const AdsManager = props.AdsManager || globalThis.DriveMxAdsManager || {};
   const AdminAdsPanel = props.AdminAdsPanel || AdsManager.AdminAdsPanel;
@@ -63,6 +64,13 @@ export function AdminPanel(props = {}) {
           onMinimumChange: (value) => props.setWalletSettings?.((prev) => ({ ...prev, minimumFirstRecharge: value })),
           onSubmit: props.saveWalletCommissionSettings,
           saving: props.walletSettingsSaving
+        }) : null,
+        CashbackUI.AdminCashbackSettings ? h(CashbackUI.AdminCashbackSettings, {
+          settings: props.walletSettings,
+          value: props.walletSettings?.globalCashbackAmount ?? CashbackUI.DEFAULT_AMOUNT ?? 10,
+          onChange: (value) => props.setWalletSettings?.((prev) => ({ ...prev, globalCashbackAmount: value })),
+          onSubmit: props.saveCashbackSettings,
+          saving: props.cashbackSettingsSaving
         }) : null,
         WalletUI.AdminWalletsPanel ? h(WalletUI.AdminWalletsPanel, {
           users: props.users,
@@ -119,4 +127,3 @@ export function AdminPanel(props = {}) {
     )
   );
 }
-
