@@ -49,7 +49,8 @@
     sessionUser,
     publicProducts,
     supermarketSettings = {},
-    adminEmail = 'admin@drivemx.com'
+    adminEmail = 'admin@drivemx.com',
+    onSessionUserChange = () => {}
   } = {}) {
     const [adminProducts, setAdminProducts] = useState(() => {
       const cached = Core.readLocal(Core.ADMIN_PRODUCTS_LOCAL_KEY, []);
@@ -65,6 +66,15 @@
     const [productImageFiles, setProductImageFiles] = useState([]);
     const [productUploading, setProductUploading] = useState(false);
     const [editingProductId, setEditingProductId] = useState(null);
+    const BusinessStorefronts = global.DriveMxBusinessStorefronts || {};
+    const businessOwnerKey = BusinessStorefronts.ADMIN_OWNER_KEY || 'panel_control';
+    const [businessName, setBusinessName] = useState(() => {
+      if (typeof BusinessStorefronts.getPreferredBusinessName === 'function') {
+        return BusinessStorefronts.getPreferredBusinessName([], sessionUser || {}, businessOwnerKey, '');
+      }
+      return String(sessionUser?.businessName || '').trim();
+    });
+    const [businessNameSaving, setBusinessNameSaving] = useState(false);
 
     const publicList = Array.isArray(publicProducts?.products) ? publicProducts.products : [];
 
@@ -120,6 +130,15 @@
       publicList.filter(Core.isControlPanelProduct).forEach((product) => byId.set(String(product.id), product));
       return Core.sortProducts(Array.from(byId.values()));
     }, [adminProducts, publicList]);
+
+    useEffect(() => {
+      const module = global.DriveMxBusinessStorefronts || {};
+      const preferredName = typeof module.getPreferredBusinessName === 'function'
+        ? module.getPreferredBusinessName(controlProducts, sessionUser || {}, businessOwnerKey, '')
+        : String(sessionUser?.businessName || controlProducts.find((product) => product?.businessName)?.businessName || '').trim();
+      if (!preferredName) return;
+      setBusinessName((previous) => String(previous || '').trim() ? previous : preferredName);
+    }, [controlProducts, sessionUser?.businessName, sessionUser?.uid, sessionUser?.id, businessOwnerKey]);
 
     const allProducts = useMemo(() => Core.sortProducts(publicList), [publicList]);
 
@@ -241,6 +260,14 @@
         alert('Ingresa el nombre del producto.');
         return;
       }
+      const businessModule = global.DriveMxBusinessStorefronts || {};
+      const normalizedBusinessName = typeof businessModule.normalizeBusinessName === 'function'
+        ? businessModule.normalizeBusinessName(businessName)
+        : String(businessName || '').trim();
+      if (!normalizedBusinessName) {
+        alert('Ingresa el nombre del negocio.');
+        return;
+      }
       const CostoEnvio = global.DriveMxCostoEnvio || {};
       if (typeof CostoEnvio.validateProductShipping === 'function') {
         const shippingValidation = CostoEnvio.validateProductShipping(productForm, {
@@ -275,6 +302,7 @@
           image: mainImage,
           imageUrl: mainImage,
           active: Boolean(productForm.active),
+          businessName: normalizedBusinessName,
           publicationType: Core.PRODUCT_ORIGIN_CONTROL,
           sourcePanel: Core.PRODUCT_ORIGIN_CONTROL,
           ownerId: '',
@@ -302,13 +330,73 @@
         // publicaciones ni deja el formulario reportando un falso error.
         await publicProducts.savePublicProduct(product, { applyLocalOnError: false });
         await saveAdminMirror(product);
+        if (typeof businessModule.rememberBusinessName === 'function') {
+          businessModule.rememberBusinessName(businessOwnerKey, normalizedBusinessName);
+        }
+        setBusinessName(normalizedBusinessName);
         resetProductForm();
       } catch (error) {
         console.error('Guardar producto Panel de Control:', error);
         alert('No se pudo guardar el producto. Intenta nuevamente.');
         setProductUploading(false);
       }
-    }, [sessionUser, editingProductId, productForm, controlProducts, uploadPendingProductImages, adminEmail, saveAdminMirror, publicProducts, resetProductForm, defaultSupermarketShippingCost]);
+    }, [sessionUser, editingProductId, productForm, controlProducts, uploadPendingProductImages, adminEmail, saveAdminMirror, publicProducts, resetProductForm, defaultSupermarketShippingCost, businessName, businessOwnerKey]);
+
+    const saveBusinessName = useCallback(async (event) => {
+      event?.preventDefault?.();
+      if (sessionUser?.role !== 'admin') {
+        alert('Solo el administrador puede guardar el nombre del negocio del Panel de Control.');
+        return;
+      }
+      const businessModule = global.DriveMxBusinessStorefronts || {};
+      const normalizedBusinessName = typeof businessModule.normalizeBusinessName === 'function'
+        ? businessModule.normalizeBusinessName(businessName)
+        : String(businessName || '').trim();
+      if (!normalizedBusinessName) {
+        alert('Ingresa el nombre del negocio.');
+        return;
+      }
+
+      setBusinessNameSaving(true);
+      try {
+        const updatedAt = Date.now();
+        const updatedBy = sessionUser?.email || adminEmail;
+        const profileId = String(fbUser?.uid || sessionUser?.uid || sessionUser?.id || '').trim();
+        if (profileId) {
+          const operatorRef = fbase.doc(fbase.getFirestore(), 'artifacts', appId, 'public', 'data', 'operators', profileId);
+          await fbase.setDoc(operatorRef, {
+            businessName: normalizedBusinessName,
+            updatedAt,
+            updatedBy
+          }, { merge: true });
+        }
+
+        for (const product of controlProducts) {
+          const updatedProduct = {
+            ...product,
+            businessName: normalizedBusinessName,
+            businessNameUpdatedAt: updatedAt,
+            updatedBy,
+            publicationType: Core.PRODUCT_ORIGIN_CONTROL,
+            sourcePanel: Core.PRODUCT_ORIGIN_CONTROL
+          };
+          await publicProducts.savePublicProduct(updatedProduct, { applyLocalOnError: false });
+          await saveAdminMirror(updatedProduct);
+        }
+
+        if (typeof businessModule.rememberBusinessName === 'function') {
+          businessModule.rememberBusinessName(businessOwnerKey, normalizedBusinessName);
+        }
+        setBusinessName(normalizedBusinessName);
+        onSessionUserChange({ ...(sessionUser || {}), businessName: normalizedBusinessName, updatedAt, updatedBy });
+        alert('Nombre del negocio guardado correctamente.');
+      } catch (error) {
+        console.error('Guardar nombre del negocio Panel de Control:', error);
+        alert('No se pudo guardar el nombre del negocio.');
+      } finally {
+        setBusinessNameSaving(false);
+      }
+    }, [sessionUser, businessName, fbUser, fbase, appId, adminEmail, controlProducts, publicProducts, saveAdminMirror, businessOwnerKey, onSessionUserChange]);
 
     const editProduct = useCallback((product) => {
       if (!Core.isControlPanelProduct(product)) {
@@ -509,6 +597,10 @@
       allProducts,
       publicProducts: publicList,
       supermarketSettings,
+      businessName,
+      setBusinessName,
+      businessNameSaving,
+      saveBusinessName,
       productForm,
       setProductForm,
       productImageFiles,
@@ -535,7 +627,12 @@
     const TrashIcon = Icons.Trash || (() => null);
     const Supermercado = global.DriveMxSupermercado || global.DriveMxSupermercadoCore || {};
     const CostoEnvio = global.DriveMxCostoEnvio || {};
+    const BusinessStorefronts = global.DriveMxBusinessStorefronts || {};
     const {
+      businessName,
+      setBusinessName,
+      businessNameSaving,
+      saveBusinessName,
       productForm,
       setProductForm,
       productImageFiles,
@@ -554,7 +651,17 @@
     } = manager;
 
     return (
-      <div className="card-glass overflow-hidden">
+      <>
+        {BusinessStorefronts.BusinessNameSettings && (
+          <BusinessStorefronts.BusinessNameSettings
+            value={businessName}
+            onChange={setBusinessName}
+            saving={businessNameSaving}
+            onSubmit={saveBusinessName}
+            description="Este nombre identificará el bloque de publicaciones del Panel de Control en Productos Drive MX y Supermercado"
+          />
+        )}
+        <div className="card-glass overflow-hidden">
         <div className="bg-slate-50 border-b border-slate-100 px-6 py-4 flex items-center justify-between gap-3">
           <div>
             <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400 drive-mx-panel-section-title">Administración de Productos</h2>
@@ -691,7 +798,8 @@
             </tbody>
           </table>
         </div>
-      </div>
+        </div>
+      </>
     );
   }
 
@@ -700,4 +808,5 @@
     AdminProductsPanel
   };
 })(window);
+
 
