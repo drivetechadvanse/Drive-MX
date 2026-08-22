@@ -3193,21 +3193,12 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 )}
 
                                 {BusinessStorefronts.BusinessHomeSection ? (
-                                    <>
-                                        <BusinessStorefronts.BusinessHomeSection
-                                            category="general"
-                                            products={activeProducts}
-                                            ads={ads}
-                                            getProductGallery={getProductGallery}
-                                            onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
-                                        />
-                                        <BusinessStorefronts.BusinessHomeSection
-                                            category="supermercado"
-                                            products={supermarketProducts}
-                                            getProductGallery={getProductGallery}
-                                            onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
-                                        />
-                                    </>
+                                    <BusinessStorefronts.BusinessHomeSection
+                                        products={products}
+                                        ads={ads}
+                                        getProductGallery={getProductGallery}
+                                        onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
+                                    />
                                 ) : (
                                     <>
                                         {HomeProducts.HomeProductsSection && (
@@ -3586,3 +3577,4 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
 };
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
