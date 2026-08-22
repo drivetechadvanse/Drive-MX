@@ -2856,10 +2856,12 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 alert(`Saldo insuficiente o cartera no disponible. Saldo disponible: ${Wallet.formatMoney(available)}.`);
             } else if (code.includes('seller-wallet')) {
                 alert(Wallet.INSUFFICIENT_MESSAGE);
-            } else if (code.includes('wallet-payment-permission-denied') || code.includes('permission-denied')) {
-                alert(error?.message || 'No se pudo autorizar el cobro con cartera. Publica el archivo firestore.rules incluido en la corrección.');
             } else if (code.includes('product-') || code.includes('order-total-changed')) {
                 alert(error?.message || 'El inventario o el total de la compra cambió. Regresa al carrito y revisa la compra.');
+            } else if (code.includes('firebase-admin-') || code.includes('wallet-firestore-')) {
+                alert(error?.message || 'El servidor no pudo completar el cobro con cartera.');
+            } else if (code.includes('http_404')) {
+                alert('No se encontró la función de cobro con cartera en el servidor. Reemplaza la carpeta api incluida en la corrección y vuelve a desplegar.');
             } else if (code.includes('timeout') || code.includes('network') || code.includes('unavailable')) {
                 alert('No se pudo confirmar la respuesta del cobro. Presiona nuevamente “Pagar con cartera”; el mismo identificador se reutilizará y el pago no se duplicará.');
             } else {
