@@ -2,7 +2,32 @@ const { useState, useEffect, useRef, useCallback } = React;
 const fbase = window.FirebaseSDK;
 const Wallet = window.DriveMxWallet;
 const WalletUI = window.DriveMxWalletUI;
-const WalletPayment = window.DriveMxWalletPayment;
+const WalletPayment = window.DriveMxWalletPayment || {
+    available: false,
+    useWalletPayment: () => ({
+        username: '',
+        setUsername: () => {},
+        password: '',
+        setPassword: () => {},
+        verified: false,
+        verifying: false,
+        paying: false,
+        error: '',
+        identity: null,
+        availableBalance: 0,
+        verifyCredentials: (event) => event?.preventDefault?.(),
+        pay: async () => {
+            const error = new Error('El módulo de pago con cartera no está disponible.');
+            error.code = 'wallet-payment-module-unavailable';
+            throw error;
+        },
+        canPay: () => false,
+        getOrCreatePaymentId: () => '',
+        reset: async () => {}
+    }),
+    WalletCredentialsCard: null,
+    WalletBalanceBadge: null
+};
 const Cashback = window.DriveMxCashback || {};
 const UsersUI = window.DriveMxUsersUI;
 const AdsManager = window.DriveMxAdsManager;
@@ -3516,8 +3541,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 <div className="grid md:grid-cols-2 gap-4">
                                     {[
                                         ['transfer', 'Transferencia bancaria', 'Queda Pendiente hasta que el administrador confirme el pago. El costo de envío se calcula según la categoría de los productos.'],
-                                        ['wallet', 'Cartera (pago con cartera)', 'El cobro se realiza directamente del saldo validado y al finalizar se abona el Cash Back global configurado.']
-                                    ].map(([value, title, desc]) => (
+                                        WalletPayment.available === false ? null : ['wallet', 'Cartera (pago con cartera)', 'El cobro se realiza directamente del saldo validado y al finalizar se abona el Cash Back global configurado.']
+                                    ].filter(Boolean).map(([value, title, desc]) => (
                                         <label key={value} className={`border-2 rounded-2xl p-5 cursor-pointer hover:border-red-200 transition-all bg-white ${selectedPaymentMethod === value ? 'border-red-400' : 'border-slate-100'}`}>
                                             <div className="flex items-start gap-3">
                                                 <input type="radio" name="paymentMethod" className="mt-1" checked={selectedPaymentMethod === value} onChange={() => selectPaymentMethod(value)} />
