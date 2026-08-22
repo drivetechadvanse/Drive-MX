@@ -1,0 +1,33 @@
+DRIVE MX — COBRO CON CARTERA CORREGIDO SIN FIREBASE ADMIN
+
+ESTA CORRECCIÓN NO REQUIERE:
+- Volver a proporcionar claves de Firebase.
+- Agregar variables privadas en Vercel.
+- Instalar firebase-admin.
+- Modificar firebaseConfig ni cambiar el proyecto saxrecords-appcreat.
+
+1. REEMPLAZA EN GITHUB ÚNICAMENTE ESTOS ARCHIVOS:
+- /index.html
+- /app/app.js
+- /wallet-payment/wallet-payment.js
+
+2. PUBLICA LAS REGLAS INCLUIDAS:
+- Abre Firebase Console.
+- Entra al proyecto saxrecords-appcreat.
+- Abre Firestore Database > Reglas.
+- Sustituye TODO el contenido por /firestore.rules incluido en este ZIP.
+- Presiona Publicar.
+
+IMPORTANTE: subir firestore.rules a GitHub o Vercel NO cambia las reglas activas de Firestore. Debes publicarlas en Firebase Console; sin este paso, Firebase rechazará el cobro.
+
+3. DESPLIEGA:
+- Después de subir los tres archivos a GitHub, realiza Redeploy en Vercel.
+- Abre la aplicación con Ctrl + F5 o borra la caché del navegador.
+
+QUÉ CAMBIÓ:
+- Pagar con cartera ya no llama a /api/pay-with-wallet.
+- El cobro ya no depende de Firebase Admin.
+- El usuario se valida con el Firebase Authentication que ya utiliza la aplicación.
+- El descuento de saldo, Cash Back, inventario, venta y comisión se ejecuta en una sola transacción de Firestore.
+- El mismo identificador de pago impide cobrar dos veces si se repite el botón por una falla de conexión.
+- /api/pay-with-wallet.js puede permanecer en el proyecto; este nuevo cobro ya no lo utiliza.
