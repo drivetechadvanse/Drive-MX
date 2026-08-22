@@ -19,6 +19,7 @@ const EmailPasswordAuthUI = window.DriveMxEmailPasswordAuth;
 const PackagesGuidesUI = window.DriveMxPackagesGuides;
 const CartUI = window.DriveMxCart || {};
 const SupportUI = window.DriveMxSupport || {};
+const BusinessStorefronts = window.DriveMxBusinessStorefronts || {};
 
 const Icons = {
     Truck: ({size=16}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-5l-4-4h-3v10h3Z"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>,
@@ -413,7 +414,8 @@ const App = () => {
         publicProducts: publicProductsManager,
         supermarketSettings,
         setSupermarketSettings,
-        adminEmail: ADMIN_EMAIL
+        adminEmail: ADMIN_EMAIL,
+        onSessionUserChange: authManager.setSessionUser
     });
     const controlProducts = adminProductsManager.controlProducts;
     const userProductsManager = UserProductsUI.useUserProductsManager({
@@ -3190,21 +3192,40 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     />
                                 )}
 
-                                {HomeProducts.HomeProductsSection && (
-                                    <HomeProducts.HomeProductsSection
-                                        products={activeProducts}
-                                        ads={ads}
-                                        getProductGallery={getProductGallery}
-                                        onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
-                                    />
-                                )}
-
-                                {Supermercado.SupermercadoHomeSection && (
-                                    <Supermercado.SupermercadoHomeSection
-                                        products={supermarketProducts}
-                                        getProductGallery={getProductGallery}
-                                        onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
-                                    />
+                                {BusinessStorefronts.BusinessHomeSection ? (
+                                    <>
+                                        <BusinessStorefronts.BusinessHomeSection
+                                            category="general"
+                                            products={activeProducts}
+                                            ads={ads}
+                                            getProductGallery={getProductGallery}
+                                            onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
+                                        />
+                                        <BusinessStorefronts.BusinessHomeSection
+                                            category="supermercado"
+                                            products={supermarketProducts}
+                                            getProductGallery={getProductGallery}
+                                            onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
+                                        />
+                                    </>
+                                ) : (
+                                    <>
+                                        {HomeProducts.HomeProductsSection && (
+                                            <HomeProducts.HomeProductsSection
+                                                products={activeProducts}
+                                                ads={ads}
+                                                getProductGallery={getProductGallery}
+                                                onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
+                                            />
+                                        )}
+                                        {Supermercado.SupermercadoHomeSection && (
+                                            <Supermercado.SupermercadoHomeSection
+                                                products={supermarketProducts}
+                                                getProductGallery={getProductGallery}
+                                                onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
+                                            />
+                                        )}
+                                    </>
                                 )}
                             </div>
                         
@@ -3212,22 +3233,32 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 )}
 
                 {view === 'product-detail' && selectedProduct && ProductDetails.ProductDetail && (
-                    <ProductDetails.ProductDetail
-                        product={selectedProduct}
-                        gallery={selectedGallery}
-                        currentImageIndex={currentImageIndex}
-                        setCurrentImageIndex={setCurrentImageIndex}
-                        quantity={selectedPurchaseQuantity}
-                        allowZeroQuantity={true}
-                        onQuantityChange={setSelectedProductQuantity}
-                        Icons={Icons}
-                        productSizesText={productSizesText}
-                        productColorsText={productColorsText}
-                        onBack={resetPublicFlow}
-                        onBuy={startSingleProductCheckout}
-                        onAddToCart={addProductToCart}
-                        isInCart={isProductInCart(selectedProduct.id)}
-                    />
+                    <>
+                        <ProductDetails.ProductDetail
+                            product={selectedProduct}
+                            gallery={selectedGallery}
+                            currentImageIndex={currentImageIndex}
+                            setCurrentImageIndex={setCurrentImageIndex}
+                            quantity={selectedPurchaseQuantity}
+                            allowZeroQuantity={true}
+                            onQuantityChange={setSelectedProductQuantity}
+                            Icons={Icons}
+                            productSizesText={productSizesText}
+                            productColorsText={productColorsText}
+                            onBack={resetPublicFlow}
+                            onBuy={startSingleProductCheckout}
+                            onAddToCart={addProductToCart}
+                            isInCart={isProductInCart(selectedProduct.id)}
+                        />
+                        {BusinessStorefronts.RelatedBusinessProducts && (
+                            <BusinessStorefronts.RelatedBusinessProducts
+                                products={products}
+                                selectedProduct={selectedProduct}
+                                getProductGallery={getProductGallery}
+                                onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
+                            />
+                        )}
+                    </>
                 )}
 
                 {view === 'delivery-data' && checkoutProducts.length > 0 && (
@@ -3555,4 +3586,3 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
 };
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-
