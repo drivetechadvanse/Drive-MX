@@ -115,8 +115,18 @@
     const [userProductImageFiles, setUserProductImageFiles] = useState([]);
     const [userProductUploading, setUserProductUploading] = useState(false);
     const [editingUserProductId, setEditingUserProductId] = useState(null);
+    const BusinessStorefronts = global.DriveMxBusinessStorefronts || {};
+    const initialBusinessOwnerKey = getUserProfileId(sessionUser || {}) || 'usuario';
+    const [businessName, setBusinessName] = useState(() => {
+      if (typeof BusinessStorefronts.getPreferredBusinessName === 'function') {
+        return BusinessStorefronts.getPreferredBusinessName([], sessionUser || {}, initialBusinessOwnerKey, '');
+      }
+      return String(sessionUser?.businessName || '').trim();
+    });
+    const [businessNameSaving, setBusinessNameSaving] = useState(false);
 
     const sessionUserId = getUserProfileId(sessionUser || {});
+    const businessOwnerKey = sessionUserId || initialBusinessOwnerKey;
     const safeSessionUserId = Core.safeDocumentId(sessionUserId);
     const sessionEmail = getUserProfileEmail(sessionUser || {});
     const publicList = Array.isArray(publicProducts?.products) ? publicProducts.products : [];
@@ -213,6 +223,16 @@
       });
       return Core.sortProducts(Array.from(byId.values()));
     }, [userPanelProducts, publicList, sessionUser]);
+
+    useEffect(() => {
+      if (!sessionUser || sessionUser.role === 'admin') return;
+      const module = global.DriveMxBusinessStorefronts || {};
+      const preferredName = typeof module.getPreferredBusinessName === 'function'
+        ? module.getPreferredBusinessName(currentUserProducts, sessionUser || {}, businessOwnerKey, '')
+        : String(sessionUser?.businessName || currentUserProducts.find((product) => product?.businessName)?.businessName || '').trim();
+      if (!preferredName) return;
+      setBusinessName((previous) => String(previous || '').trim() ? previous : preferredName);
+    }, [currentUserProducts, sessionUser?.businessName, sessionUser?.uid, sessionUser?.id, sessionUser?.role, businessOwnerKey]);
 
     const currentUserSales = useMemo(() => userCompletedSales
       .filter((sale) => isSaleOwnedByUser(sale, sessionUser || {}))
@@ -377,6 +397,14 @@
         alert('Ingresa el nombre del producto.');
         return;
       }
+      const businessModule = global.DriveMxBusinessStorefronts || {};
+      const normalizedBusinessName = typeof businessModule.normalizeBusinessName === 'function'
+        ? businessModule.normalizeBusinessName(businessName)
+        : String(businessName || '').trim();
+      if (!normalizedBusinessName) {
+        alert('Ingresa el nombre del negocio.');
+        return;
+      }
       setUserProductUploading(true);
       try {
         const Supermercado = global.DriveMxSupermercado || global.DriveMxSupermercadoCore || {};
@@ -396,6 +424,7 @@
           colors: Core.normalizeProductColors(userProductForm.colors),
           images, image: mainImage, imageUrl: mainImage,
           active: Boolean(userProductForm.active),
+          businessName: normalizedBusinessName,
           ownerId: sessionUserId,
           ownerName: sessionUser?.name || '',
           ownerEmail: sessionUser?.email || '',
@@ -412,6 +441,10 @@
         const product = typeof Supermercado.applyCategoryToProduct === 'function' ? Supermercado.applyCategoryToProduct(baseProduct, userProductForm) : baseProduct;
         await publicProducts.savePublicProduct(product, { applyLocalOnError: false });
         await saveUserProductMirror(product);
+        if (typeof businessModule.rememberBusinessName === 'function') {
+          businessModule.rememberBusinessName(businessOwnerKey, normalizedBusinessName);
+        }
+        setBusinessName(normalizedBusinessName);
         resetUserProductForm();
         alert('Publicación guardada correctamente. Se mostrará en la portada principal si está activa.');
       } catch (error) {
@@ -419,7 +452,7 @@
         alert('No se pudo guardar la publicación. Intenta nuevamente.');
         setUserProductUploading(false);
       }
-    }, [ensureAccountAllowed, sessionUserId, safeSessionUserId, editingUserProductId, userProductForm, currentUserProducts, sessionUser, ensurePublicationWalletAllowed, userProductImageFiles, uploadSingleProductImage, saleNotificationEmail, publicProducts, saveUserProductMirror, resetUserProductForm]);
+    }, [ensureAccountAllowed, sessionUserId, safeSessionUserId, editingUserProductId, userProductForm, currentUserProducts, sessionUser, ensurePublicationWalletAllowed, userProductImageFiles, uploadSingleProductImage, saleNotificationEmail, publicProducts, saveUserProductMirror, resetUserProductForm, businessName, businessOwnerKey]);
 
     const editUserProduct = useCallback((product) => {
       if (ensureAccountAllowed() === false) return;
@@ -482,6 +515,66 @@
       }
     }, [ensureAccountAllowed, sessionUser, publicProducts, deleteUserProductMirror, saveUserProductMirror, editingUserProductId, resetUserProductForm, upsertUserLocal]);
 
+    const saveBusinessName = useCallback(async (event) => {
+      event?.preventDefault?.();
+      if (ensureAccountAllowed() === false) return;
+      if (!sessionUserId) {
+        alert('Inicia sesión para guardar el nombre del negocio.');
+        return;
+      }
+      const businessModule = global.DriveMxBusinessStorefronts || {};
+      const normalizedBusinessName = typeof businessModule.normalizeBusinessName === 'function'
+        ? businessModule.normalizeBusinessName(businessName)
+        : String(businessName || '').trim();
+      if (!normalizedBusinessName) {
+        alert('Ingresa el nombre del negocio.');
+        return;
+      }
+
+      const updatedAt = Date.now();
+      const updatedBy = sessionUser?.email || '';
+      const nextProfile = {
+        ...(sessionUser || {}),
+        uid: sessionUser?.uid || sessionUserId,
+        email: sessionUser?.email || '',
+        businessName: normalizedBusinessName,
+        updatedAt,
+        updatedBy
+      };
+
+      setBusinessNameSaving(true);
+      try {
+        const operatorRef = fbase.doc(fbase.getFirestore(), 'artifacts', appId, 'public', 'data', 'operators', sessionUserId);
+        await fbase.setDoc(operatorRef, nextProfile, { merge: true });
+
+        for (const product of currentUserProducts) {
+          const updatedProduct = {
+            ...product,
+            businessName: normalizedBusinessName,
+            businessNameUpdatedAt: updatedAt,
+            updatedBy,
+            ownerId: sessionUserId,
+            publicationType: Core.PRODUCT_ORIGIN_USER,
+            sourcePanel: 'panel_usuario'
+          };
+          await publicProducts.savePublicProduct(updatedProduct, { applyLocalOnError: false });
+          await saveUserProductMirror(updatedProduct);
+        }
+
+        if (typeof businessModule.rememberBusinessName === 'function') {
+          businessModule.rememberBusinessName(businessOwnerKey, normalizedBusinessName);
+        }
+        setBusinessName(normalizedBusinessName);
+        onSessionUserChange(nextProfile);
+        alert('Nombre del negocio guardado correctamente.');
+      } catch (error) {
+        console.error('Guardar nombre del negocio Panel de Usuario:', error);
+        alert('No se pudo guardar el nombre del negocio.');
+      } finally {
+        setBusinessNameSaving(false);
+      }
+    }, [ensureAccountAllowed, sessionUserId, sessionUser, businessName, fbase, appId, currentUserProducts, publicProducts, saveUserProductMirror, businessOwnerKey, onSessionUserChange]);
+
     const saveSaleNotificationEmail = useCallback(async (event) => {
       event?.preventDefault?.();
       if (ensureAccountAllowed() === false) return;
@@ -526,6 +619,8 @@
       setUserCompletedSales([]);
       setSaleNotificationEmail('');
       setSaleNotificationSaving(false);
+      setBusinessName('');
+      setBusinessNameSaving(false);
       resetUserProductForm();
     }, [resetUserProductForm]);
 
@@ -535,6 +630,10 @@
       currentUserProducts,
       currentUserSales,
       activeProductCount: currentUserProducts.filter((product) => product.active !== false).length,
+      businessName,
+      setBusinessName,
+      businessNameSaving,
+      saveBusinessName,
       saleNotificationEmail,
       setSaleNotificationEmail,
       saleNotificationSaving,
@@ -564,8 +663,10 @@
     if (!manager) return null;
     const TrashIcon = Icons.Trash || (() => null);
     const Supermercado = global.DriveMxSupermercado || global.DriveMxSupermercadoCore || {};
+    const BusinessStorefronts = global.DriveMxBusinessStorefronts || {};
     const {
       currentUserProducts, currentUserSales,
+      businessName, setBusinessName, businessNameSaving, saveBusinessName,
       saleNotificationEmail, setSaleNotificationEmail, saleNotificationSaving, saveSaleNotificationEmail,
       userProductForm, setUserProductForm, userProductImageFiles, userProductUploading, editingUserProductId,
       resetUserProductForm, handleUserProductImagesSelect, removeExistingUserProductImage, removeNewUserProductImage,
@@ -574,6 +675,16 @@
 
     return (
       <>
+        {BusinessStorefronts.BusinessNameSettings && (
+          <BusinessStorefronts.BusinessNameSettings
+            value={businessName}
+            onChange={setBusinessName}
+            saving={businessNameSaving}
+            onSubmit={saveBusinessName}
+            description="Este nombre identificará tu bloque de publicaciones en Productos Drive MX y Supermercado"
+          />
+        )}
+
         <div className="card-glass overflow-hidden">
           <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
             <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Correo para notificaciones de venta</h2>
@@ -666,3 +777,4 @@
     }
   };
 })(window);
+
