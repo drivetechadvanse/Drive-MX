@@ -248,5 +248,7 @@ globalThis.DriveMxHomeProducts = {
   chunkProducts,
   getActiveAds,
   getAdForBlock,
+  ProductCard,
+  AdBanner,
   HomeProductsSection
 };
