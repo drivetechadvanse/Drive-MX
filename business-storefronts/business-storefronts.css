@@ -1,0 +1,43 @@
+.drive-mx-business-home,
+.drive-mx-business-related,
+.drive-mx-business-name-settings {
+  width: 100%;
+}
+
+.drive-mx-business-storefront {
+  width: 100%;
+  padding: 1.25rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 1.5rem;
+  background: #ffffff;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.05);
+}
+
+.drive-mx-business-storefront-header {
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.drive-mx-business-storefront-name {
+  overflow-wrap: anywhere;
+}
+
+.drive-mx-business-products-rail {
+  width: 100%;
+}
+
+.drive-mx-business-related {
+  margin-top: -0.25rem;
+}
+
+.drive-mx-business-related-category + .drive-mx-business-related-category {
+  padding-top: 1.25rem;
+  border-top: 1px solid #f1f5f9;
+}
+
+@media (max-width: 640px) {
+  .drive-mx-business-storefront {
+    padding: 1rem;
+    border-radius: 1.25rem;
+  }
+}
