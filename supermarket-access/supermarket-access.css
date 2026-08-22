@@ -1,0 +1,65 @@
+.drive-mx-supermarket-access {
+  grid-column: 1 / -1;
+  position: relative;
+  animation: driveMxSupermarketAccessIn 180ms ease-out both;
+}
+
+.drive-mx-supermarket-access__input {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #fecaca;
+  border-radius: 0.9rem;
+  outline: none;
+  background: linear-gradient(135deg, #fff7f7 0%, #ffffff 100%);
+  color: #0f172a;
+  box-shadow: 0 12px 28px rgba(239, 68, 68, 0.08);
+  font-size: 0.76rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.drive-mx-supermarket-access__input::placeholder {
+  color: #ef4444;
+  text-transform: none;
+  opacity: 0.9;
+}
+
+.drive-mx-supermarket-access__input:focus {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.1), 0 14px 32px rgba(239, 68, 68, 0.1);
+}
+
+.drive-mx-supermarket-access__input:disabled {
+  opacity: 0.65;
+}
+
+.drive-mx-supermarket-access--invalid .drive-mx-supermarket-access__input {
+  border-color: #dc2626;
+  animation: driveMxSupermarketAccessShake 260ms ease-in-out;
+}
+
+.drive-mx-supermarket-access__hidden-submit {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  padding: 0;
+  margin: -1px;
+}
+
+@keyframes driveMxSupermarketAccessIn {
+  from { opacity: 0; transform: translateY(-5px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes driveMxSupermarketAccessShake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
