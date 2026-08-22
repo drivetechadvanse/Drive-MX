@@ -23,6 +23,17 @@
     active: true
   };
 
+  const isSupermarketProduct = (product = {}) => {
+    const Supermercado = global.DriveMxSupermercado || global.DriveMxSupermercadoCore || {};
+    if (typeof Supermercado.isSupermarketProduct === 'function') return Supermercado.isSupermarketProduct(product);
+    const category = String(product.category || product.categoria || product.productCategory || product.product_category || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toLowerCase();
+    return category === 'supermercado';
+  };
+
   const revokePreview = (item) => {
     if (!item?.preview) return;
     try { global.URL.revokeObjectURL(item.preview); } catch (error) {}
@@ -67,12 +78,18 @@
     const [productUploading, setProductUploading] = useState(false);
     const [editingProductId, setEditingProductId] = useState(null);
     const BusinessStorefronts = global.DriveMxBusinessStorefronts || {};
-    const businessOwnerKey = BusinessStorefronts.ADMIN_OWNER_KEY || 'panel_control';
+    const businessOwnerKey = `${BusinessStorefronts.ADMIN_OWNER_KEY || 'panel_control'}_supermercado`;
     const [businessName, setBusinessName] = useState(() => {
-      if (typeof BusinessStorefronts.getPreferredBusinessName === 'function') {
-        return BusinessStorefronts.getPreferredBusinessName([], sessionUser || {}, businessOwnerKey, '');
-      }
-      return String(sessionUser?.businessName || '').trim();
+      const normalize = typeof BusinessStorefronts.normalizeBusinessName === 'function'
+        ? BusinessStorefronts.normalizeBusinessName
+        : (value) => String(value || '').trim();
+      const profileName = normalize(sessionUser?.supermarketBusinessName || '');
+      if (profileName) return profileName;
+      const storedName = typeof BusinessStorefronts.readStoredBusinessName === 'function'
+        ? BusinessStorefronts.readStoredBusinessName(businessOwnerKey)
+        : '';
+      if (storedName) return storedName;
+      return normalize(sessionUser?.businessName || '');
     });
     const [businessNameSaving, setBusinessNameSaving] = useState(false);
 
@@ -133,12 +150,14 @@
 
     useEffect(() => {
       const module = global.DriveMxBusinessStorefronts || {};
+      const supermarketControlProducts = controlProducts.filter(isSupermarketProduct);
+      const profile = { businessName: sessionUser?.supermarketBusinessName || '' };
       const preferredName = typeof module.getPreferredBusinessName === 'function'
-        ? module.getPreferredBusinessName(controlProducts, sessionUser || {}, businessOwnerKey, '')
-        : String(sessionUser?.businessName || controlProducts.find((product) => product?.businessName)?.businessName || '').trim();
+        ? module.getPreferredBusinessName(supermarketControlProducts, profile, businessOwnerKey, sessionUser?.businessName || '')
+        : String(sessionUser?.supermarketBusinessName || supermarketControlProducts.find((product) => product?.supermarketBusinessName || product?.businessName)?.supermarketBusinessName || supermarketControlProducts.find((product) => product?.businessName)?.businessName || sessionUser?.businessName || '').trim();
       if (!preferredName) return;
       setBusinessName((previous) => String(previous || '').trim() ? previous : preferredName);
-    }, [controlProducts, sessionUser?.businessName, sessionUser?.uid, sessionUser?.id, businessOwnerKey]);
+    }, [controlProducts, sessionUser?.supermarketBusinessName, sessionUser?.businessName, sessionUser?.uid, sessionUser?.id, businessOwnerKey]);
 
     const allProducts = useMemo(() => Core.sortProducts(publicList), [publicList]);
 
@@ -261,11 +280,12 @@
         return;
       }
       const businessModule = global.DriveMxBusinessStorefronts || {};
+      const publishingToSupermarket = isSupermarketProduct(productForm);
       const normalizedBusinessName = typeof businessModule.normalizeBusinessName === 'function'
         ? businessModule.normalizeBusinessName(businessName)
         : String(businessName || '').trim();
-      if (!normalizedBusinessName) {
-        alert('Ingresa el nombre del negocio.');
+      if (publishingToSupermarket && !normalizedBusinessName) {
+        alert('Ingresa el nombre del negocio para Supermercado.');
         return;
       }
       const CostoEnvio = global.DriveMxCostoEnvio || {};
@@ -283,6 +303,11 @@
       try {
         const Supermercado = global.DriveMxSupermercado || global.DriveMxSupermercadoCore || {};
         const existing = controlProducts.find((product) => String(product.id) === String(id));
+        const existingWasSupermarket = isSupermarketProduct(existing || {});
+        const existingBusinessName = String(existing?.businessName || '').trim();
+        const productBusinessName = publishingToSupermarket
+          ? normalizedBusinessName
+          : (existingWasSupermarket ? '' : existingBusinessName);
         const oldImages = Core.getProductGallery(existing);
         const currentImages = Array.isArray(productForm.images) ? productForm.images.filter(Boolean) : oldImages;
         const uploadedImages = await uploadPendingProductImages(id);
@@ -302,7 +327,9 @@
           image: mainImage,
           imageUrl: mainImage,
           active: Boolean(productForm.active),
-          businessName: normalizedBusinessName,
+          businessName: productBusinessName,
+          supermarketBusinessName: publishingToSupermarket ? normalizedBusinessName : '',
+          businessNameUpdatedAt: publishingToSupermarket ? Date.now() : (existingWasSupermarket ? 0 : (existing?.businessNameUpdatedAt || 0)),
           publicationType: Core.PRODUCT_ORIGIN_CONTROL,
           sourcePanel: Core.PRODUCT_ORIGIN_CONTROL,
           ownerId: '',
@@ -330,10 +357,10 @@
         // publicaciones ni deja el formulario reportando un falso error.
         await publicProducts.savePublicProduct(product, { applyLocalOnError: false });
         await saveAdminMirror(product);
-        if (typeof businessModule.rememberBusinessName === 'function') {
+        if (publishingToSupermarket && typeof businessModule.rememberBusinessName === 'function') {
           businessModule.rememberBusinessName(businessOwnerKey, normalizedBusinessName);
         }
-        setBusinessName(normalizedBusinessName);
+        if (publishingToSupermarket) setBusinessName(normalizedBusinessName);
         resetProductForm();
       } catch (error) {
         console.error('Guardar producto Panel de Control:', error);
@@ -345,7 +372,7 @@
     const saveBusinessName = useCallback(async (event) => {
       event?.preventDefault?.();
       if (sessionUser?.role !== 'admin') {
-        alert('Solo el administrador puede guardar el nombre del negocio del Panel de Control.');
+        alert('Solo el administrador puede guardar el nombre de Supermercado del Panel de Control.');
         return;
       }
       const businessModule = global.DriveMxBusinessStorefronts || {};
@@ -353,7 +380,7 @@
         ? businessModule.normalizeBusinessName(businessName)
         : String(businessName || '').trim();
       if (!normalizedBusinessName) {
-        alert('Ingresa el nombre del negocio.');
+        alert('Ingresa el nombre del negocio para Supermercado.');
         return;
       }
 
@@ -365,16 +392,17 @@
         if (profileId) {
           const operatorRef = fbase.doc(fbase.getFirestore(), 'artifacts', appId, 'public', 'data', 'operators', profileId);
           await fbase.setDoc(operatorRef, {
-            businessName: normalizedBusinessName,
+            supermarketBusinessName: normalizedBusinessName,
             updatedAt,
             updatedBy
           }, { merge: true });
         }
 
-        for (const product of controlProducts) {
+        for (const product of controlProducts.filter(isSupermarketProduct)) {
           const updatedProduct = {
             ...product,
             businessName: normalizedBusinessName,
+            supermarketBusinessName: normalizedBusinessName,
             businessNameUpdatedAt: updatedAt,
             updatedBy,
             publicationType: Core.PRODUCT_ORIGIN_CONTROL,
@@ -388,11 +416,11 @@
           businessModule.rememberBusinessName(businessOwnerKey, normalizedBusinessName);
         }
         setBusinessName(normalizedBusinessName);
-        onSessionUserChange({ ...(sessionUser || {}), businessName: normalizedBusinessName, updatedAt, updatedBy });
-        alert('Nombre del negocio guardado correctamente.');
+        onSessionUserChange({ ...(sessionUser || {}), supermarketBusinessName: normalizedBusinessName, updatedAt, updatedBy });
+        alert('Nombre del negocio de Supermercado guardado correctamente.');
       } catch (error) {
-        console.error('Guardar nombre del negocio Panel de Control:', error);
-        alert('No se pudo guardar el nombre del negocio.');
+        console.error('Guardar nombre de Supermercado Panel de Control:', error);
+        alert('No se pudo guardar el nombre del negocio de Supermercado.');
       } finally {
         setBusinessNameSaving(false);
       }
@@ -431,6 +459,10 @@
         previous.forEach(revokePreview);
         return [];
       });
+      if (isSupermarketProduct(product)) {
+        const productBusinessName = String(product.supermarketBusinessName || product.businessName || '').trim();
+        if (productBusinessName) setBusinessName(productBusinessName);
+      }
       setEditingProductId(product.id);
     }, [defaultSupermarketShippingCost]);
 
@@ -652,15 +684,6 @@
 
     return (
       <>
-        {BusinessStorefronts.BusinessNameSettings && (
-          <BusinessStorefronts.BusinessNameSettings
-            value={businessName}
-            onChange={setBusinessName}
-            saving={businessNameSaving}
-            onSubmit={saveBusinessName}
-            description="Este nombre identificará el bloque de publicaciones del Panel de Control en Productos Drive MX y Supermercado"
-          />
-        )}
         <div className="card-glass overflow-hidden">
         <div className="bg-slate-50 border-b border-slate-100 px-6 py-4 flex items-center justify-between gap-3">
           <div>
@@ -671,6 +694,17 @@
         </div>
 
         <div className="p-6 border-b border-slate-50">
+          {BusinessStorefronts.BusinessNameSettings && (
+            <div className="mb-6">
+              <BusinessStorefronts.BusinessNameSettings
+                value={businessName}
+                onChange={setBusinessName}
+                saving={businessNameSaving}
+                onSubmit={saveBusinessName}
+                description="Este nombre modifica únicamente Supermercado del Panel de Control y se mostrará dentro del bloque Productos Drive MX de la portada principal"
+              />
+            </div>
+          )}
           <form onSubmit={handleProductSubmit} className="grid md:grid-cols-5 gap-3">
             <label className="md:col-span-5 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl p-4 cursor-pointer hover:border-red-200 transition-all">
               <input type="file" accept="image/*" multiple className="hidden" onChange={handleProductImagesSelect} />
@@ -808,5 +842,6 @@
     AdminProductsPanel
   };
 })(window);
+
 
 
