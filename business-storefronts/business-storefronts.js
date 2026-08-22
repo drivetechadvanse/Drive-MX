@@ -195,31 +195,66 @@
     return 'Negocio del usuario';
   }
 
-  function getGroupBusinessName(products = [], ownerKey = '') {
+  function getLatestExplicitBusinessName(products = [], selector = getProductBusinessName) {
     const namedProducts = (Array.isArray(products) ? products : [])
-      .filter((product) => getProductBusinessName(product))
+      .filter((product) => selector(product))
       .sort((a, b) => getBusinessNameUpdatedAt(b) - getBusinessNameUpdatedAt(a));
-    return namedProducts.length > 0
-      ? getProductBusinessName(namedProducts[0])
-      : getFallbackBusinessName(products, ownerKey);
+    return namedProducts.length > 0 ? normalizeBusinessName(selector(namedProducts[0])) : '';
+  }
+
+  function getProductSupermarketBusinessName(product = {}) {
+    return normalizeBusinessName(
+      product.supermarketBusinessName
+      || product.nombreNegocioSupermercado
+      || product.supermarket_business_name
+      || getProductBusinessName(product)
+    );
+  }
+
+  function getGroupBusinessName(products = [], ownerKey = '') {
+    return getLatestExplicitBusinessName(products) || getFallbackBusinessName(products, ownerKey);
+  }
+
+  function getStorefrontBusinessName(products = [], ownerKey = '') {
+    if (ownerKey === ADMIN_OWNER_KEY) {
+      const generalProducts = filterProductsByCategory(products, 'general');
+      return getLatestExplicitBusinessName(generalProducts) || 'Drive MX';
+    }
+    return getGroupBusinessName(products, ownerKey);
+  }
+
+  function getSupermarketSectionBusinessName(products = [], ownerKey = '') {
+    if (ownerKey !== ADMIN_OWNER_KEY) return '';
+    return getLatestExplicitBusinessName(products, getProductSupermarketBusinessName) || 'Supermercado';
   }
 
   function groupProductsByBusiness(products = []) {
     const groupsByKey = new Map();
     (Array.isArray(products) ? products : [])
       .filter((product) => product && product.active !== false)
-      .forEach((product) => {
+      .forEach((product, productIndex) => {
         const ownerKey = getStorefrontOwnerKey(product);
-        if (!groupsByKey.has(ownerKey)) groupsByKey.set(ownerKey, []);
-        groupsByKey.get(ownerKey).push(product);
+        if (!groupsByKey.has(ownerKey)) groupsByKey.set(ownerKey, new Map());
+        const productId = normalizeOwnerValue(product.id || '');
+        const productKey = productId ? `id:${productId}` : `row:${productIndex}`;
+        const groupMap = groupsByKey.get(ownerKey);
+        const previous = groupMap.get(productKey);
+        if (!previous || getProductUpdatedAt(product) >= getProductUpdatedAt(previous)) {
+          groupMap.set(productKey, product);
+        }
       });
 
-    return Array.from(groupsByKey.entries()).map(([ownerKey, groupProducts]) => {
-      const sortedProducts = sortStorefrontProducts(groupProducts);
+    return Array.from(groupsByKey.entries()).map(([ownerKey, groupMap]) => {
+      const sortedProducts = sortStorefrontProducts(Array.from(groupMap.values()));
+      const generalProducts = filterProductsByCategory(sortedProducts, 'general');
+      const supermarketProducts = filterProductsByCategory(sortedProducts, 'supermercado');
       return {
         ownerKey,
-        businessName: getGroupBusinessName(sortedProducts, ownerKey),
+        businessName: getStorefrontBusinessName(sortedProducts, ownerKey),
+        supermarketBusinessName: getSupermarketSectionBusinessName(supermarketProducts, ownerKey),
         initialProduct: sortedProducts[0] || null,
+        generalProducts,
+        supermarketProducts,
         products: sortedProducts
       };
     });
@@ -448,42 +483,87 @@
   function BusinessHomeSection(props = {}) {
     const React = getReact();
     if (!React) return null;
-    const category = props.category === 'supermercado' ? 'supermercado' : 'general';
-    const categoryProducts = filterProductsByCategory(props.products || [], category);
-    const groups = groupProductsByBusiness(categoryProducts);
-    let cumulativeProducts = 0;
-    let adBlockIndex = 0;
+    const groups = groupProductsByBusiness(props.products || []);
     const railSize = Math.max(1, Math.floor(Number(props.productsPerRail || PRODUCTS_PER_RAIL)));
+    let cumulativeGeneralProducts = 0;
+    let adBlockIndex = 0;
 
     const storefronts = groups.map((group) => {
       const groupRows = [];
-      let groupStart = 1;
-      let productIndex = 0;
 
-      while (productIndex < group.products.length) {
-        const productsUntilAd = category === 'general'
-          ? PRODUCTS_PER_RAIL - (cumulativeProducts % PRODUCTS_PER_RAIL || 0)
-          : railSize;
-        const chunkSize = Math.max(1, Math.min(railSize, productsUntilAd, group.products.length - productIndex));
-        const chunk = group.products.slice(productIndex, productIndex + chunkSize);
-        const currentStart = groupStart;
-        productIndex += chunk.length;
-        groupStart += chunk.length;
-        cumulativeProducts += chunk.length;
+      if (group.generalProducts.length > 0) {
+        const generalRows = [];
+        let generalStart = 1;
+        let generalIndex = 0;
 
-        groupRows.push(h(BusinessProductsRail, {
-          key: `${group.ownerKey}_rail_${productIndex}`,
-          products: chunk,
-          category,
-          startIndex: currentStart,
-          getProductGallery: props.getProductGallery,
-          onProductClick: props.onProductClick,
-          ariaLabel: `Publicaciones de ${group.businessName}`
-        }));
+        while (generalIndex < group.generalProducts.length) {
+          const remainder = cumulativeGeneralProducts % PRODUCTS_PER_RAIL;
+          const productsUntilAd = remainder === 0 ? PRODUCTS_PER_RAIL : PRODUCTS_PER_RAIL - remainder;
+          const chunkSize = Math.max(1, Math.min(railSize, productsUntilAd, group.generalProducts.length - generalIndex));
+          const chunk = group.generalProducts.slice(generalIndex, generalIndex + chunkSize);
+          const currentStart = generalStart;
+          generalIndex += chunk.length;
+          generalStart += chunk.length;
+          cumulativeGeneralProducts += chunk.length;
 
-        if (category === 'general' && cumulativeProducts % PRODUCTS_PER_RAIL === 0) {
-          groupRows.push(h(React.Fragment, { key: `${group.ownerKey}_ad_${adBlockIndex}` }, renderAdBanner(props.ads || [], adBlockIndex++)));
+          generalRows.push(h(BusinessProductsRail, {
+            key: `${group.ownerKey}_general_rail_${generalIndex}`,
+            products: chunk,
+            category: 'general',
+            startIndex: currentStart,
+            getProductGallery: props.getProductGallery,
+            onProductClick: props.onProductClick,
+            ariaLabel: `Productos Drive MX de ${group.businessName}`
+          }));
+
+          if (cumulativeGeneralProducts % PRODUCTS_PER_RAIL === 0) {
+            generalRows.push(h(React.Fragment, { key: `${group.ownerKey}_general_ad_${adBlockIndex}` }, renderAdBanner(props.ads || [], adBlockIndex++)));
+          }
         }
+
+        groupRows.push(h('div', {
+          key: `${group.ownerKey}_general`,
+          className: 'drive-mx-business-related-category space-y-4',
+          'data-business-category': 'productos-drive-mx'
+        },
+          h('h4', { className: 'text-sm font-black uppercase tracking-widest text-slate-700' }, 'Productos Drive MX'),
+          ...generalRows
+        ));
+      }
+
+      if (group.supermarketProducts.length > 0) {
+        const supermarketRows = [];
+        let supermarketStart = 1;
+        for (let index = 0; index < group.supermarketProducts.length; index += railSize) {
+          const chunk = group.supermarketProducts.slice(index, index + railSize);
+          const currentStart = supermarketStart;
+          supermarketStart += chunk.length;
+          supermarketRows.push(h(BusinessProductsRail, {
+            key: `${group.ownerKey}_supermercado_rail_${index}`,
+            products: chunk,
+            category: 'supermercado',
+            startIndex: currentStart,
+            getProductGallery: props.getProductGallery,
+            onProductClick: props.onProductClick,
+            ariaLabel: `Supermercado de ${group.businessName}`
+          }));
+        }
+
+        const supermarketTitle = group.ownerKey === ADMIN_OWNER_KEY
+          ? (group.supermarketBusinessName || 'Supermercado')
+          : 'Supermercado';
+
+        groupRows.push(h('div', {
+          key: `${group.ownerKey}_supermercado`,
+          className: 'drive-mx-business-related-category space-y-4',
+          'data-business-category': 'supermercado'
+        },
+          h('div', null,
+            h('p', { className: 'text-[9px] font-black text-red-500 uppercase tracking-widest' }, 'Supermercado'),
+            h('h4', { className: 'text-sm font-black uppercase tracking-widest text-slate-700' }, supermarketTitle)
+          ),
+          ...supermarketRows
+        ));
       }
 
       return h('section', {
@@ -502,7 +582,7 @@
       );
     });
 
-    if (category === 'general' && groups.length > 0 && cumulativeProducts % PRODUCTS_PER_RAIL !== 0) {
+    if (groups.length > 0 && (cumulativeGeneralProducts === 0 || cumulativeGeneralProducts % PRODUCTS_PER_RAIL !== 0)) {
       const lastStorefront = storefronts[storefronts.length - 1];
       storefronts[storefronts.length - 1] = h(React.Fragment, { key: `last_storefront_${adBlockIndex}` },
         lastStorefront,
@@ -510,33 +590,24 @@
       );
     }
 
-    const emptyText = category === 'supermercado'
-      ? 'Aún no hay productos de supermercado disponibles'
-      : 'Aún no hay productos disponibles';
-    const emptyHelp = category === 'supermercado'
-      ? 'Los productos aparecerán aquí al publicarse con la categoría Supermercado'
-      : 'El inventario se actualizará automáticamente cuando existan publicaciones activas';
-
     return h('section', {
-      className: `drive-mx-business-home drive-mx-business-home-${category} w-full space-y-7`,
-      id: category === 'supermercado' ? 'supermercado-section' : undefined
+      className: 'drive-mx-business-home drive-mx-business-home-general w-full space-y-7',
+      id: 'supermercado-section'
     },
       h('div', { className: 'flex items-end justify-between gap-4 mb-1' },
         h('div', null,
-          h('p', { className: 'text-[10px] text-red-500 font-black uppercase tracking-widest' }, category === 'supermercado' ? 'Categoría' : 'Inventario disponible'),
-          category === 'supermercado'
-            ? h('h2', { className: 'text-2xl font-black tracking-tight' }, 'Supermercado')
-            : h('h2', { className: 'text-2xl font-black tracking-tight' }, 'Productos ', h('span', { className: 'text-red-500' }, 'Drive MX'))
+          h('p', { className: 'text-[10px] text-red-500 font-black uppercase tracking-widest' }, 'Inventario disponible'),
+          h('h2', { className: 'text-2xl font-black tracking-tight' }, 'Productos ', h('span', { className: 'text-red-500' }, 'Drive MX'))
         ),
         h('p', { className: 'hidden sm:block text-[9px] font-bold text-slate-400 uppercase tracking-widest' }, 'Actualizado automáticamente')
       ),
       groups.length > 0
         ? storefronts
-        : h('div', { className: category === 'supermercado' ? 'drive-mx-supermercado-empty' : 'drive-mx-home-products-empty' },
-            h('p', { className: 'text-[10px] font-black text-slate-400 uppercase tracking-widest' }, emptyText),
-            h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase tracking-widest mt-1' }, emptyHelp)
+        : h('div', { className: 'drive-mx-home-products-empty' },
+            h('p', { className: 'text-[10px] font-black text-slate-400 uppercase tracking-widest' }, 'Aún no hay productos disponibles'),
+            h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase tracking-widest mt-1' }, 'El inventario se actualizará automáticamente cuando existan publicaciones activas')
           ),
-      category === 'general' && groups.length === 0 ? renderAdBanner(props.ads || [], 0) : null
+      groups.length === 0 ? renderAdBanner(props.ads || [], 0) : null
     );
   }
 
@@ -566,7 +637,8 @@
     const relatedProducts = getRelatedProducts(props.products || [], selectedProduct);
     if (relatedProducts.length === 0) return null;
     const ownerKey = getStorefrontOwnerKey(selectedProduct);
-    const businessName = getGroupBusinessName([selectedProduct, ...relatedProducts], ownerKey);
+    const allBusinessProducts = [selectedProduct, ...relatedProducts];
+    const businessName = getStorefrontBusinessName(allBusinessProducts, ownerKey);
     const generalProducts = filterProductsByCategory(relatedProducts, 'general');
     const supermarketProducts = filterProductsByCategory(relatedProducts, 'supermercado');
 
@@ -620,3 +692,4 @@
     RelatedBusinessProducts
   };
 })(window);
+
