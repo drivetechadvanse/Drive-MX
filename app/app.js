@@ -2,6 +2,8 @@ const { useState, useEffect, useRef, useCallback } = React;
 const fbase = window.FirebaseSDK;
 const Wallet = window.DriveMxWallet;
 const WalletUI = window.DriveMxWalletUI;
+const WalletPayment = window.DriveMxWalletPayment;
+const Cashback = window.DriveMxCashback || {};
 const UsersUI = window.DriveMxUsersUI;
 const AdsManager = window.DriveMxAdsManager;
 const HomeProducts = window.DriveMxHomeProducts || {};
@@ -370,6 +372,7 @@ const App = () => {
     const [wallets, setWallets] = useState([]);
     const [walletSettings, setWalletSettings] = useState(() => Wallet.defaultSettings());
     const [walletSettingsSaving, setWalletSettingsSaving] = useState(false);
+    const [cashbackSettingsSaving, setCashbackSettingsSaving] = useState(false);
     const [walletMovements, setWalletMovements] = useState([]);
     const [walletRecharges, setWalletRecharges] = useState([]);
     const [showWalletRecharge, setShowWalletRecharge] = useState(false);
@@ -393,6 +396,12 @@ const App = () => {
         onSessionProfileChange: (profile) => featureManagersRef.current.onSessionProfileChange?.(profile)
     });
     const { fbUser, sessionUser } = authManager;
+    const walletPaymentManager = WalletPayment.useWalletPayment({
+        fbase,
+        firebaseConfig: window.firebaseConfig,
+        appId,
+        Wallet
+    });
     const isUserBlocked = authManager.isUserBlocked;
     const getCurrentSessionProfile = () => authManager.findRegisteredUserProfile(sessionUser) || sessionUser || {};
     const ensureAccountAllowed = useCallback(() => {
@@ -430,6 +439,7 @@ const App = () => {
         Wallet,
         supermarketShippingFee: supermarketSettings.shippingFee,
         ensureAccountAllowed,
+        verifyAdminPassword: authManager.verifyAdminPassword,
         onSessionUserChange: authManager.setSessionUser
     });
     const currentUserProducts = userProductsManager.currentUserProducts;
@@ -1329,6 +1339,35 @@ const App = () => {
         }
     };
 
+    const saveCashbackSettings = async (event) => {
+        event?.preventDefault?.();
+        const rawAmount = Number(walletSettings.globalCashbackAmount);
+        const maximum = Number(Cashback.MAX_AMOUNT || 1000000);
+        if (!Number.isFinite(rawAmount) || rawAmount < 0 || rawAmount > maximum) {
+            alert(`Ingresa una cantidad de Cash Back entre $0.00 y $${maximum.toLocaleString('es-MX')} MXN.`);
+            return;
+        }
+        const amount = typeof Cashback.normalizeAmount === 'function'
+            ? Cashback.normalizeAmount(rawAmount, Cashback.DEFAULT_AMOUNT || 10)
+            : Number(rawAmount.toFixed(2));
+        setCashbackSettingsSaving(true);
+        try {
+            const next = await Wallet.saveSettings({
+                fbase,
+                appId,
+                settings: { ...walletSettings, globalCashbackAmount: amount },
+                actor: sessionUser?.email || ADMIN_EMAIL
+            });
+            setWalletSettings(next);
+            alert(`Cash Back global guardado en ${Wallet.formatMoney(next.globalCashbackAmount)} por cada compra pagada con cartera.`);
+        } catch(error) {
+            console.error('Guardar Cash Back global:', error);
+            alert('No se pudo guardar la configuración de Cash Back.');
+        } finally {
+            setCashbackSettingsSaving(false);
+        }
+    };
+
     const persistCart = (items = []) => {
         const next = writeVisitorCart(items);
         setCartItems(next);
@@ -1470,6 +1509,7 @@ const App = () => {
         setSelectedProductQuantity(0);
         setCurrentImageIndex(0);
         setSelectedPaymentMethod('transfer');
+        walletPaymentManager.reset();
         setIsCartOpen(false);
         resetDeliveryForm();
         setOrderSending(false);
@@ -1477,6 +1517,11 @@ const App = () => {
 
     const resetAfterIncompletePayment = () => {
         resetPublicFlow();
+    };
+
+    const selectPaymentMethod = (method) => {
+        setSelectedPaymentMethod(method);
+        if (method !== 'wallet') walletPaymentManager.reset();
     };
 
     const getPrimaryAuth = () => EmailPasswordAuthUI.services.getPrimaryAuth({
@@ -2696,6 +2741,108 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         }
     };
 
+    const payWithWallet = async () => {
+        if (!walletPaymentManager.verified) {
+            alert('Ingresa y valida el usuario y la contraseña de la cartera.');
+            return;
+        }
+        if (!ensureSupermarketMinimumAllowed(checkoutProducts)) return;
+        if (!ensureCheckoutInventoryAllowed(checkoutProducts)) return;
+        if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
+        if (!walletPaymentManager.canPay(checkoutTotal)) {
+            alert(`Saldo insuficiente. La compra requiere ${Wallet.formatMoney(checkoutTotal)} y la cartera dispone de ${Wallet.formatMoney(walletPaymentManager.availableBalance)}.`);
+            return;
+        }
+
+        setOrderSending(true);
+        try {
+            const payload = buildOrderPayload();
+            const validationMessage = validatePendingTransferPayload(payload);
+            if (validationMessage) {
+                alert(validationMessage);
+                return;
+            }
+
+            const paymentId = walletPaymentManager.getOrCreatePaymentId();
+            const walletOrder = {
+                products: (Array.isArray(payload.products) ? payload.products : []).map((product) => ({
+                    id: product.id,
+                    quantity: product.quantity,
+                    sizes: normalizeProductSizes(product.sizes),
+                    colors: normalizeProductColors(product.colors)
+                })),
+                delivery: { ...(payload.delivery || {}) },
+                cart: { total: Number(payload.cart?.total || 0) }
+            };
+            const result = await walletPaymentManager.pay({ paymentId, order: walletOrder });
+
+            (Array.isArray(result.inventoryUpdates) ? result.inventoryUpdates : []).forEach((update) => {
+                applyProductInventoryLocal(update.productId, update.patch || {}, update.ownerId || '');
+            });
+            (Array.isArray(result.sales) ? result.sales : []).forEach((sale) => {
+                const saleId = sale?.id || sale?.saleId;
+                if (saleId) applyCompletedSaleLocal(saleId, sale);
+            });
+
+            let emailSent = true;
+            try {
+                const emailPayload = appendSaleNotificationToPayload({
+                    ...payload,
+                    transferId: paymentId,
+                    walletPaymentId: paymentId,
+                    paidAt: Number(result.paidAt || Date.now()),
+                    paymentStatus: 'Pagado',
+                    paymentMethod: 'Cartera',
+                    requestId: `wallet_${paymentId}`
+                });
+                await sendOrderEmail(emailPayload, { maxAttempts: 2 });
+            } catch(emailError) {
+                emailSent = false;
+                console.error('[Cartera][Correo] El pago se completó, pero no se pudo enviar el correo.', {
+                    paymentId,
+                    ...getOperationErrorDetails(emailError)
+                }, emailError);
+            }
+
+            const cashbackAmount = Number(result.cashbackAmount || 0);
+            const cashbackText = cashbackAmount > 0
+                ? ` Se abonó automáticamente ${Wallet.formatMoney(cashbackAmount)} de Cash Back.`
+                : '';
+            const balanceText = ` Saldo restante: ${Wallet.formatMoney(result.balanceAfter || 0)}.`;
+            const emailText = emailSent
+                ? ' La confirmación de compra fue enviada por correo.'
+                : ' El cobro quedó confirmado, aunque no fue posible enviar el correo de confirmación.';
+            alert(`Pago con cartera realizado correctamente.${cashbackText}${balanceText}${emailText}`);
+            clearCompletedCartIfNeeded();
+            resetPublicFlow();
+        } catch(error) {
+            const code = String(error?.code || '').toLowerCase();
+            const details = error?.details || {};
+            console.error('[Cartera][Pago] No se pudo completar el cobro.', {
+                ...getOperationErrorDetails(error),
+                details
+            }, error);
+
+            if (code.includes('wallet-auth') || code.includes('wallet-user-invalid') || code.includes('wallet-profile')) {
+                await walletPaymentManager.reset();
+                alert('La validación de la cartera ya no es válida. Ingresa nuevamente usuario y contraseña.');
+            } else if (code.includes('wallet-insufficient-funds') || code.includes('wallet-not-found') || code.includes('wallet-not-active')) {
+                const available = Number(details.availableBalance ?? walletPaymentManager.availableBalance ?? 0);
+                alert(`Saldo insuficiente o cartera no disponible. Saldo disponible: ${Wallet.formatMoney(available)}.`);
+            } else if (code.includes('seller-wallet')) {
+                alert(Wallet.INSUFFICIENT_MESSAGE);
+            } else if (code.includes('product-') || code.includes('order-total-changed')) {
+                alert(error?.message || 'El inventario o el total de la compra cambió. Regresa al carrito y revisa la compra.');
+            } else if (code.includes('timeout') || code.includes('network') || !error?.httpStatus) {
+                alert('No se pudo confirmar la respuesta del cobro. Presiona nuevamente “Pagar con cartera”; el mismo identificador se reutilizará y el pago no se duplicará.');
+            } else {
+                alert(error?.message || 'No se pudo realizar el pago con cartera.');
+            }
+        } finally {
+            setOrderSending(false);
+        }
+    };
+
     const markTransferPaid = async (transfer) => {
         const transferId = String(transfer?.id || transfer?.transferId || '').trim();
         const isSaleTransfer = transfer?.type !== 'wallet_recharge';
@@ -3368,11 +3515,12 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 </div>
                                 <div className="grid md:grid-cols-2 gap-4">
                                     {[
-                                        ['transfer', 'Transferencia bancaria', 'Queda Pendiente hasta que el administrador confirme el pago. El costo de envío se calcula según la categoría de los productos.']
+                                        ['transfer', 'Transferencia bancaria', 'Queda Pendiente hasta que el administrador confirme el pago. El costo de envío se calcula según la categoría de los productos.'],
+                                        ['wallet', 'Cartera (pago con cartera)', 'El cobro se realiza directamente del saldo validado y al finalizar se abona el Cash Back global configurado.']
                                     ].map(([value, title, desc]) => (
                                         <label key={value} className={`border-2 rounded-2xl p-5 cursor-pointer hover:border-red-200 transition-all bg-white ${selectedPaymentMethod === value ? 'border-red-400' : 'border-slate-100'}`}>
                                             <div className="flex items-start gap-3">
-                                                <input type="radio" name="paymentMethod" className="mt-1" checked={selectedPaymentMethod === value} onChange={() => setSelectedPaymentMethod(value)} />
+                                                <input type="radio" name="paymentMethod" className="mt-1" checked={selectedPaymentMethod === value} onChange={() => selectPaymentMethod(value)} />
                                                 <div>
                                                     <p className="text-sm font-black text-slate-800">{title}</p>
                                                     <p className="text-[10px] font-bold text-slate-400 uppercase mt-1 leading-relaxed">{desc}</p>
@@ -3390,13 +3538,26 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                     </div>
                                 )}
 
+                                {selectedPaymentMethod === 'wallet' && WalletPayment.WalletCredentialsCard && (
+                                    <WalletPayment.WalletCredentialsCard manager={walletPaymentManager} total={checkoutTotal} />
+                                )}
+
                                 <div className="bg-slate-50 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 checkout-submit-bar">
                                     <div>
                                         <p className="text-[9px] font-black text-slate-400 uppercase">Total</p>
                                         <p className="text-[10px] font-bold text-slate-400 uppercase">Productos: ${Number(checkoutSubtotal || 0).toFixed(2)} · Envío: {formatCheckoutShippingFee(checkoutShippingFee)} · Unidades: {checkoutTotalQuantity}</p>
                                         <p className="text-3xl font-black text-red-500">${Number(checkoutTotal || 0).toFixed(2)}</p>
                                     </div>
-                                    <button type="button" onClick={createPendingTransfer} disabled={orderSending || !paymentSettings.bankAccount} className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed checkout-submit-button">{orderSending ? 'Registrando...' : 'Registrar transferencia pendiente'}</button>
+                                    <div className="flex flex-col sm:flex-row sm:items-center gap-3 checkout-payment-actions">
+                                        {selectedPaymentMethod === 'wallet' && WalletPayment.WalletBalanceBadge && (
+                                            <WalletPayment.WalletBalanceBadge manager={walletPaymentManager} total={checkoutTotal} />
+                                        )}
+                                        {selectedPaymentMethod === 'transfer' ? (
+                                            <button type="button" onClick={createPendingTransfer} disabled={orderSending || !paymentSettings.bankAccount} className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed checkout-submit-button">{orderSending ? 'Registrando...' : 'Registrar transferencia pendiente'}</button>
+                                        ) : (
+                                            <button type="button" onClick={payWithWallet} disabled={orderSending || walletPaymentManager.paying || !walletPaymentManager.canPay(checkoutTotal)} className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed checkout-submit-button">{orderSending || walletPaymentManager.paying ? 'Cobrando...' : 'Pagar con cartera'}</button>
+                                        )}
+                                    </div>
                                 </div>
                                 <button type="button" onClick={resetAfterIncompletePayment} className="w-full text-[9px] font-black text-slate-400 uppercase hover:text-red-500">Cancelar método de pago y restablecer pantalla</button>
                             </div>
@@ -3408,6 +3569,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     <PanelControlUI.AdminPanel
                         Icons={Icons}
                         WalletUI={WalletUI}
+                        CashbackUI={Cashback}
                         UsersUI={UsersUI}
                         AdsManager={AdsManager}
                         fbase={fbase}
@@ -3431,6 +3593,8 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         setWalletSettings={setWalletSettings}
                         saveWalletCommissionSettings={saveWalletCommissionSettings}
                         walletSettingsSaving={walletSettingsSaving}
+                        saveCashbackSettings={saveCashbackSettings}
+                        cashbackSettingsSaving={cashbackSettingsSaving}
                         wallets={wallets}
                         walletRechargeRows={walletRechargeRows}
                         approveWalletRechargeFromPanel={approveWalletRechargeFromPanel}
