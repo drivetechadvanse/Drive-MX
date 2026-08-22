@@ -7,6 +7,10 @@
   const { useState, useEffect, useMemo, useCallback } = React;
   const Core = global.DriveMxProductsCore;
   if (!Core) throw new Error('DriveMxUserProducts: products-core no está disponible.');
+  const SupermarketAccess = global.DriveMxSupermarketAccess || {
+    useSupermarketAccess: () => ({ requestCategory: (category, applyCategory) => applyCategory?.(category) }),
+    SupermarketPasswordPrompt: null
+  };
 
   const EMPTY_FORM = {
     id: '', name: '', price: '', stock: '', description: '', specifications: '',
@@ -105,6 +109,7 @@
     walletSettings = {},
     Wallet = global.DriveMxWallet,
     ensureAccountAllowed = () => true,
+    verifyAdminPassword = async () => false,
     onSessionUserChange = () => {}
   } = {}) {
     const [userPanelProducts, setUserPanelProducts] = useState([]);
@@ -124,6 +129,26 @@
       return String(sessionUser?.businessName || '').trim();
     });
     const [businessNameSaving, setBusinessNameSaving] = useState(false);
+    const supermarketAccessManager = SupermarketAccess.useSupermarketAccess({
+      fbase,
+      appId,
+      sessionUser,
+      verifyAdminPassword,
+      onSessionUserChange
+    });
+    const requestSupermarketProductCategory = supermarketAccessManager?.requestCategory;
+    const cancelSupermarketProductPrompt = supermarketAccessManager?.cancelPrompt;
+    const supermarketProductsAuthorized = supermarketAccessManager?.authorized === true;
+    const handleUserProductCategoryChange = useCallback((category) => {
+      const applyCategory = (selectedCategory) => {
+        setUserProductForm((previous) => ({ ...previous, category: selectedCategory }));
+      };
+      if (typeof requestSupermarketProductCategory === 'function') {
+        requestSupermarketProductCategory(category, applyCategory);
+        return;
+      }
+      applyCategory(category);
+    }, [requestSupermarketProductCategory]);
 
     const sessionUserId = getUserProfileId(sessionUser || {});
     const businessOwnerKey = sessionUserId || initialBusinessOwnerKey;
@@ -239,6 +264,7 @@
       .sort((a, b) => Number(b.soldAt || b.createdAt || 0) - Number(a.soldAt || a.createdAt || 0)), [userCompletedSales, sessionUser]);
 
     const resetUserProductForm = useCallback(() => {
+      cancelSupermarketProductPrompt?.();
       setUserProductForm(createFormState());
       setUserProductImageFiles((previous) => {
         previous.forEach(revokePreview);
@@ -246,7 +272,7 @@
       });
       setUserProductUploading(false);
       setEditingUserProductId(null);
-    }, []);
+    }, [cancelSupermarketProductPrompt]);
 
     const saveUserProductMirror = useCallback(async (product = {}, options = {}) => {
       const normalized = Core.ensureProductId(product);
@@ -381,6 +407,15 @@
         alert('Inicia sesión para administrar tus publicaciones.');
         return;
       }
+      const selectedCategory = userProductForm.category || userProductForm.productCategory || '';
+      if (SupermarketAccess.isSupermarketCategory?.(selectedCategory) && !supermarketProductsAuthorized) {
+        if (typeof requestSupermarketProductCategory === 'function') {
+          requestSupermarketProductCategory(selectedCategory, (authorizedCategory) => {
+            setUserProductForm((previous) => ({ ...previous, category: authorizedCategory }));
+          });
+        }
+        return;
+      }
       const safeOwnerId = safeSessionUserId || `usuario_${Date.now()}`;
       const id = editingUserProductId || userProductForm.id || `userprod_${safeOwnerId}_${Date.now()}`;
       const existing = currentUserProducts.find((product) => String(product.id) === String(id));
@@ -452,7 +487,7 @@
         alert('No se pudo guardar la publicación. Intenta nuevamente.');
         setUserProductUploading(false);
       }
-    }, [ensureAccountAllowed, sessionUserId, safeSessionUserId, editingUserProductId, userProductForm, currentUserProducts, sessionUser, ensurePublicationWalletAllowed, userProductImageFiles, uploadSingleProductImage, saleNotificationEmail, publicProducts, saveUserProductMirror, resetUserProductForm, businessName, businessOwnerKey]);
+    }, [ensureAccountAllowed, sessionUserId, safeSessionUserId, editingUserProductId, userProductForm, currentUserProducts, sessionUser, ensurePublicationWalletAllowed, userProductImageFiles, uploadSingleProductImage, saleNotificationEmail, publicProducts, saveUserProductMirror, resetUserProductForm, businessName, businessOwnerKey, supermarketProductsAuthorized, requestSupermarketProductCategory]);
 
     const editUserProduct = useCallback((product) => {
       if (ensureAccountAllowed() === false) return;
@@ -655,6 +690,8 @@
       saveUserProductMirror,
       deleteUserProductMirror,
       patchInventoryLocal,
+      supermarketAccessManager,
+      handleUserProductCategoryChange,
       reset
     };
   }
@@ -670,7 +707,8 @@
       saleNotificationEmail, setSaleNotificationEmail, saleNotificationSaving, saveSaleNotificationEmail,
       userProductForm, setUserProductForm, userProductImageFiles, userProductUploading, editingUserProductId,
       resetUserProductForm, handleUserProductImagesSelect, removeExistingUserProductImage, removeNewUserProductImage,
-      replaceExistingUserProductImage, handleUserProductSubmit, editUserProduct, toggleUserProduct, deleteUserProduct
+      replaceExistingUserProductImage, handleUserProductSubmit, editUserProduct, toggleUserProduct, deleteUserProduct,
+      supermarketAccessManager, handleUserProductCategoryChange
     } = manager;
 
     return (
@@ -737,7 +775,8 @@
                 {userProductImageFiles.map((item, index) => <div key={item.preview} className="relative rounded-2xl overflow-hidden bg-slate-100 border border-dashed border-red-200"><img src={item.preview} alt={`Nueva foto ${index + 1}`} className="w-full aspect-square object-cover" /><button type="button" onClick={() => removeNewUserProductImage(index)} className="absolute inset-x-2 bottom-2 bg-red-500 text-white rounded-lg px-2 py-1 text-[7px] font-black uppercase">Quitar</button></div>)}
               </div>}
 
-              {Supermercado.ProductCategorySelect && <Supermercado.ProductCategorySelect value={userProductForm.category || ''} onChange={(category) => setUserProductForm((previous) => ({ ...previous, category }))} />}
+              {Supermercado.ProductCategorySelect && <Supermercado.ProductCategorySelect value={userProductForm.category || ''} onChange={handleUserProductCategoryChange} />}
+              {SupermarketAccess.SupermarketPasswordPrompt && <SupermarketAccess.SupermarketPasswordPrompt manager={supermarketAccessManager} />}
               <input required className="input-field md:col-span-2" placeholder="NOMBRE" value={userProductForm.name || ''} onChange={(event) => setUserProductForm((previous) => ({ ...previous, name: event.target.value }))} />
               <input required type="number" min="0" step="0.01" className="input-field" placeholder="PRECIO" value={userProductForm.price ?? ''} onChange={(event) => setUserProductForm((previous) => ({ ...previous, price: event.target.value }))} />
               <input required type="number" min="0" step="1" className="input-field" placeholder="INVENTARIO" value={userProductForm.stock ?? ''} onChange={(event) => setUserProductForm((previous) => ({ ...previous, stock: event.target.value }))} />
@@ -777,4 +816,5 @@
     }
   };
 })(window);
+
 
