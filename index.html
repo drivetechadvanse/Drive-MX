@@ -9,13 +9,16 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
     <link rel="stylesheet" href="./app/app.css">
+    <link rel="stylesheet" href="./wallet-payment/wallet-payment.css?v=20260822-blankfix-1">
+    <link rel="stylesheet" href="./cashback/cashback.css?v=20260822-blankfix-1">
+    <link rel="stylesheet" href="./supermarket-access/supermarket-access.css?v=20260822-blankfix-1">
 </head>
 <body>
     <div id="root"></div>
 
     <script type="module">
         import { initializeApp, getApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, setPersistence, inMemoryPersistence } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getDocs, runTransaction } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
         import "./search/search.js";
@@ -41,20 +44,23 @@
         };
 
         window.firebaseConfig = firebaseConfig;
-        window.FirebaseSDK = { initializeApp, getApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getDocs, runTransaction, getStorage, ref, uploadBytes, getDownloadURL };
+        window.FirebaseSDK = { initializeApp, getApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, setPersistence, inMemoryPersistence, getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getDocs, runTransaction, getStorage, ref, uploadBytes, getDownloadURL };
     </script>
-    <script src="./wallet/wallet.js"></script>
+    <script src="./wallet/wallet.js?v=20260822-blankfix-1"></script>
+    <script src="./cashback/cashback.js?v=20260822-blankfix-1"></script>
+    <script src="./wallet-payment/wallet-payment.js?v=20260822-blankfix-1"></script>
+    <script src="./supermarket-access/supermarket-access.js?v=20260822-blankfix-1"></script>
     <script src="./users/users.js"></script>
     <script src="./products-core/products-core.js"></script>
     <script src="./business-storefronts/business-storefronts.js"></script>
     <script type="text/babel" data-presets="react" src="./admin-products/admin-products.js"></script>
-    <script type="text/babel" data-presets="react" src="./user-products/user-products.js"></script>
-    <script type="text/babel" data-presets="react" src="./auth-email-password/auth-email-password.js"></script>
+    <script type="text/babel" data-presets="react" src="./user-products/user-products.js?v=20260822-blankfix-1"></script>
+    <script type="text/babel" data-presets="react" src="./auth-email-password/auth-email-password.js?v=20260822-blankfix-1"></script>
     <script type="text/babel" data-presets="react" src="./packages-guides/packages-guides.js"></script>
     <script src="./cart/cart.js"></script>
     <script src="./support/support.js"></script>
 
-    <script type="text/babel" data-presets="react" src="./app/app.js"></script>
+    <script type="text/babel" data-presets="react" src="./app/app.js?v=20260822-blankfix-1"></script>
 </body>
 </html>
           
