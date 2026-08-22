@@ -1,8 +1,11 @@
-const admin = require('firebase-admin');
+const { applicationDefault, cert, getApp, getApps, initializeApp } = require('firebase-admin/app');
+const { getAuth } = require('firebase-admin/auth');
+const { getFirestore } = require('firebase-admin/firestore');
 const crypto = require('crypto');
 
-const APP_ID = process.env.DRIVE_MX_APP_ID || 'saxrecords-appcreat';
-const ADMIN_EMAIL = 'admin@drivemx.com';
+const APP_ID = String(process.env.DRIVE_MX_APP_ID || process.env.FIREBASE_PROJECT_ID || 'saxrecords-appcreat').trim();
+const FIREBASE_PROJECT_ID = String(process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || APP_ID).trim();
+const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || 'admin@drivemx.com').trim().toLowerCase();
 const MAX_PRODUCTS = 40;
 const MAX_REQUEST_BYTES = 600000;
 const GENERAL_SHIPPING_FEE = 150;
@@ -54,75 +57,265 @@ function parseBody(req) {
   }
 }
 
-function parseServiceAccountFromEnv() {
-  const rawJson =
-    process.env.FIREBASE_SERVICE_ACCOUNT_KEY ||
-    process.env.FIREBASE_SERVICE_ACCOUNT_JSON ||
-    process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
-
-  if (rawJson) {
-    let parsed;
+function normalizePrivateKey(value) {
+  let key = clean(value);
+  if (!key) return '';
+  if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
     try {
-      parsed = JSON.parse(rawJson);
-    } catch (jsonError) {
-      try {
-        parsed = JSON.parse(Buffer.from(rawJson, 'base64').toString('utf8'));
-      } catch (base64Error) {
-        throw publicError(
-          'Firebase Admin no tiene credenciales válidas en Vercel.',
-          500,
-          'firebase-admin-invalid-credentials'
-        );
-      }
+      const parsed = JSON.parse(key);
+      key = typeof parsed === 'string' ? parsed : key.slice(1, -1);
+    } catch (error) {
+      key = key.slice(1, -1);
     }
-    if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
-    return parsed;
+  }
+  return key.replace(/\\n/g, '\n');
+}
+
+function decodeServiceAccountValue(rawValue, variableName) {
+  const raw = clean(rawValue);
+  if (!raw) return null;
+
+  const candidates = [raw];
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    candidates.push(raw.slice(1, -1));
   }
 
-  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT;
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+  for (const candidate of candidates) {
+    try {
+      let parsed = JSON.parse(candidate);
+      if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch (error) {}
+  }
+
+  const compact = raw.replace(/\s+/g, '');
+  const base64Candidates = [compact, compact.replace(/-/g, '+').replace(/_/g, '/')];
+  for (let candidate of base64Candidates) {
+    try {
+      while (candidate.length % 4) candidate += '=';
+      const decoded = Buffer.from(candidate, 'base64').toString('utf8');
+      let parsed = JSON.parse(decoded);
+      if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch (error) {}
+  }
+
+  throw publicError(
+    `La variable ${variableName} no contiene un JSON válido de Firebase Admin.`,
+    503,
+    'firebase-admin-invalid-credentials',
+    { variableName }
+  );
+}
+
+function normalizeServiceAccount(serviceAccount, variableName = 'FIREBASE_SERVICE_ACCOUNT_KEY') {
+  if (!serviceAccount || typeof serviceAccount !== 'object') return null;
+  const normalized = {
+    ...serviceAccount,
+    project_id: clean(serviceAccount.project_id || serviceAccount.projectId || FIREBASE_PROJECT_ID),
+    client_email: clean(serviceAccount.client_email || serviceAccount.clientEmail),
+    private_key: normalizePrivateKey(serviceAccount.private_key || serviceAccount.privateKey)
+  };
+
+  if (!normalized.project_id || !normalized.client_email || !normalized.private_key) {
+    throw publicError(
+      `La variable ${variableName} está incompleta: debe incluir project_id, client_email y private_key.`,
+      503,
+      'firebase-admin-invalid-credentials',
+      { variableName }
+    );
+  }
+  return normalized;
+}
+
+function parseServiceAccountFromEnv() {
+  const jsonVariables = [
+    'FIREBASE_SERVICE_ACCOUNT_KEY',
+    'FIREBASE_SERVICE_ACCOUNT_JSON',
+    'FIREBASE_SERVICE_ACCOUNT',
+    'FIREBASE_ADMIN_CREDENTIALS',
+    'FIREBASE_ADMIN_SERVICE_ACCOUNT',
+    'FIREBASE_CREDENTIALS',
+    'FIREBASE_ADMIN_SDK_CONFIG',
+    'GOOGLE_SERVICE_ACCOUNT_JSON',
+    'GOOGLE_APPLICATION_CREDENTIALS_JSON',
+    'GOOGLE_CREDENTIALS'
+  ];
+
+  for (const variableName of jsonVariables) {
+    if (!clean(process.env[variableName])) continue;
+    return normalizeServiceAccount(
+      decodeServiceAccountValue(process.env[variableName], variableName),
+      variableName
+    );
+  }
+
+  const projectId = clean(
+    process.env.FIREBASE_PROJECT_ID ||
+    process.env.FIREBASE_ADMIN_PROJECT_ID ||
+    process.env.GCLOUD_PROJECT ||
+    APP_ID
+  );
+  const clientEmail = clean(
+    process.env.FIREBASE_CLIENT_EMAIL ||
+    process.env.FIREBASE_ADMIN_CLIENT_EMAIL ||
+    process.env.GOOGLE_CLIENT_EMAIL
+  );
+  const privateKey = normalizePrivateKey(
+    process.env.FIREBASE_PRIVATE_KEY ||
+    process.env.FIREBASE_ADMIN_PRIVATE_KEY ||
+    process.env.GOOGLE_PRIVATE_KEY
+  );
   if (projectId && clientEmail && privateKey) {
-    return {
+    return normalizeServiceAccount({
       project_id: projectId,
       client_email: clientEmail,
-      private_key: privateKey.replace(/\\n/g, '\n')
-    };
+      private_key: privateKey
+    }, 'FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY');
+  }
+
+  const googleApplicationCredentials = clean(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+  if (googleApplicationCredentials && (googleApplicationCredentials.startsWith('{') || googleApplicationCredentials.startsWith('eyJ'))) {
+    return normalizeServiceAccount(
+      decodeServiceAccountValue(googleApplicationCredentials, 'GOOGLE_APPLICATION_CREDENTIALS'),
+      'GOOGLE_APPLICATION_CREDENTIALS'
+    );
   }
 
   return null;
 }
 
-function getAdminApp() {
-  if (admin.apps.length) return admin.app();
-  const serviceAccount = parseServiceAccountFromEnv();
-  if (serviceAccount) {
-    return admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-      projectId: serviceAccount.project_id || process.env.FIREBASE_PROJECT_ID || APP_ID
-    });
-  }
-  return admin.initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID || APP_ID });
+function canUseApplicationDefaultCredentials() {
+  return Boolean(
+    clean(process.env.GOOGLE_APPLICATION_CREDENTIALS) ||
+    clean(process.env.K_SERVICE) ||
+    clean(process.env.FUNCTION_TARGET) ||
+    clean(process.env.GAE_ENV)
+  );
 }
 
-function normalizeCredentialError(error) {
-  const code = clean(error?.code).toLowerCase();
+function getAdminApp() {
+  if (getApps().length) return getApp();
+
+  const serviceAccount = parseServiceAccountFromEnv();
+  if (serviceAccount) {
+    return initializeApp({
+      credential: cert(serviceAccount),
+      projectId: serviceAccount.project_id || FIREBASE_PROJECT_ID || APP_ID
+    });
+  }
+
+  if (canUseApplicationDefaultCredentials()) {
+    return initializeApp({
+      credential: applicationDefault(),
+      projectId: FIREBASE_PROJECT_ID
+    });
+  }
+
+  throw publicError(
+    'Falta configurar Firebase Admin en Vercel para autorizar el cobro con cartera.',
+    503,
+    'firebase-admin-not-configured',
+    { requiredEnvironmentVariable: 'FIREBASE_SERVICE_ACCOUNT_KEY' }
+  );
+}
+
+function normalizeCredentialError(error, stage = '') {
+  if (error?.statusCode && error?.code) return error;
+
+  const rawCode = error?.code;
+  const code = clean(rawCode).toLowerCase();
   const message = clean(error?.message).toLowerCase();
+  const numericCode = Number(rawCode);
   const credentialFailure =
     code.includes('credential') ||
     code.includes('app/invalid') ||
+    code.includes('unauthenticated') ||
+    numericCode === 16 ||
     message.includes('credential') ||
     message.includes('service account') ||
     message.includes('default credentials') ||
-    message.includes('could not load the default credentials');
+    message.includes('could not load the default credentials') ||
+    message.includes('failed to determine project id');
 
   if (credentialFailure) {
     return publicError(
       'Firebase Admin no está configurado correctamente en Vercel.',
-      500,
-      'firebase-admin-not-configured'
+      503,
+      'firebase-admin-not-configured',
+      { stage, requiredEnvironmentVariable: 'FIREBASE_SERVICE_ACCOUNT_KEY' }
     );
   }
+
+  const permissionFailure =
+    code.includes('permission-denied') ||
+    code.includes('permission_denied') ||
+    numericCode === 7 ||
+    message.includes('permission denied') ||
+    message.includes('insufficient permission');
+  if (permissionFailure) {
+    return publicError(
+      'La cuenta de servicio de Firebase Admin no tiene permiso para completar el cobro.',
+      503,
+      'firebase-admin-permission-denied',
+      { stage }
+    );
+  }
+
+  const timeoutFailure =
+    code.includes('deadline-exceeded') ||
+    code.includes('deadline_exceeded') ||
+    numericCode === 4 ||
+    message.includes('deadline exceeded');
+  if (timeoutFailure) {
+    return publicError(
+      'Firebase tardó demasiado en confirmar el cobro. Intenta nuevamente con el mismo pedido.',
+      504,
+      'firebase-admin-timeout',
+      { stage }
+    );
+  }
+
+  const unavailableFailure =
+    code.includes('unavailable') ||
+    numericCode === 14 ||
+    message.includes('service unavailable') ||
+    message.includes('network error');
+  if (unavailableFailure) {
+    return publicError(
+      'Firebase no está disponible temporalmente para completar el cobro.',
+      503,
+      'firebase-admin-unavailable',
+      { stage }
+    );
+  }
+
+  const invalidDataFailure =
+    code.includes('invalid-argument') ||
+    code.includes('invalid_argument') ||
+    numericCode === 3;
+  if (invalidDataFailure) {
+    return publicError(
+      'Firestore rechazó un dato interno del cobro. El pedido no fue descontado.',
+      500,
+      'wallet-firestore-invalid-data',
+      { stage }
+    );
+  }
+
+  const preconditionFailure =
+    code.includes('failed-precondition') ||
+    code.includes('failed_precondition') ||
+    numericCode === 9;
+  if (preconditionFailure) {
+    return publicError(
+      'Firestore no pudo confirmar la operación completa. El pedido no fue descontado.',
+      503,
+      'wallet-firestore-precondition',
+      { stage }
+    );
+  }
+
   return error;
 }
 
@@ -391,10 +584,12 @@ function createMovementBase({ id, walletId, wallet, type, direction, concept, am
 }
 
 module.exports = async function handler(req, res) {
+  let stage = 'inicio';
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-DriveMX-Wallet-API', '2026-08-22-server-final-v2');
 
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') {
@@ -402,6 +597,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
+    stage = 'validar-solicitud';
     const contentLength = Number(req.headers?.['content-length'] || 0);
     if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BYTES) {
       throw publicError('El pedido supera el tamaño permitido.', 413, 'payload-too-large');
@@ -422,16 +618,20 @@ module.exports = async function handler(req, res) {
     const token = getBearerToken(req);
 
     let app;
+    stage = 'inicializar-firebase-admin';
     try {
       app = getAdminApp();
     } catch (error) {
-      throw normalizeCredentialError(error);
+      throw normalizeCredentialError(error, stage);
     }
 
     let decodedToken;
+    stage = 'validar-token-cartera';
     try {
-      decodedToken = await admin.auth(app).verifyIdToken(token);
+      decodedToken = await getAuth(app).verifyIdToken(token);
     } catch (error) {
+      const normalized = normalizeCredentialError(error, stage);
+      if (normalized !== error || clean(normalized?.code).startsWith('firebase-admin-')) throw normalized;
       throw publicError('El usuario o la contraseña de la cartera dejaron de ser válidos.', 401, 'wallet-auth-invalid');
     }
 
@@ -441,7 +641,8 @@ module.exports = async function handler(req, res) {
       throw publicError('No se pudo identificar al usuario de la cartera.', 401, 'wallet-user-invalid');
     }
 
-    const db = admin.firestore(app);
+    stage = 'abrir-firestore';
+    const db = getFirestore(app);
     const root = dataRoot(db);
     const paymentRef = root.collection('wallet_payments').doc(paymentId);
     const buyerProfileRef = root.collection('operators').doc(safeDocId(buyerId));
@@ -449,6 +650,7 @@ module.exports = async function handler(req, res) {
     const walletSettingsRef = root.collection('wallet_settings').doc('config');
     const supermarketSettingsRef = root.collection('supermarket_settings').doc('config');
 
+    stage = 'transaccion-cartera';
     const result = await db.runTransaction(async (transaction) => {
       const existingPaymentSnapshot = await transaction.get(paymentRef);
       if (existingPaymentSnapshot.exists) {
@@ -538,7 +740,7 @@ module.exports = async function handler(req, res) {
       const walletSettings = walletSettingsSnapshot.exists ? walletSettingsSnapshot.data() || {} : {};
       const supermarketSettings = supermarketSettingsSnapshot.exists ? supermarketSettingsSnapshot.data() || {} : {};
       const commissionPercent = roundMoney(clampNumber(walletSettings.globalCommissionPercent, 0, 100, 0));
-      const cashbackAmount = roundMoney(clampNumber(
+      const configuredCashbackAmount = roundMoney(clampNumber(
         walletSettings.globalCashbackAmount ?? walletSettings.cashbackAmount,
         0,
         1000000,
@@ -548,6 +750,7 @@ module.exports = async function handler(req, res) {
       const subtotal = roundMoney(liveItems.reduce((sum, item) => sum + item.lineTotal, 0));
       const shippingFee = calculateShippingFee(liveItems, supermarketFallback);
       const total = roundMoney(subtotal + shippingFee);
+      const cashbackAmount = roundMoney(Math.min(configuredCashbackAmount, total));
       const totalQuantity = liveItems.reduce((sum, item) => sum + item.requested.quantity, 0);
 
       if (total <= 0) {
@@ -966,22 +1169,37 @@ module.exports = async function handler(req, res) {
       return clientResult;
     });
 
+    stage = 'respuesta-completada';
     return res.status(200).json({ success: true, ...result });
   } catch (rawError) {
-    const error = normalizeCredentialError(rawError);
+    const error = normalizeCredentialError(rawError, stage);
     const statusCode = Number(error.statusCode || 500);
     const code = clean(error.code || 'wallet-payment-failed');
     if (statusCode >= 500) {
-      console.error('[Cartera][Pago] Error interno:', { code, message: error.message, stack: error.stack });
+      console.error('[Cartera][Pago] Error interno:', { code, stage, message: error.message, stack: error.stack });
     } else {
-      console.warn('[Cartera][Pago] Solicitud rechazada:', { code, message: error.message, details: error.details || null });
+      console.warn('[Cartera][Pago] Solicitud rechazada:', { code, stage, message: error.message, details: error.details || null });
     }
+    const safeServerCodes = new Set([
+      'firebase-admin-not-configured',
+      'firebase-admin-invalid-credentials',
+      'firebase-admin-permission-denied',
+      'firebase-admin-timeout',
+      'firebase-admin-unavailable',
+      'wallet-firestore-invalid-data',
+      'wallet-firestore-precondition'
+    ]);
+    const publicMessage = statusCode >= 500 && !safeServerCodes.has(code)
+      ? 'No se pudo procesar el pago con cartera.'
+      : (error.message || 'No se pudo procesar el pago con cartera.');
     return res.status(statusCode).json({
       success: false,
       code,
-      error: statusCode >= 500 ? 'No se pudo procesar el pago con cartera.' : error.message,
+      error: publicMessage,
+      stage,
       details: error.details || undefined
     });
   }
 };
+
 
