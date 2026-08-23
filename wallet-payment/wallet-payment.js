@@ -13,6 +13,18 @@
   const safeId = (value) => clean(value).replace(/[^a-zA-Z0-9_-]/g, '_');
   const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
+  function normalizeWalletMillis(value, fallback = null) {
+    if (value == null || value === '') return fallback;
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+    if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+      const numeric = Number(value.trim());
+      return Number.isFinite(numeric) && numeric >= 0 ? numeric : fallback;
+    }
+    if (value && typeof value.toMillis === 'function') return value;
+    if (value && typeof value.seconds === 'number') return value;
+    return fallback;
+  }
+
   function createPaymentId() {
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     const bytes = new Uint8Array(6);
@@ -404,7 +416,9 @@
           const productRef = dataDoc(fbase, db, appId, 'products', requested.id);
           const snapshot = productSnapshots.get(productRef.path);
           if (!snapshot?.exists()) throw clientPaymentError('Uno de los productos ya no está disponible.', 'product-not-found', { productId: requested.id });
-          const product = { id: snapshot.id, ...snapshot.data() };
+          // El ID real del documento es la identidad del producto. Un campo
+          // id antiguo o incorrecto dentro del documento no debe sobrescribirlo.
+          const product = { ...(snapshot.data() || {}), id: snapshot.id };
           if (product.active === false) throw clientPaymentError(`${clean(product.name) || 'Un producto'} ya no está activo.`, 'product-not-active', { productId: requested.id });
           const stock = getProductStock(product);
           if (stock < requested.quantity) {
@@ -473,9 +487,10 @@
         const relatedSnapshots = await getTransactionSnapshots(transaction, [...ownerProfileRefs, ...ownerWalletRefs]);
 
         const buyerWalletRaw = buyerWalletSnapshot.data() || {};
+        const buyerWalletSource = { ...buyerWalletRaw, id: buyerId, uid: buyerId, userId: buyerId };
         const buyerWallet = typeof Wallet?.normalizeWallet === 'function'
-          ? Wallet.normalizeWallet({ id: buyerWalletSnapshot.id, ...buyerWalletRaw }, buyerProfile)
-          : { id: buyerId, ...buyerWalletRaw, balance: roundMoney(buyerWalletRaw.balance || 0), activated: buyerWalletRaw.activated === true, firstRechargeCompleted: buyerWalletRaw.firstRechargeCompleted === true };
+          ? Wallet.normalizeWallet(buyerWalletSource, buyerProfile)
+          : { ...buyerWalletSource, balance: roundMoney(buyerWalletRaw.balance || 0), activated: buyerWalletRaw.activated === true, firstRechargeCompleted: buyerWalletRaw.firstRechargeCompleted === true };
         if (!(buyerWallet.activated === true && buyerWallet.firstRechargeCompleted === true)) throw clientPaymentError('La cartera no está activa.', 'wallet-not-active');
         if (roundMoney(buyerWallet.balance) < total) {
           throw clientPaymentError('Saldo insuficiente en la cartera.', 'wallet-insufficient-funds', { availableBalance: roundMoney(buyerWallet.balance), requiredAmount: total });
@@ -497,14 +512,15 @@
           const walletSnapshot = relatedSnapshots.get(walletRef.path);
           const profileRef = dataDoc(fbase, db, appId, 'operators', ownerId);
           const profileSnapshot = relatedSnapshots.get(profileRef.path);
-          const profile = profileSnapshot?.exists() ? { id: profileSnapshot.id, ...profileSnapshot.data() } : {};
+          const profile = profileSnapshot?.exists() ? { ...(profileSnapshot.data() || {}), id: profileSnapshot.id } : {};
           if (!walletSnapshot?.exists()) throw clientPaymentError('No se encontró la cartera de uno de los vendedores.', 'seller-wallet-not-found', { sellerId: ownerId });
           const raw = walletSnapshot.data() || {};
+          const walletSource = { ...raw, id: ownerId, uid: ownerId, userId: ownerId };
           const wallet = typeof Wallet?.normalizeWallet === 'function'
-            ? Wallet.normalizeWallet({ id: walletSnapshot.id, ...raw }, profile)
-            : { id: ownerId, ...raw, balance: roundMoney(raw.balance || 0), activated: raw.activated === true, firstRechargeCompleted: raw.firstRechargeCompleted === true };
+            ? Wallet.normalizeWallet(walletSource, profile)
+            : { ...walletSource, balance: roundMoney(raw.balance || 0), activated: raw.activated === true, firstRechargeCompleted: raw.firstRechargeCompleted === true };
           if (!(wallet.activated === true && wallet.firstRechargeCompleted === true)) throw clientPaymentError('La cartera de uno de los vendedores no está activa.', 'seller-wallet-not-active', { sellerId: ownerId });
-          walletStates.set(ownerId, { ref: walletRef, raw, wallet, currentBalance: roundMoney(wallet.balance), commissionTotal: 0, changed: false, isBuyer: false });
+          walletStates.set(ownerId, { ref: walletRef, raw, wallet, profile, currentBalance: roundMoney(wallet.balance), commissionTotal: 0, changed: false, isBuyer: false });
         });
 
         const now = Date.now();
@@ -579,6 +595,7 @@
           const commission = commissionResults.get(saleId);
           const remainingStock = Math.max(0, item.stock - item.requested.quantity);
           const inventoryPatch = {
+            id: item.product.id,
             stock: remainingStock,
             availableStock: remainingStock,
             updatedAt: now,
@@ -716,19 +733,28 @@
             status: state.currentBalance > 0 ? 'Activa' : 'Sin saldo'
           };
           // Las carteras antiguas de vendedores pueden no contener todavía todos
-          // los campos del esquema actual. Se normalizan dentro de la misma
-          // transacción sin modificar la identidad ni el saldo fuera del cobro.
+          // los campos del esquema actual o conservarlos como texto. El ID del
+          // documento es autoritativo y los valores financieros se normalizan
+          // dentro de la misma transacción, sin alterar el importe del cobro.
           if (!isBuyer) {
-            walletPatch.id = clean(current.id || state.ref.id);
-            walletPatch.uid = clean(current.uid || current.userId || state.ref.id);
-            walletPatch.userId = clean(current.userId || current.uid || state.ref.id);
-            walletPatch.userName = clean(current.userName || 'Usuario');
-            walletPatch.userEmail = normalizeEmail(current.userEmail || '');
-            walletPatch.userPhone = clean(current.userPhone || '');
+            const profile = state.profile || {};
+            const rawEmail = normalizeEmail(current.userEmail || profile.email || '');
+            const safeEmail = rawEmail.length >= 5 && rawEmail.length <= 254
+              ? rawEmail
+              : normalizeEmail(profile.email || '');
+            const createdAtValue = normalizeWalletMillis(current.createdAt ?? raw.createdAt, now);
+            walletPatch.id = state.ref.id;
+            walletPatch.uid = state.ref.id;
+            walletPatch.userId = state.ref.id;
+            walletPatch.userName = clean(current.userName || profile.name || 'Usuario').slice(0, 180);
+            walletPatch.userEmail = safeEmail;
+            walletPatch.userPhone = clean(current.userPhone || profile.phone || '').slice(0, 80);
             walletPatch.currency = 'MXN';
             walletPatch.rechargeCount = Math.max(0, Math.floor(Number(current.rechargeCount || 0)));
             walletPatch.totalRecharged = roundMoney(current.totalRecharged || 0);
-            walletPatch.createdAt = current.createdAt || raw.createdAt || now;
+            walletPatch.createdAt = createdAtValue;
+            walletPatch.firstRechargeAt = normalizeWalletMillis(current.firstRechargeAt ?? raw.firstRechargeAt, null);
+            walletPatch.lastRechargeAt = normalizeWalletMillis(current.lastRechargeAt ?? raw.lastRechargeAt, null);
           }
           if (!isBuyer && state.commissionTotal > 0) walletPatch.lastWalletPaymentId = paymentId;
           if (isBuyer) {
@@ -874,7 +900,7 @@
     } catch (directError) {
       const normalized = normalizeFirestorePaymentError(directError);
       if (clean(normalized.code).toLowerCase().includes('permission-denied')) {
-        normalized.message = 'Firestore rechazó una de las operaciones del cobro. Usa las reglas V6 incluidas en este paquete y vuelve a iniciar sesión.';
+        normalized.message = 'Firestore rechazó la transacción del cobro. Publica el archivo firestore.rules V7 incluido en este paquete y vuelve a validar la cartera.';
       }
       throw normalized;
     }
@@ -1084,7 +1110,7 @@
   }
 
   global.DriveMxWalletPayment = {
-    BUILD: '2026-08-22-wallet-rules-safe-v6',
+    BUILD: '2026-08-23-wallet-rules-safe-v7',
     SECONDARY_APP_NAME,
     clean,
     normalizeEmail,
@@ -1100,6 +1126,9 @@
     WalletBalanceBadge
   };
 })(window);
+
+
+   
 
 
 
