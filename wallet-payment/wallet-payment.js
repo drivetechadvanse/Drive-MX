@@ -437,10 +437,19 @@
             };
         const supermarketSettings = supermarketSettingsSnapshot?.exists() ? (supermarketSettingsSnapshot.data() || {}) : {};
         const commissionPercent = roundMoney(Math.max(0, Math.min(100, Number(walletSettings.globalCommissionPercent || 0))));
-        const configuredCashbackValue = Number(walletSettings.globalCashbackAmount ?? DEFAULT_CASHBACK_AMOUNT);
-        const configuredCashback = roundMoney(Number.isFinite(configuredCashbackValue) && configuredCashbackValue >= 0
-          ? Math.min(configuredCashbackValue, 1000000)
-          : DEFAULT_CASHBACK_AMOUNT);
+        // Replica exactamente la prioridad y validación de firestore.rules:
+        // globalCashbackAmount, después cashbackAmount heredado y al final $10.
+        const configuredCashbackValue = hasOwn(walletSettingsRaw, 'globalCashbackAmount')
+          ? walletSettingsRaw.globalCashbackAmount
+          : (hasOwn(walletSettingsRaw, 'cashbackAmount') ? walletSettingsRaw.cashbackAmount : DEFAULT_CASHBACK_AMOUNT);
+        const configuredCashback = roundMoney(
+          typeof configuredCashbackValue === 'number'
+          && Number.isFinite(configuredCashbackValue)
+          && configuredCashbackValue >= 0
+          && configuredCashbackValue <= 1000000
+            ? configuredCashbackValue
+            : DEFAULT_CASHBACK_AMOUNT
+        );
         const supermarketFallback = normalizeShippingFee(supermarketSettings.shippingFee, GENERAL_SHIPPING_FEE);
         const subtotal = roundMoney(liveItems.reduce((sum, item) => sum + item.lineTotal, 0));
         const shippingFee = calculateShippingFee(liveItems, supermarketFallback);
@@ -723,8 +732,11 @@
           }
           if (!isBuyer && state.commissionTotal > 0) walletPatch.lastWalletPaymentId = paymentId;
           if (isBuyer) {
-            walletPatch.totalPurchases = roundMoney(Number(current.totalPurchases || 0) + total);
-            walletPatch.totalCashback = roundMoney(Number(current.totalCashback || 0) + cashbackAmount);
+            // normalizeWallet no conserva estos acumulados en todas las versiones.
+            // Se toman del documento original para no reiniciarlos y evitar que las
+            // reglas rechacen la segunda compra pagada con la misma cartera.
+            walletPatch.totalPurchases = roundMoney(Number(raw.totalPurchases ?? current.totalPurchases ?? 0) + total);
+            walletPatch.totalCashback = roundMoney(Number(raw.totalCashback ?? current.totalCashback ?? 0) + cashbackAmount);
             walletPatch.lastPurchaseAt = now;
             if (cashbackAmount > 0) walletPatch.lastCashbackAt = now;
             else if (Object.prototype.hasOwnProperty.call(raw, 'lastCashbackAt')) walletPatch.lastCashbackAt = raw.lastCashbackAt;
@@ -1088,6 +1100,7 @@
     WalletBalanceBadge
   };
 })(window);
+
 
 
 
