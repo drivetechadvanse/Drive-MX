@@ -8,7 +8,6 @@
   const MOVEMENTS_COLLECTION = 'movements';
   const SETTINGS_DOC_ID = 'config';
   const MIN_FIRST_RECHARGE = 100;
-  const DEFAULT_CASHBACK_AMOUNT = 10;
   const MIN_RECHARGE_AFTER_THREE_PRODUCTS = 500;
   const PRODUCT_RECHARGE_THRESHOLD = 3;
   const getMinimumRecharge = (settings = {}, productCount = 0) => {
@@ -23,6 +22,29 @@
   const clean = (value) => String(value ?? '').trim();
   const lower = (value) => clean(value).toLowerCase();
   const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+  const finiteNumber = (value, fallback = 0) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+  };
+  const nonNegativeMoney = (value, fallback = 0) => roundMoney(Math.max(0, finiteNumber(value, fallback)));
+  const nonNegativeWholeNumber = (value, fallback = 0) => Math.max(0, Math.floor(finiteNumber(value, fallback)));
+  const normalizeMillis = (value, fallback = null) => {
+    if (value == null || value === '') return fallback;
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+    if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+      const number = Number(value.trim());
+      return Number.isFinite(number) && number >= 0 ? number : fallback;
+    }
+    if (value && typeof value.toMillis === 'function') return value;
+    if (value && typeof value.seconds === 'number') return value;
+    return fallback;
+  };
+  const validStoredEmail = (value, fallback = '') => {
+    const primary = clean(value).replace(/\s+/g, '').toLowerCase();
+    if (primary.length >= 5 && primary.length <= 254) return primary;
+    const secondary = clean(fallback).replace(/\s+/g, '').toLowerCase();
+    return secondary.length >= 5 && secondary.length <= 254 ? secondary : '';
+  };
   const parseAmount = (value) => roundMoney(String(value ?? '').replace(/,/g, '.'));
   const safeDocId = (value = '') => clean(value).replace(/[^a-zA-Z0-9_-]/g, '_');
   const now = () => Date.now();
@@ -79,43 +101,48 @@
   }
 
   function normalizeWallet(wallet = null, user = {}) {
-    const walletId = getUserWalletId(wallet || {}) || getUserWalletId(user || {});
-    const rechargeCount = Number(wallet?.rechargeCount || 0);
-    const totalRecharged = roundMoney(wallet?.totalRecharged || 0);
+    const walletId = getUserWalletId(user || {}) || getUserWalletId(wallet || {});
+    const rechargeCount = nonNegativeWholeNumber(wallet?.rechargeCount, 0);
+    const totalRecharged = nonNegativeMoney(wallet?.totalRecharged, 0);
     const activated = Boolean(wallet?.activated === true || wallet?.firstRechargeCompleted === true || rechargeCount > 0 || totalRecharged >= MIN_FIRST_RECHARGE);
+    const userEmail = validStoredEmail(wallet?.userEmail, getUserEmail(user || {}));
     const normalized = {
-      id: wallet?.id || walletId,
-      uid: wallet?.uid || wallet?.userId || getUserWalletId(user || {}) || walletId,
-      userId: wallet?.userId || wallet?.uid || getUserWalletId(user || {}) || walletId,
-      userName: wallet?.userName || getUserName(user || {}),
-      userEmail: wallet?.userEmail || getUserEmail(user || {}),
-      userPhone: wallet?.userPhone || getUserPhone(user || {}),
-      currency: wallet?.currency || CURRENCY,
-      balance: roundMoney(wallet?.balance || 0),
+      id: walletId,
+      uid: walletId,
+      userId: walletId,
+      userName: clean(wallet?.userName || getUserName(user || {})).slice(0, 180),
+      userEmail,
+      userPhone: clean(wallet?.userPhone || getUserPhone(user || {})).slice(0, 80),
+      currency: CURRENCY,
+      balance: nonNegativeMoney(wallet?.balance, 0),
       activated,
       firstRechargeCompleted: Boolean(wallet?.firstRechargeCompleted === true || activated),
-      firstRechargeAt: wallet?.firstRechargeAt || null,
+      firstRechargeAt: normalizeMillis(wallet?.firstRechargeAt, null),
       rechargeCount,
       totalRecharged,
-      totalCommissions: roundMoney(wallet?.totalCommissions || 0),
-      totalPurchases: roundMoney(wallet?.totalPurchases || 0),
-      totalCashback: roundMoney(wallet?.totalCashback || 0),
-      lastRechargeAt: wallet?.lastRechargeAt || null,
-      lastCommissionAt: wallet?.lastCommissionAt || null,
-      lastPurchaseAt: wallet?.lastPurchaseAt || null,
-      lastCashbackAt: wallet?.lastCashbackAt || null,
-      createdAt: wallet?.createdAt || now(),
-      updatedAt: wallet?.updatedAt || now(),
-      status: wallet?.status || ''
+      totalCommissions: nonNegativeMoney(wallet?.totalCommissions, 0),
+      totalPurchases: nonNegativeMoney(wallet?.totalPurchases, 0),
+      totalCashback: nonNegativeMoney(wallet?.totalCashback, 0),
+      lastRechargeAt: normalizeMillis(wallet?.lastRechargeAt, null),
+      lastCommissionAt: normalizeMillis(wallet?.lastCommissionAt, null),
+      lastPurchaseAt: normalizeMillis(wallet?.lastPurchaseAt, null),
+      lastCashbackAt: normalizeMillis(wallet?.lastCashbackAt, null),
+      lastWalletPaymentId: clean(wallet?.lastWalletPaymentId).slice(0, 220),
+      createdAt: normalizeMillis(wallet?.createdAt, now()),
+      updatedAt: normalizeMillis(wallet?.updatedAt, now()),
+      createdBy: clean(wallet?.createdBy).slice(0, 254),
+      updatedBy: clean(wallet?.updatedBy).slice(0, 254),
+      status: clean(wallet?.status)
     };
-    normalized.status = wallet?.status || getWalletStatus(normalized);
+    normalized.status = ['', 'Pendiente de activación', 'Activa', 'Sin saldo'].includes(normalized.status)
+      ? (normalized.status || getWalletStatus(normalized))
+      : getWalletStatus(normalized);
     return normalized;
   }
 
   function defaultSettings() {
     return {
       globalCommissionPercent: 0,
-      globalCashbackAmount: DEFAULT_CASHBACK_AMOUNT,
       minimumFirstRecharge: MIN_FIRST_RECHARGE,
       currency: CURRENCY,
       updatedAt: null,
@@ -128,10 +155,6 @@
       ...defaultSettings(),
       ...settings,
       globalCommissionPercent: normalizePercent(settings.globalCommissionPercent ?? settings.commissionPercent ?? 0),
-      globalCashbackAmount: (() => {
-        const amount = Number(settings.globalCashbackAmount ?? settings.cashbackAmount ?? DEFAULT_CASHBACK_AMOUNT);
-        return Number.isFinite(amount) && amount >= 0 && amount <= 1000000 ? roundMoney(amount) : DEFAULT_CASHBACK_AMOUNT;
-      })(),
       minimumFirstRecharge: getMinimumRecharge(settings),
       currency: settings.currency || CURRENCY
     };
@@ -190,7 +213,9 @@
   function isUserProduct(product = {}) {
     const sellerId = getProductSellerId(product);
     const type = lower(product.publicationType || product.productOrigin || product.sourcePanel || product.createdFromPanel || '');
-    return Boolean(sellerId || type === 'usuario' || type === 'user' || type === 'panel_usuario' || type === 'panel-usuario');
+    if (['panel_control', 'panel-control', 'panel de control', 'control', 'admin', 'administrador'].includes(type)) return false;
+    if (['usuario', 'user', 'panel_usuario', 'panel-usuario', 'panel de usuario'].includes(type)) return true;
+    return Boolean(sellerId);
   }
 
   function validateRechargeAmount(wallet = {}, amountValue = 0, settings = {}, productCount = 0) {
@@ -263,15 +288,16 @@
     const ref = walletDocRef(fbase, appId, walletId);
     const snap = await fbase.getDoc(ref);
     if (snap.exists()) {
-      const current = normalizeWallet({ id: snap.id, ...snap.data() }, user);
-      const metadataPatch = {
+      const current = normalizeWallet({ ...(snap.data() || {}), id: snap.id, uid: snap.id, userId: snap.id }, user);
+      const next = {
+        ...current,
         userName: getUserName(user) || current.userName,
         userEmail: getUserEmail(user) || current.userEmail,
         userPhone: getUserPhone(user) || current.userPhone,
         updatedAt: now()
       };
-      await fbase.setDoc(ref, metadataPatch, { merge: true });
-      return { ...current, ...metadataPatch };
+      await fbase.setDoc(ref, next, { merge: true });
+      return next;
     }
     const wallet = normalizeWallet({ id: walletId, uid: walletId, userId: walletId, activated: false, firstRechargeCompleted: false, createdAt: now(), updatedAt: now(), createdBy }, user);
     wallet.balance = 0;
@@ -288,7 +314,7 @@
     const walletId = getUserWalletId(user) || getUserWalletId(wallet || {});
     if (!walletId) throw new Error('No se pudo identificar la cartera del usuario.');
     const snap = await fbase.getDoc(walletDocRef(fbase, appId, walletId));
-    if (snap.exists()) return normalizeWallet({ id: snap.id, ...snap.data() }, user);
+    if (snap.exists()) return normalizeWallet({ ...(snap.data() || {}), id: snap.id, uid: snap.id, userId: snap.id }, user);
     return await ensureWalletDocument({ fbase, appId, user: { ...user, uid: walletId, id: walletId }, createdBy: 'sistema' });
   }
 
@@ -395,7 +421,7 @@
         }
 
         const commissionSnapshot = await transaction.get(commissionRef);
-        const current = normalizeWallet({ id: walletSnapshot.id, ...walletSnapshot.data() }, seller);
+        const current = normalizeWallet({ ...(walletSnapshot.data() || {}), id: walletSnapshot.id, uid: walletSnapshot.id, userId: walletSnapshot.id }, seller);
 
         // El identificador es determinista por venta. En reintentos devuelve el
         // resultado ya aplicado y evita descontar dos veces el mismo cargo.
@@ -511,7 +537,7 @@
   function subscribeWallets({ fbase, appId, onChange } = {}) {
     return fbase.onSnapshot(collectionRef(fbase, appId, WALLET_COLLECTION), (snapshot) => {
       const list = [];
-      snapshot.forEach((docSnap) => list.push(normalizeWallet({ id: docSnap.id, ...docSnap.data() })));
+      snapshot.forEach((docSnap) => list.push(normalizeWallet({ ...(docSnap.data() || {}), id: docSnap.id, uid: docSnap.id, userId: docSnap.id })));
       list.sort((a, b) => lower(a.userName || a.userEmail).localeCompare(lower(b.userName || b.userEmail)));
       onChange(list);
     }, (error) => {
@@ -574,7 +600,6 @@
     MOVEMENTS_COLLECTION,
     SETTINGS_DOC_ID,
     MIN_FIRST_RECHARGE,
-    DEFAULT_CASHBACK_AMOUNT,
     MIN_RECHARGE_AFTER_THREE_PRODUCTS,
     PRODUCT_RECHARGE_THRESHOLD,
     getMinimumRecharge,
@@ -866,6 +891,8 @@
 
     return { UserWalletCard, WalletMovementsPanel, AdminCommissionSettings, AdminWalletsPanel };
   }
+
+  Wallet.BUILD = '2026-08-24-wallet-data-normalization-v8';
 
   global.DriveMxWallet = Wallet;
   global.DriveMxWalletUI = createWalletUI(global.React);
