@@ -617,8 +617,7 @@ const App = () => {
             setAssignmentsPassword('');
             setAssignmentsPasswordError('');
             const returnToWalletPayment = walletCheckoutLoginPendingRef.current
-                && profile?.role !== 'admin'
-                && checkoutProductIds.length > 0;
+                && profile?.role !== 'admin';
             walletCheckoutLoginPendingRef.current = false;
             if (returnToWalletPayment) {
                 setSelectedPaymentMethod('wallet');
