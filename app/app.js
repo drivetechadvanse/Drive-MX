@@ -5,17 +5,19 @@ const WalletUI = window.DriveMxWalletUI;
 const WalletPayment = window.DriveMxWalletPayment || {
     available: false,
     useWalletPayment: () => ({
-        username: '',
-        setUsername: () => {},
-        password: '',
-        setPassword: () => {},
+        authenticated: false,
         verified: false,
+        loading: false,
         verifying: false,
         paying: false,
         error: '',
         identity: null,
+        wallet: null,
+        walletExists: false,
+        walletActive: false,
         availableBalance: 0,
-        verifyCredentials: (event) => event?.preventDefault?.(),
+        requestLogin: () => {},
+        refresh: async () => null,
         pay: async () => {
             const error = new Error('El módulo de pago con cartera no está disponible.');
             error.code = 'wallet-payment-module-unavailable';
@@ -407,6 +409,7 @@ const App = () => {
 
     const featureManagersRef = useRef({});
     const navigationActionsRef = useRef({});
+    const walletCheckoutLoginPendingRef = useRef(false);
     const authManager = EmailPasswordAuthUI.useEmailPasswordAuth({
         fbase,
         appId,
@@ -423,9 +426,12 @@ const App = () => {
     const { fbUser, sessionUser } = authManager;
     const walletPaymentManager = WalletPayment.useWalletPayment({
         fbase,
-        firebaseConfig: window.firebaseConfig,
         appId,
-        Wallet
+        Wallet,
+        fbUser,
+        sessionUser,
+        enabled: selectedPaymentMethod === 'wallet',
+        onRequestLogin: () => featureManagersRef.current.requestWalletLogin?.()
     });
     const isUserBlocked = authManager.isUserBlocked;
     const getCurrentSessionProfile = () => authManager.findRegisteredUserProfile(sessionUser) || sessionUser || {};
@@ -597,6 +603,12 @@ const App = () => {
 
     navigationActionsRef.current = { setView };
     featureManagersRef.current = {
+        requestWalletLogin: () => {
+            if (sessionUser && sessionUser.role !== 'admin') return;
+            walletCheckoutLoginPendingRef.current = true;
+            authManager.setLoginForm({ email: '', p: '' });
+            setView('login');
+        },
         onLogin: (profile) => {
             const assignmentsAuthorized = profile?.role !== 'admin' && packagesManager.userHasAssignmentsAuthorization(profile);
             setAssignmentsUnlocked(assignmentsAuthorized);
@@ -604,6 +616,15 @@ const App = () => {
             setShowAssignmentsPasswordModal(false);
             setAssignmentsPassword('');
             setAssignmentsPasswordError('');
+            const returnToWalletPayment = walletCheckoutLoginPendingRef.current
+                && profile?.role !== 'admin'
+                && checkoutProductIds.length > 0;
+            walletCheckoutLoginPendingRef.current = false;
+            if (returnToWalletPayment) {
+                setSelectedPaymentMethod('wallet');
+                setView('payment-method');
+                return;
+            }
             setView(profile?.role === 'admin' ? 'admin' : 'operator');
         },
         onLogoutStart: () => {
@@ -1526,6 +1547,7 @@ const App = () => {
     };
 
     const resetPublicFlow = () => {
+        walletCheckoutLoginPendingRef.current = false;
         setView('home');
         setSearchQuery('');
         packagesManager.resetTracking();
@@ -1546,7 +1568,11 @@ const App = () => {
 
     const selectPaymentMethod = (method) => {
         setSelectedPaymentMethod(method);
-        if (method !== 'wallet') walletPaymentManager.reset();
+        if (method === 'wallet') {
+            if (!walletPaymentManager.authenticated) featureManagersRef.current.requestWalletLogin?.();
+            return;
+        }
+        walletPaymentManager.reset();
     };
 
     const getPrimaryAuth = () => EmailPasswordAuthUI.services.getPrimaryAuth({
@@ -2229,11 +2255,22 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             error.code = 'SALE_PRODUCT_ID_MISSING';
             throw error;
         }
+
+        const isWalletPayment = String(sale.paymentMethod || '').trim() === 'Cartera' && Boolean(sale.walletPaymentId);
+        const walletPaymentId = String(sale.walletPaymentId || '').trim();
+        const walletBuyerId = Wallet.getUserWalletId(sale.walletBuyerId || '');
+        const rawWalletPaymentItemIndex = Number(sale.walletPaymentItemIndex);
+        const walletPaymentItemIndex = Number.isInteger(rawWalletPaymentItemIndex) && rawWalletPaymentItemIndex >= 0
+            ? rawWalletPaymentItemIndex
+            : -1;
         const publicProductRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', PUBLIC_PRODUCTS_COLLECTION, productId);
         const adminProductRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', ADMIN_PRODUCTS_COLLECTION, productId);
         const ownerDocId = getSafeFirestoreDocId(saleSellerId || sourceProduct.ownerId || sourceProduct.sellerId || '');
         const userProductRef = ownerDocId ? fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_PRODUCTS_COLLECTION, ownerDocId, 'items', productId) : null;
         const saleRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'completed_sales', id);
+        const userSaleRef = isWalletPayment && ownerDocId
+            ? fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_SALES_COLLECTION, ownerDocId, 'items', id)
+            : null;
         const shouldDebitCommission = Boolean(saleSellerId) && isUserPanelPublication(sourceProduct);
         let walletId = '';
         let walletRef = null;
@@ -2243,14 +2280,24 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         let commissionId = '';
         let commissionAmount = 0;
 
+        if (isWalletPayment && (!walletBuyerId || walletPaymentItemIndex < 0)) {
+            const error = new Error('No se pudo relacionar la venta con el pago de cartera.');
+            error.code = 'WALLET_PAYMENT_REFERENCE_INVALID';
+            throw error;
+        }
+
         if (shouldDebitCommission) {
             walletId = Wallet.getUserWalletId(saleSellerId);
-            await Wallet.ensureWalletDocument({
-                fbase,
-                appId,
-                user: { ...seller, id: walletId, uid: walletId },
-                createdBy: sessionUser?.email || ADMIN_EMAIL
-            });
+            // En una compra con cartera no se crea ni se repara ninguna cartera.
+            // Se utiliza exclusivamente la cartera del vendedor que ya existe.
+            if (!isWalletPayment) {
+                await Wallet.ensureWalletDocument({
+                    fbase,
+                    appId,
+                    user: { ...seller, id: walletId, uid: walletId },
+                    createdBy: sessionUser?.email || ADMIN_EMAIL
+                });
+            }
             movementId = Wallet.safeDocId(`mov_commission_${walletId}_${id}`);
             commissionId = Wallet.safeDocId(`commission_${walletId}_${id}`);
             walletRef = fbase.doc(db, 'artifacts', appId, 'public', 'data', 'wallets', walletId);
@@ -2259,193 +2306,240 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             commissionAmount = Wallet.calculateCommission(Number(sale.productCost || sale.productTotal || 0), walletCommissionPercent);
         }
 
-        return await fbase.runTransaction(db, async (transaction) => {
-            const saleSnapshot = await transaction.get(saleRef);
-            if (saleSnapshot.exists()) {
-                return { alreadyRegistered: true, sale: { id: saleSnapshot.id, ...saleSnapshot.data() } };
-            }
+        try {
+            return await fbase.runTransaction(db, async (transaction) => {
+                if (!isWalletPayment) {
+                    const saleSnapshot = await transaction.get(saleRef);
+                    if (saleSnapshot.exists()) {
+                        return { alreadyRegistered: true, sale: { id: saleSnapshot.id, ...saleSnapshot.data() } };
+                    }
+                }
 
-            const publicProductSnapshot = await transaction.get(publicProductRef);
-            const adminProductSnapshot = await transaction.get(adminProductRef);
-            const userProductSnapshot = userProductRef ? await transaction.get(userProductRef) : null;
-            const walletSnapshot = walletRef ? await transaction.get(walletRef) : null;
-            const commissionSnapshot = commissionRef ? await transaction.get(commissionRef) : null;
+                const publicProductSnapshot = await transaction.get(publicProductRef);
+                const adminProductSnapshot = await transaction.get(adminProductRef);
+                const userProductSnapshot = userProductRef ? await transaction.get(userProductRef) : null;
+                const walletSnapshot = walletRef ? await transaction.get(walletRef) : null;
+                const commissionSnapshot = commissionRef && !isWalletPayment ? await transaction.get(commissionRef) : null;
 
-            if (!publicProductSnapshot.exists()) {
-                const error = new Error('No se encontró el producto en inventario para completar la venta.');
-                error.code = 'PRODUCT_NOT_FOUND_FOR_INVENTORY';
-                error.productId = productId;
-                throw error;
-            }
-
-            const currentProduct = { id: publicProductSnapshot.id, ...publicProductSnapshot.data() };
-            const currentStock = getProductStock(currentProduct);
-            if (currentStock <= 0) {
-                const error = new Error(`El producto ${currentProduct.name || productId} está agotado.`);
-                error.code = 'PRODUCT_OUT_OF_STOCK';
-                error.productId = productId;
-                throw error;
-            }
-            if (quantity > currentStock) {
-                const error = new Error(`Inventario insuficiente para ${currentProduct.name || productId}. Disponibles: ${currentStock}. Solicitadas: ${quantity}.`);
-                error.code = 'PRODUCT_STOCK_INSUFFICIENT';
-                error.productId = productId;
-                error.availableStock = currentStock;
-                error.requestedQuantity = quantity;
-                throw error;
-            }
-
-            const updatedAt = Date.now();
-            const remainingStock = Math.max(0, currentStock - quantity);
-            const inventoryPatch = {
-                stock: remainingStock,
-                availableStock: remainingStock,
-                updatedAt,
-                inventoryUpdatedAt: updatedAt,
-                lastSaleId: id,
-                lastSoldQuantity: quantity
-            };
-
-            let commissionResult = {
-                applies: false,
-                commissionAmount: 0,
-                balanceBefore: null,
-                balanceAfter: null,
-                percent: walletCommissionPercent,
-                idempotent: false
-            };
-
-            if (shouldDebitCommission) {
-                if (!walletSnapshot || !walletSnapshot.exists()) {
-                    const error = new Error('No se encontró la cartera del vendedor en Firestore.');
-                    error.code = 'WALLET_NOT_FOUND';
+                if (!publicProductSnapshot.exists()) {
+                    const error = new Error('No se encontró el producto en inventario para completar la venta.');
+                    error.code = 'PRODUCT_NOT_FOUND_FOR_INVENTORY';
+                    error.productId = productId;
                     throw error;
                 }
-                const currentWallet = Wallet.normalizeWallet({ id: walletSnapshot.id, ...walletSnapshot.data() }, seller);
-                if (commissionSnapshot && commissionSnapshot.exists()) {
-                    const existingCommission = { id: commissionSnapshot.id, ...commissionSnapshot.data() };
-                    commissionResult = {
-                        applies: true,
-                        commissionAmount: Number(existingCommission.absoluteAmount || Math.abs(Number(existingCommission.amount || 0)) || 0),
-                        balanceBefore: existingCommission.balanceBefore ?? null,
-                        balanceAfter: existingCommission.balanceAfter ?? null,
-                        percent: existingCommission.commissionPercent ?? walletCommissionPercent,
-                        idempotent: true
-                    };
-                } else {
-                    if (!Wallet.isWalletActivated(currentWallet)) {
-                        const error = new Error(Wallet.INSUFFICIENT_MESSAGE);
-                        error.code = 'WALLET_NOT_ACTIVE';
-                        throw error;
-                    }
-                    const balanceBefore = Wallet.roundMoney(currentWallet.balance || 0);
-                    if (commissionAmount > 0 && balanceBefore < commissionAmount) {
-                        const error = new Error(Wallet.INSUFFICIENT_MESSAGE);
-                        error.code = 'WALLET_INSUFFICIENT_FUNDS';
-                        throw error;
-                    }
-                    const balanceAfter = Wallet.roundMoney(balanceBefore - commissionAmount);
-                    commissionResult = {
-                        applies: true,
-                        commissionAmount,
-                        balanceBefore,
-                        balanceAfter,
-                        percent: walletCommissionPercent,
-                        idempotent: false
-                    };
 
-                    if (commissionAmount > 0) {
-                        const nextWallet = {
-                            ...currentWallet,
-                            balance: balanceAfter,
-                            totalCommissions: Wallet.roundMoney(Number(currentWallet.totalCommissions || 0) + commissionAmount),
-                            lastCommissionAt: updatedAt,
-                            updatedAt,
-                            updatedBy: sessionUser?.email || ADMIN_EMAIL,
-                            status: balanceAfter > 0 ? 'Activa' : 'Sin saldo'
+                const currentProduct = { id: publicProductSnapshot.id, ...publicProductSnapshot.data() };
+                const currentStock = getProductStock(currentProduct);
+                if (currentStock <= 0) {
+                    const error = new Error(`El producto ${currentProduct.name || productId} está agotado.`);
+                    error.code = 'PRODUCT_OUT_OF_STOCK';
+                    error.productId = productId;
+                    throw error;
+                }
+                if (quantity > currentStock) {
+                    const error = new Error(`Inventario insuficiente para ${currentProduct.name || productId}. Disponibles: ${currentStock}. Solicitadas: ${quantity}.`);
+                    error.code = 'PRODUCT_STOCK_INSUFFICIENT';
+                    error.productId = productId;
+                    error.availableStock = currentStock;
+                    error.requestedQuantity = quantity;
+                    throw error;
+                }
+
+                const updatedAt = Date.now();
+                const remainingStock = Math.max(0, currentStock - quantity);
+                const inventoryPatch = {
+                    stock: remainingStock,
+                    availableStock: remainingStock,
+                    updatedAt,
+                    inventoryUpdatedAt: updatedAt,
+                    lastSaleId: id,
+                    lastSoldQuantity: quantity,
+                    ...(isWalletPayment ? {
+                        lastWalletPaymentId: walletPaymentId,
+                        lastWalletPaymentBuyerId: walletBuyerId,
+                        lastWalletPaymentItemIndex: walletPaymentItemIndex,
+                        lastWalletPaymentUnitPrice: Number(sale.productUnitPrice || sale.unitPrice || 0),
+                        lastWalletPaymentLineTotal: Number(sale.productCost || sale.productTotal || 0),
+                        lastWalletPaymentOrderTotal: Number(sale.orderTotal || 0),
+                        lastWalletPaymentOrderSignature: String(sale.walletOrderSignature || '')
+                    } : {})
+                };
+
+                let commissionResult = {
+                    applies: false,
+                    commissionAmount: 0,
+                    balanceBefore: null,
+                    balanceAfter: null,
+                    percent: walletCommissionPercent,
+                    idempotent: false
+                };
+
+                if (shouldDebitCommission) {
+                    if (!walletSnapshot || !walletSnapshot.exists()) {
+                        const error = new Error('No se encontró la cartera del vendedor en Firestore.');
+                        error.code = 'WALLET_NOT_FOUND';
+                        throw error;
+                    }
+                    const currentWallet = Wallet.normalizeWallet({ id: walletSnapshot.id, ...walletSnapshot.data() }, seller);
+                    if (commissionSnapshot && commissionSnapshot.exists()) {
+                        const existingCommission = { id: commissionSnapshot.id, ...commissionSnapshot.data() };
+                        commissionResult = {
+                            applies: true,
+                            commissionAmount: Number(existingCommission.absoluteAmount || Math.abs(Number(existingCommission.amount || 0)) || 0),
+                            balanceBefore: existingCommission.balanceBefore ?? null,
+                            balanceAfter: existingCommission.balanceAfter ?? null,
+                            percent: existingCommission.commissionPercent ?? walletCommissionPercent,
+                            idempotent: true
                         };
-                        const productName = String(sale.productName || currentProduct.name || 'producto vendido').slice(0, 180);
-                        const movement = {
-                            id: movementId,
-                            movementId,
-                            walletId,
-                            userId: walletId,
-                            userName: currentWallet.userName || seller.name || sale.sellerName || '',
-                            userEmail: currentWallet.userEmail || seller.email || sale.sellerEmail || '',
-                            type: 'commission',
-                            direction: 'debit',
-                            concept: `Comisión por venta: ${productName}`,
-                            amount: -commissionAmount,
-                            absoluteAmount: commissionAmount,
+                    } else {
+                        if (!Wallet.isWalletActivated(currentWallet)) {
+                            const error = new Error(Wallet.INSUFFICIENT_MESSAGE);
+                            error.code = 'WALLET_NOT_ACTIVE';
+                            throw error;
+                        }
+                        const balanceBefore = Wallet.roundMoney(currentWallet.balance || 0);
+                        if (commissionAmount > 0 && balanceBefore < commissionAmount) {
+                            const error = new Error(Wallet.INSUFFICIENT_MESSAGE);
+                            error.code = 'WALLET_INSUFFICIENT_FUNDS';
+                            throw error;
+                        }
+                        const balanceAfter = Wallet.roundMoney(balanceBefore - commissionAmount);
+                        commissionResult = {
+                            applies: true,
+                            commissionAmount,
                             balanceBefore,
                             balanceAfter,
-                            currency: Wallet.CURRENCY || 'MXN',
-                            commissionPercent: walletCommissionPercent,
-                            saleId: id,
-                            productId,
-                            productName,
-                            createdAt: updatedAt,
-                            createdBy: sessionUser?.email || ADMIN_EMAIL
+                            percent: walletCommissionPercent,
+                            idempotent: false
                         };
-                        const commission = {
-                            ...movement,
-                            id: commissionId,
-                            commissionId,
-                            status: 'Descontada'
-                        };
-                        transaction.set(walletRef, nextWallet, { merge: true });
-                        transaction.set(movementRef, movement);
-                        transaction.set(commissionRef, commission);
+
+                        if (commissionAmount > 0) {
+                            const nextWallet = {
+                                ...currentWallet,
+                                balance: balanceAfter,
+                                totalCommissions: Wallet.roundMoney(Number(currentWallet.totalCommissions || 0) + commissionAmount),
+                                lastCommissionAt: updatedAt,
+                                updatedAt,
+                                updatedBy: sessionUser?.email || ADMIN_EMAIL,
+                                status: balanceAfter > 0 ? 'Activa' : 'Sin saldo'
+                            };
+                            const productName = String(sale.productName || currentProduct.name || 'producto vendido').slice(0, 180);
+                            const movement = {
+                                id: movementId,
+                                movementId,
+                                walletId,
+                                userId: walletId,
+                                userName: currentWallet.userName || seller.name || sale.sellerName || '',
+                                userEmail: currentWallet.userEmail || seller.email || sale.sellerEmail || '',
+                                type: 'commission',
+                                direction: 'debit',
+                                concept: `Comisión por venta: ${productName}`,
+                                amount: -commissionAmount,
+                                absoluteAmount: commissionAmount,
+                                balanceBefore,
+                                balanceAfter,
+                                currency: Wallet.CURRENCY || 'MXN',
+                                commissionPercent: walletCommissionPercent,
+                                saleId: id,
+                                productId,
+                                productName,
+                                createdAt: updatedAt,
+                                createdBy: sessionUser?.email || ADMIN_EMAIL
+                            };
+                            const commission = {
+                                ...movement,
+                                id: commissionId,
+                                commissionId,
+                                status: 'Descontada'
+                            };
+                            transaction.set(walletRef, nextWallet, { merge: true });
+                            transaction.set(movementRef, movement);
+                            transaction.set(commissionRef, commission);
+                        }
                     }
                 }
+
+                const saleWithWallet = {
+                    ...sale,
+                    productQuantity: quantity,
+                    quantity,
+                    productUnitPrice: Number(sale.productUnitPrice || sale.unitPrice || sale.price || 0),
+                    productTotal: Number(sale.productCost || sale.productTotal || 0),
+                    inventoryDeducted: true,
+                    inventoryDeductedQuantity: quantity,
+                    productStockBefore: currentStock,
+                    productStockAfter: remainingStock,
+                    inventoryUpdatedAt: updatedAt,
+                    walletCommissionPercent: commissionResult.percent ?? walletCommissionPercent,
+                    walletCommissionAmount: Number(commissionResult.commissionAmount || 0),
+                    walletCommissionStatus: commissionResult.applies ? (Number(commissionResult.commissionAmount || 0) > 0 ? 'Descontada' : 'Sin comisión') : 'No aplica',
+                    walletBalanceBeforeCommission: commissionResult.balanceBefore,
+                    walletBalanceAfterCommission: commissionResult.balanceAfter,
+                    updatedAt
+                };
+
+                transaction.set(publicProductRef, inventoryPatch, { merge: true });
+                if (adminProductSnapshot.exists()) transaction.set(adminProductRef, inventoryPatch, { merge: true });
+                if (userProductRef && userProductSnapshot && userProductSnapshot.exists()) transaction.set(userProductRef, inventoryPatch, { merge: true });
+                transaction.set(saleRef, saleWithWallet);
+                if (userSaleRef) {
+                    transaction.set(userSaleRef, {
+                        id,
+                        ...saleWithWallet,
+                        saleId: id,
+                        sellerId: saleSellerId,
+                        visibleToUserId: saleSellerId,
+                        updatedAt
+                    });
+                }
+
+                return {
+                    alreadyRegistered: false,
+                    sale: { id, ...saleWithWallet },
+                    inventoryPatch,
+                    ownerDocId,
+                    productId
+                };
+            });
+        } catch (error) {
+            if (isWalletPayment) {
+                try {
+                    const existingSaleSnapshot = await fbase.getDoc(saleRef);
+                    if (existingSaleSnapshot.exists()) {
+                        const existingSale = { id: existingSaleSnapshot.id, ...existingSaleSnapshot.data() };
+                        if (existingSale.walletPaymentId === walletPaymentId && Wallet.getUserWalletId(existingSale.walletBuyerId || '') === walletBuyerId) {
+                            return { alreadyRegistered: true, sale: existingSale, productId };
+                        }
+                    }
+                } catch (existingSaleError) {
+                    console.error('[Cartera][Venta] No se pudo comprobar el registro idempotente de la venta.', existingSaleError);
+                }
             }
-
-            const saleWithWallet = {
-                ...sale,
-                productQuantity: quantity,
-                quantity,
-                productUnitPrice: Number(sale.productUnitPrice || sale.unitPrice || sale.price || 0),
-                productTotal: Number(sale.productCost || sale.productTotal || 0),
-                inventoryDeducted: true,
-                inventoryDeductedQuantity: quantity,
-                productStockBefore: currentStock,
-                productStockAfter: remainingStock,
-                inventoryUpdatedAt: updatedAt,
-                walletCommissionPercent: commissionResult.percent ?? walletCommissionPercent,
-                walletCommissionAmount: Number(commissionResult.commissionAmount || 0),
-                walletCommissionStatus: commissionResult.applies ? (Number(commissionResult.commissionAmount || 0) > 0 ? 'Descontada' : 'Sin comisión') : 'No aplica',
-                walletBalanceBeforeCommission: commissionResult.balanceBefore,
-                walletBalanceAfterCommission: commissionResult.balanceAfter,
-                updatedAt
-            };
-
-            transaction.set(publicProductRef, inventoryPatch, { merge: true });
-            if (adminProductSnapshot.exists()) transaction.set(adminProductRef, inventoryPatch, { merge: true });
-            if (userProductRef && userProductSnapshot && userProductSnapshot.exists()) transaction.set(userProductRef, inventoryPatch, { merge: true });
-            transaction.set(saleRef, saleWithWallet);
-
-            return {
-                alreadyRegistered: false,
-                sale: { id, ...saleWithWallet },
-                inventoryPatch,
-                ownerDocId,
-                productId
-            };
-        });
+            throw error;
+        }
     };
 
-    const registerCompletedSale = async ({ payload = {}, paymentMethod = '', saleId = '', transferId = '', soldAt = Date.now() }) => {
+    const registerCompletedSale = async ({ payload = {}, paymentMethod = '', saleId = '', transferId = '', soldAt = Date.now(), walletPayment = null }) => {
         const payloadProducts = Array.isArray(payload.products) && payload.products.length > 0 ? payload.products : (payload.product ? [payload.product] : []);
         const orderSubtotal = payloadProducts.reduce((total, product) => total + Number(product.lineTotal || product.totalPrice || product.productTotal || (Number(product.price || product.unitPrice || 0) * Number(product.quantity || 1)) || 0), 0);
         const orderShippingFee = Number(payload.cart?.shippingFee ?? calculateShippingFee(payloadProducts));
         const orderTotal = Number(payload.cart?.total ?? (orderSubtotal + orderShippingFee));
         const orderQuantityTotal = payloadProducts.reduce((total, product) => total + Number(product.quantity || product.productQuantity || 1), 0);
         const baseId = String(saleId || `sale_${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '_');
+        const walletPaymentId = paymentMethod === 'Cartera' ? String(walletPayment?.paymentId || transferId || '').trim() : '';
+        const walletBuyerId = walletPaymentId ? Wallet.getUserWalletId(walletPayment?.buyerId || sessionUser?.uid || sessionUser?.id || '') : '';
+        const walletOrderSignature = walletPaymentId ? String(walletPayment?.orderSignature || '').trim() : '';
+        const walletMovementId = walletPaymentId ? String(walletPayment?.movementId || `mov_purchase_${walletPaymentId}`).trim() : '';
         const savedSales = [];
 
         if (payloadProducts.length === 0) {
             const error = new Error('La transferencia no contiene productos válidos para registrar la venta.');
             error.code = 'SALE_PRODUCTS_MISSING';
+            throw error;
+        }
+        if (walletPaymentId && (!walletBuyerId || !walletOrderSignature)) {
+            const error = new Error('La referencia del pago con cartera no es válida.');
+            error.code = 'WALLET_PAYMENT_REFERENCE_INVALID';
             throw error;
         }
 
@@ -2467,6 +2561,13 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 shippingFee: orderShippingFee,
                 paymentMethod,
                 transferId,
+                ...(walletPaymentId ? {
+                    walletPaymentId,
+                    walletPaymentMovementId: walletMovementId,
+                    walletPaymentItemIndex: index,
+                    walletBuyerId,
+                    walletOrderSignature
+                } : {}),
                 productId: payloadProduct.id || sourceProduct.id || '',
                 productName: payloadProduct.name || sourceProduct.name || '',
                 productCost: lineTotal,
@@ -2496,7 +2597,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 applyProductInventoryLocal(result.productId || sale.productId, result.inventoryPatch, saleSellerId);
                 applyCompletedSaleLocal(id, savedSale);
             }
-            await saveUserCompletedSaleMirror(savedSale, { throwOnError: true });
+            // En cartera, el espejo de venta se guarda dentro de la misma transacción
+            // existente que actualiza inventario y comisión, para conservar atomicidad.
+            if (!walletPaymentId) await saveUserCompletedSaleMirror(savedSale, { throwOnError: true });
             savedSales.push(savedSale);
         }
 
@@ -2767,18 +2870,33 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     };
 
     const payWithWallet = async () => {
-        if (!walletPaymentManager.verified) {
-            alert('Ingresa y valida el usuario y la contraseña de la cartera.');
+        if (!walletPaymentManager.authenticated) {
+            walletPaymentManager.requestLogin();
             return;
+        }
+        let verifiedWallet = walletPaymentManager.wallet;
+        if (!walletPaymentManager.verified) {
+            verifiedWallet = await walletPaymentManager.refresh();
+            if (!verifiedWallet) {
+                alert(walletPaymentManager.error || 'No se encontró la cartera existente del usuario.');
+                return;
+            }
         }
         if (!ensureSupermarketMinimumAllowed(checkoutProducts)) return;
         if (!ensureCheckoutInventoryAllowed(checkoutProducts)) return;
         if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
-        if (!walletPaymentManager.canPay(checkoutTotal)) {
-            alert(`Saldo insuficiente. La compra requiere ${Wallet.formatMoney(checkoutTotal)} y la cartera dispone de ${Wallet.formatMoney(walletPaymentManager.availableBalance)}.`);
+        const availableBalance = Wallet.roundMoney(verifiedWallet?.balance ?? walletPaymentManager.availableBalance ?? 0);
+        const walletIsActive = typeof Wallet.isWalletActivated === 'function'
+            ? Wallet.isWalletActivated(verifiedWallet || walletPaymentManager.wallet || {})
+            : walletPaymentManager.walletActive;
+        if (!walletIsActive || availableBalance < Wallet.roundMoney(checkoutTotal)) {
+            alert(`Saldo insuficiente. La compra requiere ${Wallet.formatMoney(checkoutTotal)} y la cartera dispone de ${Wallet.formatMoney(availableBalance)}.`);
             return;
         }
 
+        let paymentId = '';
+        let paymentResult = null;
+        let walletDebitConfirmed = false;
         setOrderSending(true);
         try {
             const payload = buildOrderPayload();
@@ -2788,34 +2906,73 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 return;
             }
 
-            const paymentId = walletPaymentManager.getOrCreatePaymentId();
+            paymentId = walletPaymentManager.getOrCreatePaymentId();
             const walletOrder = {
                 products: (Array.isArray(payload.products) ? payload.products : []).map((product) => ({
                     id: product.id,
-                    quantity: product.quantity,
-                    sizes: normalizeProductSizes(product.sizes),
-                    colors: normalizeProductColors(product.colors)
+                    quantity: product.quantity
                 })),
                 delivery: { ...(payload.delivery || {}) },
-                cart: { total: Number(payload.cart?.total || 0) }
+                cart: {
+                    subtotal: Number(payload.cart?.subtotal || 0),
+                    shippingFee: Number(payload.cart?.shippingFee || 0),
+                    total: Number(payload.cart?.total || 0)
+                }
             };
-            const result = await walletPaymentManager.pay({ paymentId, order: walletOrder });
+            paymentResult = await walletPaymentManager.pay({ paymentId, order: walletOrder });
+            walletDebitConfirmed = true;
 
-            (Array.isArray(result.inventoryUpdates) ? result.inventoryUpdates : []).forEach((update) => {
-                applyProductInventoryLocal(update.productId, update.patch || {}, update.ownerId || '');
+            const paidProductsById = new Map((Array.isArray(paymentResult.products) ? paymentResult.products : []).map((item) => [String(item.id), item]));
+            const paidProducts = (Array.isArray(payload.products) ? payload.products : []).map((product) => {
+                const paidItem = paidProductsById.get(String(product.id));
+                if (!paidItem) return product;
+                return {
+                    ...product,
+                    name: paidItem.name || product.name,
+                    price: Number(paidItem.unitPrice),
+                    unitPrice: Number(paidItem.unitPrice),
+                    productUnitPrice: Number(paidItem.unitPrice),
+                    quantity: Number(paidItem.quantity),
+                    productQuantity: Number(paidItem.quantity),
+                    lineTotal: Number(paidItem.lineTotal),
+                    totalPrice: Number(paidItem.lineTotal),
+                    productTotal: Number(paidItem.lineTotal),
+                    ownerId: paidItem.ownerId || product.ownerId || ''
+                };
             });
-            (Array.isArray(result.sales) ? result.sales : []).forEach((sale) => {
-                const saleId = sale?.id || sale?.saleId;
-                if (saleId) applyCompletedSaleLocal(saleId, sale);
+            const paidPayload = {
+                ...payload,
+                product: paidProducts[0] || payload.product || {},
+                products: paidProducts,
+                cart: {
+                    ...(payload.cart || {}),
+                    subtotal: Number(paymentResult.subtotal || 0),
+                    shippingFee: Number(paymentResult.shippingFee || 0),
+                    total: Number(paymentResult.total || 0)
+                }
+            };
+
+            await registerCompletedSale({
+                payload: paidPayload,
+                paymentMethod: 'Cartera',
+                saleId: `wallet_${paymentId}`,
+                transferId: paymentId,
+                soldAt: Number(paymentResult.paidAt || Date.now()),
+                walletPayment: {
+                    paymentId,
+                    movementId: paymentResult.movementId,
+                    buyerId: sessionUser?.uid || sessionUser?.id || fbUser?.uid || '',
+                    orderSignature: paymentResult.orderSignature
+                }
             });
 
             let emailSent = true;
             try {
                 const emailPayload = appendSaleNotificationToPayload({
-                    ...payload,
+                    ...paidPayload,
                     transferId: paymentId,
                     walletPaymentId: paymentId,
-                    paidAt: Number(result.paidAt || Date.now()),
+                    paidAt: Number(paymentResult.paidAt || Date.now()),
                     paymentStatus: 'Pagado',
                     paymentMethod: 'Cartera',
                     requestId: `wallet_${paymentId}`
@@ -2823,41 +2980,41 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 await sendOrderEmail(emailPayload, { maxAttempts: 2 });
             } catch(emailError) {
                 emailSent = false;
-                console.error('[Cartera][Correo] El pago se completó, pero no se pudo enviar el correo.', {
+                console.error('[Cartera][Correo] El pago y la compra se completaron, pero no se pudo enviar el correo.', {
                     paymentId,
                     ...getOperationErrorDetails(emailError)
                 }, emailError);
             }
 
-            const cashbackAmount = Number(result.cashbackAmount || 0);
-            const cashbackText = cashbackAmount > 0
-                ? ` Se abonó automáticamente ${Wallet.formatMoney(cashbackAmount)} de Cash Back.`
-                : '';
-            const balanceText = ` Saldo restante: ${Wallet.formatMoney(result.balanceAfter || 0)}.`;
+            try { await walletPaymentManager.refresh(); } catch(refreshError) {}
+            const balanceText = ` Saldo restante: ${Wallet.formatMoney(paymentResult.balanceAfter || 0)}.`;
             const emailText = emailSent
                 ? ' La confirmación de compra fue enviada por correo.'
-                : ' El cobro quedó confirmado, aunque no fue posible enviar el correo de confirmación.';
-            alert(`Pago con cartera realizado correctamente.${cashbackText}${balanceText}${emailText}`);
+                : ' La compra quedó confirmada, aunque no fue posible enviar el correo de confirmación.';
+            alert(`Pago con cartera realizado correctamente.${balanceText}${emailText}`);
             clearCompletedCartIfNeeded();
             resetPublicFlow();
         } catch(error) {
             const code = String(error?.code || '').toLowerCase();
             const details = error?.details || {};
-            console.error('[Cartera][Pago] No se pudo completar el cobro.', {
+            console.error('[Cartera][Pago] No se pudo completar el flujo.', {
+                paymentId,
+                walletDebitConfirmed,
                 ...getOperationErrorDetails(error),
                 details
             }, error);
 
-            if (code.includes('wallet-auth') || code.includes('wallet-user-invalid') || code.includes('wallet-profile')) {
-                await walletPaymentManager.reset();
-                alert('La validación de la cartera ya no es válida. Ingresa nuevamente usuario y contraseña.');
+            if (walletDebitConfirmed) {
+                alert('El pago ya fue descontado una sola vez, pero no terminó el registro de la compra. Conserva el carrito y vuelve a presionar “Pagar con cartera”; se reutilizará el mismo pago sin volver a descontar el saldo.');
+            } else if (code.includes('wallet-auth') || code.includes('wallet-user-invalid') || code.includes('wallet-profile')) {
+                walletPaymentManager.requestLogin();
             } else if (code.includes('wallet-insufficient-funds') || code.includes('wallet-not-found') || code.includes('wallet-not-active')) {
                 const available = Number(details.availableBalance ?? walletPaymentManager.availableBalance ?? 0);
-                alert(`Saldo insuficiente o cartera no disponible. Saldo disponible: ${Wallet.formatMoney(available)}.`);
-            } else if (code.includes('seller-wallet')) {
+                alert(`${error?.message || 'Saldo insuficiente o cartera no disponible.'} Saldo disponible: ${Wallet.formatMoney(available)}.`);
+            } else if (code.includes('seller-wallet') || code === 'wallet_not_found' || code === 'wallet_insufficient_funds') {
                 alert(Wallet.INSUFFICIENT_MESSAGE);
             } else if (code.includes('wallet-payment-permission-denied') || code.includes('permission-denied')) {
-                alert(error?.message || 'No se pudo autorizar el cobro con cartera. Publica el archivo firestore.rules incluido en este paquete y vuelve a iniciar sesión.');
+                alert(error?.message || 'No se pudo autorizar el pago o continuar el flujo de compra en Firestore. Publica el archivo firestore.rules incluido en este paquete.');
             } else if (code.includes('product-') || code.includes('order-total-changed')) {
                 alert(error?.message || 'El inventario o el total de la compra cambió. Regresa al carrito y revisa la compra.');
             } else if (code.includes('timeout') || code.includes('network') || code.includes('unavailable')) {
@@ -3543,7 +3700,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 <div className="grid md:grid-cols-2 gap-4">
                                     {[
                                         ['transfer', 'Transferencia bancaria', 'Queda Pendiente hasta que el administrador confirme el pago. El costo de envío se calcula según la categoría de los productos.'],
-                                        WalletPayment.available === false ? null : ['wallet', 'Cartera (pago con cartera)', 'El cobro se realiza directamente del saldo validado y al finalizar se abona el Cash Back global configurado.']
+                                        WalletPayment.available === false ? null : ['wallet', 'Cartera (pago con cartera)', 'Requiere iniciar sesión únicamente para consultar la cartera existente y descontar una sola vez el total de la compra.']
                                     ].filter(Boolean).map(([value, title, desc]) => (
                                         <label key={value} className={`border-2 rounded-2xl p-5 cursor-pointer hover:border-red-200 transition-all bg-white ${selectedPaymentMethod === value ? 'border-red-400' : 'border-slate-100'}`}>
                                             <div className="flex items-start gap-3">
