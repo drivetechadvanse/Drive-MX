@@ -12,6 +12,27 @@
   const normalizeEmail = (value) => clean(value).replace(/\s+/g, '').toLowerCase();
   const safeId = (value) => clean(value).replace(/[^a-zA-Z0-9_-]/g, '_');
   const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+  const MAX_WALLET_ORDER_TOTAL = 20000000;
+  const DELIVERY_LIMITS = Object.freeze({
+    street: 240,
+    state: 120,
+    municipality: 140,
+    neighborhood: 180,
+    zip: 25,
+    fullName: 180,
+    phone: 60,
+    email: 254,
+    references: 1200
+  });
+
+  function preserveFirestoreTime(value, fallback) {
+    if (Number.isFinite(value) && value >= 0) return value;
+    if (value && typeof value === 'object') {
+      if (typeof value.toMillis === 'function') return value;
+      if (Number.isFinite(value.seconds) && Number.isFinite(value.nanoseconds)) return value;
+    }
+    return fallback;
+  }
 
   function createPaymentId() {
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -312,11 +333,18 @@
     };
     const missingDelivery = Object.entries(delivery).find(([, value]) => !value);
     if (missingDelivery) throw clientPaymentError('Completa todos los datos de entrega antes de pagar.', 'missing-delivery-field', { field: missingDelivery[0] });
+    const oversizedDelivery = Object.entries(DELIVERY_LIMITS).find(([field, max]) => delivery[field].length > max);
+    if (oversizedDelivery) {
+      throw clientPaymentError('Uno de los datos de entrega excede el tamaño permitido.', 'delivery-field-too-long', {
+        field: oversizedDelivery[0],
+        maximumLength: oversizedDelivery[1]
+      });
+    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(delivery.email)) {
       throw clientPaymentError('El correo electrónico no es válido.', 'invalid-email');
     }
     const clientTotal = roundMoney(order.cart?.total);
-    if (!Number.isFinite(clientTotal) || clientTotal <= 0) {
+    if (!Number.isFinite(clientTotal) || clientTotal <= 0 || clientTotal > MAX_WALLET_ORDER_TOTAL) {
       throw clientPaymentError('El total de la compra no es válido.', 'wallet-total-zero');
     }
     const orderSignatureSource = JSON.stringify({ products: [...products].sort((a, b) => a.id.localeCompare(b.id)), delivery, total: clientTotal });
@@ -344,8 +372,8 @@
       movementId: id,
       walletId,
       userId: walletId,
-      userName: clean(wallet.userName || 'Usuario'),
-      userEmail: normalizeEmail(wallet.userEmail || buyerEmail),
+      userName: clean(wallet.userName || 'Usuario').slice(0, 180),
+      userEmail: normalizeEmail(wallet.userEmail || buyerEmail).slice(0, 254),
       type,
       direction,
       concept,
@@ -404,7 +432,9 @@
           const productRef = dataDoc(fbase, db, appId, 'products', requested.id);
           const snapshot = productSnapshots.get(productRef.path);
           if (!snapshot?.exists()) throw clientPaymentError('Uno de los productos ya no está disponible.', 'product-not-found', { productId: requested.id });
-          const product = { id: snapshot.id, ...snapshot.data() };
+          // El ID real del documento siempre prevalece sobre un campo id antiguo
+          // o incorrecto almacenado dentro del producto.
+          const product = { ...snapshot.data(), id: snapshot.id };
           if (product.active === false) throw clientPaymentError(`${clean(product.name) || 'Un producto'} ya no está activo.`, 'product-not-active', { productId: requested.id });
           const stock = getProductStock(product);
           if (stock < requested.quantity) {
@@ -448,7 +478,9 @@
         // Nunca se acredita más Cash Back que el importe efectivamente cobrado.
         const cashbackAmount = roundMoney(Math.min(configuredCashback, total));
         const totalQuantity = liveItems.reduce((sum, item) => sum + item.requested.quantity, 0);
-        if (total <= 0) throw clientPaymentError('El total de la compra debe ser mayor a $0.00.', 'wallet-total-zero');
+        if (total <= 0 || subtotal > MAX_WALLET_ORDER_TOTAL || shippingFee > MAX_WALLET_ORDER_TOTAL || total > MAX_WALLET_ORDER_TOTAL) {
+          throw clientPaymentError('El total de la compra está fuera del límite permitido.', 'wallet-total-out-of-range');
+        }
         if (Math.abs(total - normalizedOrder.clientTotal) > 0.01) {
           throw clientPaymentError('El total de la compra cambió. Regresa al carrito y revisa los importes.', 'order-total-changed', { clientTotal: normalizedOrder.clientTotal, currentTotal: total });
         }
@@ -587,11 +619,12 @@
           const ownerProfileRef = ownerDocId ? dataDoc(fbase, db, appId, 'operators', ownerDocId) : null;
           const ownerProfileSnapshot = ownerProfileRef ? relatedSnapshots.get(ownerProfileRef.path) : null;
           const ownerProfile = ownerProfileSnapshot?.exists() ? { id: ownerProfileSnapshot.id, ...ownerProfileSnapshot.data() } : {};
-          const sellerName = clean(ownerProfile.name || item.product.ownerName || (ownerDocId ? 'Usuario' : 'Admin Central'));
-          const sellerEmail = normalizeEmail(ownerProfile.email || item.product.ownerEmail || (ownerDocId ? '' : ADMIN_EMAIL));
-          const sellerPhone = clean(ownerProfile.phone || item.product.ownerPhone || '-');
-          const sellerNotificationEmail = normalizeEmail(ownerProfile.saleNotificationEmail || item.product.saleNotificationEmail || item.product.sellerNotificationEmail || sellerEmail);
+          const sellerName = clean(ownerProfile.name || item.product.ownerName || (ownerDocId ? 'Usuario' : 'Admin Central')).slice(0, 180);
+          const sellerEmail = normalizeEmail(ownerProfile.email || item.product.ownerEmail || (ownerDocId ? '' : ADMIN_EMAIL)).slice(0, 254);
+          const sellerPhone = clean(ownerProfile.phone || item.product.ownerPhone || '-').slice(0, 80);
+          const sellerNotificationEmail = normalizeEmail(ownerProfile.saleNotificationEmail || item.product.saleNotificationEmail || item.product.sellerNotificationEmail || sellerEmail).slice(0, 254);
           const sale = {
+            id: saleId,
             saleId,
             orderSaleId: safeId(`wallet_${paymentId}`),
             cartItemCount: liveItems.length,
@@ -602,6 +635,7 @@
             paymentMethod: 'Cartera',
             paymentStatus: 'Pagado',
             walletPaymentId: paymentId,
+            walletPaymentItemIndex: index,
             transferId: paymentId,
             productId: item.product.id,
             productName: clean(item.product.name || item.product.id).slice(0, 180),
@@ -619,6 +653,7 @@
             sellerEmail,
             sellerPhone,
             sellerNotificationEmail,
+            visibleToUserId: ownerDocId,
             buyerId,
             buyerName: normalizedOrder.delivery.fullName,
             buyerEmail: normalizedOrder.delivery.email,
@@ -640,7 +675,7 @@
             createdAt: now,
             updatedAt: now
           };
-          sales.push({ id: saleId, ...sale });
+          sales.push(sale);
           inventoryUpdates.push({ productId: item.product.id, ownerId: ownerDocId, patch: inventoryPatch });
 
           // El documento público products es la fuente principal de inventario.
@@ -649,7 +684,7 @@
           // el cobro aun cuando la cartera y el producto fueran válidos.
           transaction.set(item.productRef, inventoryPatch, { merge: true });
           transaction.set(dataDoc(fbase, db, appId, 'completed_sales', saleId), sale);
-          if (ownerDocId) transaction.set(dataDoc(fbase, db, appId, 'user_sales', ownerDocId, 'items', saleId), { id: saleId, ...sale, visibleToUserId: ownerDocId });
+          if (ownerDocId) transaction.set(dataDoc(fbase, db, appId, 'user_sales', ownerDocId, 'items', saleId), sale);
 
           if (commission.applies && commission.amount > 0) {
             const state = walletStates.get(commission.ownerWalletId);
@@ -671,6 +706,7 @@
                 paymentId
               }),
               commissionPercent,
+              walletPaymentItemIndex: index,
               saleId,
               productId: item.product.id,
               productName: sale.productName
@@ -717,9 +753,12 @@
             walletPatch.userEmail = normalizeEmail(current.userEmail || '');
             walletPatch.userPhone = clean(current.userPhone || '');
             walletPatch.currency = 'MXN';
-            walletPatch.rechargeCount = Math.max(0, Math.floor(Number(current.rechargeCount || 0)));
+            const existingRechargeCount = Number(raw.rechargeCount);
+            walletPatch.rechargeCount = Number.isFinite(existingRechargeCount) && existingRechargeCount >= 0
+              ? existingRechargeCount
+              : 0;
             walletPatch.totalRecharged = roundMoney(current.totalRecharged || 0);
-            walletPatch.createdAt = current.createdAt || raw.createdAt || now;
+            walletPatch.createdAt = preserveFirestoreTime(raw.createdAt, now);
           }
           if (!isBuyer && state.commissionTotal > 0) walletPatch.lastWalletPaymentId = paymentId;
           if (isBuyer) {
@@ -773,7 +812,7 @@
           paymentMethod: 'Cartera',
           status: 'Pagado',
           buyerId,
-          buyerName: clean(buyerProfile.name || normalizedOrder.delivery.fullName),
+          buyerName: clean(buyerProfile.name || normalizedOrder.delivery.fullName).slice(0, 180),
           buyerEmail,
           walletId: buyerId,
           subtotal,
@@ -862,7 +901,7 @@
     } catch (directError) {
       const normalized = normalizeFirestorePaymentError(directError);
       if (clean(normalized.code).toLowerCase().includes('permission-denied')) {
-        normalized.message = 'Firestore rechazó una de las operaciones del cobro. Usa las reglas V6 incluidas en este paquete y vuelve a iniciar sesión.';
+        normalized.message = 'Firestore rechazó una de las operaciones del cobro. Publica el archivo firestore.rules incluido en esta corrección y vuelve a iniciar sesión.';
       }
       throw normalized;
     }
@@ -908,6 +947,7 @@
 
     const verifyCredentials = useCallback(async (event) => {
       event?.preventDefault?.();
+      event?.stopPropagation?.();
       if (verifying || paying) return;
       const email = normalizeEmail(username);
       if (!email || !password) {
@@ -1072,7 +1112,7 @@
   }
 
   global.DriveMxWalletPayment = {
-    BUILD: '2026-08-22-wallet-rules-safe-v6',
+    BUILD: '2026-08-25-wallet-cashback-inventory-v8',
     SECONDARY_APP_NAME,
     clean,
     normalizeEmail,
@@ -1088,6 +1128,7 @@
     WalletBalanceBadge
   };
 })(window);
+
 
 
 
