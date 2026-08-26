@@ -43,6 +43,7 @@
   };
 
   const SECONDARY_AUTH_APP_NAME = 'DriveMxSecondaryAuthApp';
+  const secondaryPersistencePromises = new WeakMap();
 
   const requireFirebaseAuthSdk = (fbase, firebaseConfig) => {
     if (!fbase || typeof fbase.initializeApp !== 'function' || typeof fbase.getAuth !== 'function') {
@@ -491,6 +492,7 @@
         saleNotificationEmail: sessionUser.saleNotificationEmail || '',
         assignmentsAuthorized: sessionUser.assignmentsAuthorized === true,
         supermarketProductsAuthorized: sessionUser.supermarketProductsAuthorized === true,
+        supermarketProductsAuthorizedAt: sessionUser.supermarketProductsAuthorizedAt || null,
         accountStatus: sessionUser.accountStatus || '',
         active: sessionUser.active !== false,
         blocked: sessionUser.blocked === true
@@ -501,6 +503,7 @@
         saleNotificationEmail: mergedProfile.saleNotificationEmail || '',
         assignmentsAuthorized: mergedProfile.assignmentsAuthorized === true,
         supermarketProductsAuthorized: mergedProfile.supermarketProductsAuthorized === true,
+        supermarketProductsAuthorizedAt: mergedProfile.supermarketProductsAuthorizedAt || null,
         accountStatus: mergedProfile.accountStatus || '',
         active: mergedProfile.active !== false,
         blocked: mergedProfile.blocked === true
@@ -515,6 +518,18 @@
       const value = String(password || '');
       if (!value) throw new Error('Ingresa la contraseña maestra.');
       const secondaryAuth = getSecondaryAuth({ fbase, firebaseConfig });
+      if (typeof fbase?.setPersistence === 'function' && fbase?.inMemoryPersistence) {
+        let persistencePromise = secondaryPersistencePromises.get(secondaryAuth);
+        if (!persistencePromise) {
+          persistencePromise = fbase.setPersistence(secondaryAuth, fbase.inMemoryPersistence).catch((error) => {
+            secondaryPersistencePromises.delete(secondaryAuth);
+            throw error;
+          });
+          secondaryPersistencePromises.set(secondaryAuth, persistencePromise);
+        }
+        await persistencePromise;
+      }
+      try { await fbase.signOut(secondaryAuth); } catch (error) {}
       try {
         await fbase.signInWithEmailAndPassword(secondaryAuth, adminEmail, value);
         return true;
@@ -600,6 +615,7 @@
     }
   };
 })(window);
+
 
 
 
