@@ -10,6 +10,8 @@
   const MIN_FIRST_RECHARGE = 100;
   const MIN_RECHARGE_AFTER_THREE_PRODUCTS = 500;
   const PRODUCT_RECHARGE_THRESHOLD = 3;
+  const DEFAULT_CASHBACK_AMOUNT = 10;
+  const MAX_CASHBACK_AMOUNT = 1000000;
   const getMinimumRecharge = (settings = {}, productCount = 0) => {
     const value = Number(settings.minimumFirstRecharge || settings.minimumRecharge || MIN_FIRST_RECHARGE);
     const baseMinimum = Number.isFinite(value) && value > 0 ? Math.round((value + Number.EPSILON) * 100) / 100 : MIN_FIRST_RECHARGE;
@@ -34,6 +36,12 @@
     const percent = Number(value || 0);
     if (!Number.isFinite(percent)) return 0;
     return Math.max(0, Math.min(100, roundMoney(percent)));
+  }
+
+  function normalizeCashbackAmount(value, fallback = DEFAULT_CASHBACK_AMOUNT) {
+    const amount = Number(value ?? fallback);
+    if (!Number.isFinite(amount)) return roundMoney(fallback);
+    return Math.max(0, Math.min(MAX_CASHBACK_AMOUNT, roundMoney(amount)));
   }
 
   function calculateCommission(amount, percent) {
@@ -97,8 +105,13 @@
       rechargeCount,
       totalRecharged,
       totalCommissions: roundMoney(wallet?.totalCommissions || 0),
+      totalPurchases: roundMoney(wallet?.totalPurchases || 0),
+      totalCashback: roundMoney(wallet?.totalCashback || 0),
       lastRechargeAt: wallet?.lastRechargeAt || null,
       lastCommissionAt: wallet?.lastCommissionAt || null,
+      lastPurchaseAt: wallet?.lastPurchaseAt || null,
+      lastCashbackAt: wallet?.lastCashbackAt || null,
+      lastWalletPaymentId: clean(wallet?.lastWalletPaymentId || ''),
       createdAt: wallet?.createdAt || now(),
       updatedAt: wallet?.updatedAt || now(),
       status: wallet?.status || ''
@@ -110,6 +123,7 @@
   function defaultSettings() {
     return {
       globalCommissionPercent: 0,
+      globalCashbackAmount: DEFAULT_CASHBACK_AMOUNT,
       minimumFirstRecharge: MIN_FIRST_RECHARGE,
       currency: CURRENCY,
       updatedAt: null,
@@ -122,6 +136,7 @@
       ...defaultSettings(),
       ...settings,
       globalCommissionPercent: normalizePercent(settings.globalCommissionPercent ?? settings.commissionPercent ?? 0),
+      globalCashbackAmount: normalizeCashbackAmount(settings.globalCashbackAmount ?? settings.cashbackAmount ?? settings.cashBackAmount),
       minimumFirstRecharge: getMinimumRecharge(settings),
       currency: settings.currency || CURRENCY
     };
@@ -567,6 +582,8 @@
     MIN_FIRST_RECHARGE,
     MIN_RECHARGE_AFTER_THREE_PRODUCTS,
     PRODUCT_RECHARGE_THRESHOLD,
+    DEFAULT_CASHBACK_AMOUNT,
+    MAX_CASHBACK_AMOUNT,
     getMinimumRecharge,
     CURRENCY,
     PLATFORM_LEGEND,
@@ -578,6 +595,7 @@
     safeDocId,
     formatMoney,
     normalizePercent,
+    normalizeCashbackAmount,
     calculateCommission,
     normalizeSaleQuantity,
     getSaleUnitPrice,
@@ -860,7 +878,6 @@
   global.DriveMxWallet = Wallet;
   global.DriveMxWalletUI = createWalletUI(global.React);
 })(window);
-
 
 
 
