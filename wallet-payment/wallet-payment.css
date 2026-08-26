@@ -1,0 +1,125 @@
+.drive-mx-wallet-payment-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 1rem;
+  background: #f8fafc;
+}
+
+.drive-mx-wallet-payment-card__copy {
+  min-width: 0;
+}
+
+.drive-mx-wallet-payment-card__title {
+  margin: 0;
+  color: #0f172a;
+  font-size: .75rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.drive-mx-wallet-payment-card__text,
+.drive-mx-wallet-payment-card__error {
+  margin: .4rem 0 0;
+  font-size: .625rem;
+  font-weight: 700;
+  line-height: 1.55;
+  text-transform: uppercase;
+}
+
+.drive-mx-wallet-payment-card__text {
+  color: #64748b;
+}
+
+.drive-mx-wallet-payment-card__error {
+  color: #ef4444;
+}
+
+.drive-mx-wallet-payment-card__button {
+  flex: 0 0 auto;
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
+}
+
+.drive-mx-wallet-payment-card__refresh {
+  flex: 0 0 auto;
+  min-height: 2.75rem;
+  padding: .65rem 1rem;
+  border-radius: .75rem;
+  background: #fff;
+  color: #475569;
+  font-size: .625rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  border: 1px solid #e2e8f0;
+}
+
+.drive-mx-wallet-payment-card__refresh:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.drive-mx-wallet-balance {
+  width: min(100%, 19rem);
+  padding: .85rem 1rem;
+  border: 1px solid #bbf7d0;
+  border-radius: .9rem;
+  background: #f0fdf4;
+}
+
+.drive-mx-wallet-balance--insufficient {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.drive-mx-wallet-balance__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .8rem;
+  color: #64748b;
+  font-size: .58rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.drive-mx-wallet-balance__row + .drive-mx-wallet-balance__row {
+  margin-top: .4rem;
+}
+
+.drive-mx-wallet-balance__row strong {
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.drive-mx-wallet-balance__row--remaining {
+  margin-top: .55rem !important;
+  padding-top: .55rem;
+  border-top: 1px solid rgba(148, 163, 184, .3);
+}
+
+.drive-mx-wallet-balance__warning {
+  margin: .55rem 0 0;
+  color: #ef4444;
+  font-size: .58rem;
+  font-weight: 900;
+  text-align: right;
+  text-transform: uppercase;
+}
+
+@media (max-width: 640px) {
+  .drive-mx-wallet-payment-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .drive-mx-wallet-payment-card__button,
+  .drive-mx-wallet-payment-card__refresh,
+  .drive-mx-wallet-balance {
+    width: 100%;
+  }
+}
