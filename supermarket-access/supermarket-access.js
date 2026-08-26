@@ -96,7 +96,7 @@
       console.error('Guardar autorización de Supermercado:', error);
     }
 
-    onSessionUserChange({ ...user, ...patch });
+    onSessionUserChange(patch);
     return patch;
   }
 
@@ -121,7 +121,11 @@
       setProcessing(false);
       setInvalidAttempt(false);
       pendingRef.current = null;
-    }, [sessionUser?.uid, sessionUser?.id, sessionUser?.role, sessionUser?.[PROFILE_FIELD], sessionUser?.supermarketAccessAuthorized, sessionUser?.supermarketAuthorized]);
+    }, [sessionUser?.uid, sessionUser?.id, sessionUser?.role]);
+
+    useEffect(() => {
+      if (isAuthorized(sessionUser || {})) setAuthorized(true);
+    }, [sessionUser?.[PROFILE_FIELD], sessionUser?.supermarketAccessAuthorized, sessionUser?.supermarketAuthorized]);
 
     const cancelPrompt = useCallback(() => {
       pendingRef.current = null;
@@ -148,9 +152,11 @@
 
     const submitPassword = useCallback(async (event) => {
       event?.preventDefault?.();
+      event?.stopPropagation?.();
       if (processing || !promptVisible) return;
       const value = String(password || '');
-      if (!value) {
+      const pending = pendingRef.current;
+      if (!value || !pending || typeof pending.applyCategory !== 'function') {
         setInvalidAttempt(true);
         return;
       }
@@ -165,13 +171,12 @@
         await verifyAdminPassword(value);
         await persistAuthorization({ fbase, appId, user: sessionUser || {}, onSessionUserChange });
         setAuthorized(true);
-        const pending = pendingRef.current;
         pendingRef.current = null;
         setPromptVisible(false);
         setPassword('');
-        pending?.applyCategory?.(pending.category);
+        pending.applyCategory(pending.category);
       } catch (error) {
-        console.warn('Contraseña maestra de Supermercado no válida.');
+        console.warn('Contraseña maestra de Supermercado no válida.', error);
         setPassword('');
         setInvalidAttempt(true);
       } finally {
@@ -194,8 +199,7 @@
 
   function SupermarketPasswordPrompt({ manager } = {}) {
     if (!manager?.promptVisible) return null;
-    return React.createElement('form', {
-      onSubmit: manager.submitPassword,
+    return React.createElement('div', {
       className: `drive-mx-supermarket-access ${manager.invalidAttempt ? 'drive-mx-supermarket-access--invalid' : ''}`,
       autoComplete: 'off'
     },
@@ -204,9 +208,17 @@
         value: manager.password || '',
         onChange: (event) => manager.setPassword?.(event.target.value),
         onKeyDown: (event) => {
-          if (event.key === 'Escape') manager.cancelPrompt?.();
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            event.stopPropagation();
+            manager.submitPassword?.(event);
+          } else if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            manager.cancelPrompt?.();
+          }
         },
-        placeholder: 'Introduce contraseña',
+        placeholder: manager.processing ? 'Validando contraseña...' : 'Introduce contraseña',
         'aria-label': 'Introduce contraseña',
         autoComplete: 'new-password',
         autoFocus: true,
@@ -214,7 +226,8 @@
         className: 'drive-mx-supermarket-access__input'
       }),
       React.createElement('button', {
-        type: 'submit',
+        type: 'button',
+        onClick: manager.submitPassword,
         tabIndex: -1,
         'aria-hidden': 'true',
         className: 'drive-mx-supermarket-access__hidden-submit'
