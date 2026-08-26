@@ -409,7 +409,7 @@ const App = () => {
 
     const featureManagersRef = useRef({});
     const navigationActionsRef = useRef({});
-    const walletCheckoutLoginPendingRef = useRef(false);
+    const walletCheckoutLoginReturnRef = useRef(null);
     const authManager = EmailPasswordAuthUI.useEmailPasswordAuth({
         fbase,
         appId,
@@ -605,7 +605,11 @@ const App = () => {
     featureManagersRef.current = {
         requestWalletLogin: () => {
             if (sessionUser && sessionUser.role !== 'admin') return;
-            walletCheckoutLoginPendingRef.current = true;
+            walletCheckoutLoginReturnRef.current = {
+                selectedProductId: selectedProductId ? String(selectedProductId) : null,
+                selectedProductQuantity: Number(selectedProductQuantity || 0),
+                checkoutProductIds: Array.isArray(checkoutProductIds) ? [...checkoutProductIds] : []
+            };
             authManager.setLoginForm({ email: '', p: '' });
             setView('login');
         },
@@ -616,10 +620,27 @@ const App = () => {
             setShowAssignmentsPasswordModal(false);
             setAssignmentsPassword('');
             setAssignmentsPasswordError('');
-            const returnToWalletPayment = walletCheckoutLoginPendingRef.current
-                && profile?.role !== 'admin';
-            walletCheckoutLoginPendingRef.current = false;
-            if (returnToWalletPayment) {
+
+            const walletCheckoutReturn = walletCheckoutLoginReturnRef.current
+                || (selectedPaymentMethod === 'wallet' ? {
+                    selectedProductId: selectedProductId ? String(selectedProductId) : null,
+                    selectedProductQuantity: Number(selectedProductQuantity || 0),
+                    checkoutProductIds: Array.isArray(checkoutProductIds) ? [...checkoutProductIds] : []
+                } : null);
+            walletCheckoutLoginReturnRef.current = null;
+
+            const hasWalletCheckout = Boolean(
+                walletCheckoutReturn
+                && (
+                    walletCheckoutReturn.checkoutProductIds.length > 0
+                    || (walletCheckoutReturn.selectedProductId && walletCheckoutReturn.selectedProductQuantity > 0)
+                )
+            );
+
+            if (profile?.role !== 'admin' && hasWalletCheckout) {
+                setCheckoutProductIds(walletCheckoutReturn.checkoutProductIds);
+                setSelectedProductId(walletCheckoutReturn.selectedProductId);
+                setSelectedProductQuantity(walletCheckoutReturn.selectedProductQuantity);
                 setSelectedPaymentMethod('wallet');
                 setView('payment-method');
                 return;
@@ -1546,7 +1567,7 @@ const App = () => {
     };
 
     const resetPublicFlow = () => {
-        walletCheckoutLoginPendingRef.current = false;
+        walletCheckoutLoginReturnRef.current = null;
         setView('home');
         setSearchQuery('');
         packagesManager.resetTracking();
