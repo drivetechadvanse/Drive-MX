@@ -12,31 +12,6 @@
   const normalizeEmail = (value) => clean(value).replace(/\s+/g, '').toLowerCase();
   const safeId = (value) => clean(value).replace(/[^a-zA-Z0-9_-]/g, '_');
   const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
-  const finiteNumber = (value, fallback = 0) => {
-    const number = Number(value);
-    return Number.isFinite(number) ? number : fallback;
-  };
-  const nonNegativeMoney = (value, fallback = 0) => roundMoney(Math.max(0, finiteNumber(value, fallback)));
-  const nonNegativeWholeNumber = (value, fallback = 0) => Math.max(0, Math.floor(finiteNumber(value, fallback)));
-
-  function validStoredEmail(value, fallback = '') {
-    const primary = normalizeEmail(value);
-    if (primary.length >= 5 && primary.length <= 254) return primary;
-    const secondary = normalizeEmail(fallback);
-    return secondary.length >= 5 && secondary.length <= 254 ? secondary : '';
-  }
-
-  function normalizeWalletMillis(value, fallback = null) {
-    if (value == null || value === '') return fallback;
-    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
-    if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
-      const numeric = Number(value.trim());
-      return Number.isFinite(numeric) && numeric >= 0 ? numeric : fallback;
-    }
-    if (value && typeof value.toMillis === 'function') return value;
-    if (value && typeof value.seconds === 'number') return value;
-    return fallback;
-  }
 
   function createPaymentId() {
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -144,12 +119,12 @@
       throw publicError('El usuario no tiene una cuenta activa en Drive MX.', 'wallet-profile-not-found');
     }
 
-    const profile = { ...(profileSnapshot.data() || {}), id: profileSnapshot.id };
+    const profile = { id: profileSnapshot.id, ...profileSnapshot.data() };
     if (profile.role === 'admin' || profileIsBlocked(profile)) {
       throw publicError('La cuenta no está disponible para pagar con cartera.', 'wallet-account-not-available');
     }
 
-    const walletData = walletSnapshot.exists() ? { ...(walletSnapshot.data() || {}), id: walletSnapshot.id, uid, userId: uid } : null;
+    const walletData = walletSnapshot.exists() ? { id: walletSnapshot.id, ...walletSnapshot.data() } : null;
     const wallet = typeof Wallet?.normalizeWallet === 'function'
       ? Wallet.normalizeWallet(walletData, profile)
       : {
@@ -238,9 +213,7 @@
   function isUserPublication(product = {}) {
     const ownerId = clean(product.ownerId || product.sellerId || product.userId || product.createdByUid);
     const type = fold(product.publicationType || product.productOrigin || product.sourcePanel || product.createdFromPanel);
-    if (['panel control', 'panel de control', 'control', 'admin', 'administrador'].includes(type)) return false;
-    if (['usuario', 'user', 'panel usuario', 'panel de usuario'].includes(type)) return true;
-    return Boolean(ownerId);
+    return Boolean(ownerId) || ['usuario', 'user', 'panel usuario', 'panel de usuario'].includes(type);
   }
 
   function getProductStock(product = {}) {
@@ -339,21 +312,6 @@
     };
     const missingDelivery = Object.entries(delivery).find(([, value]) => !value);
     if (missingDelivery) throw clientPaymentError('Completa todos los datos de entrega antes de pagar.', 'missing-delivery-field', { field: missingDelivery[0] });
-    const deliveryLimits = {
-      street: 240,
-      state: 120,
-      municipality: 140,
-      neighborhood: 180,
-      zip: 25,
-      fullName: 180,
-      phone: 60,
-      email: 254,
-      references: 1200
-    };
-    const oversizedDelivery = Object.entries(deliveryLimits).find(([field, max]) => delivery[field].length > max);
-    if (oversizedDelivery) {
-      throw clientPaymentError('Uno de los datos de entrega es demasiado largo.', 'delivery-field-too-long', { field: oversizedDelivery[0], max: oversizedDelivery[1] });
-    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(delivery.email)) {
       throw clientPaymentError('El correo electrónico no es válido.', 'invalid-email');
     }
@@ -433,7 +391,7 @@
         const walletSettingsSnapshot = baseSnapshots.get(walletSettingsRef.path);
         const supermarketSettingsSnapshot = baseSnapshots.get(supermarketSettingsRef.path);
         if (!buyerProfileSnapshot?.exists()) throw clientPaymentError('La cuenta de la cartera no existe.', 'wallet-profile-not-found');
-        const buyerProfile = { ...(buyerProfileSnapshot.data() || {}), id: buyerProfileSnapshot.id };
+        const buyerProfile = { id: buyerProfileSnapshot.id, ...buyerProfileSnapshot.data() };
         if (buyerProfile.role === 'admin' || profileIsBlocked(buyerProfile)) throw clientPaymentError('La cuenta no está disponible para pagar con cartera.', 'wallet-account-not-available');
         if (normalizeEmail(buyerProfile.email) && normalizeEmail(buyerProfile.email) !== buyerEmail) {
           throw clientPaymentError('La cuenta de la cartera no coincide con el usuario validado.', 'wallet-profile-mismatch');
@@ -446,9 +404,7 @@
           const productRef = dataDoc(fbase, db, appId, 'products', requested.id);
           const snapshot = productSnapshots.get(productRef.path);
           if (!snapshot?.exists()) throw clientPaymentError('Uno de los productos ya no está disponible.', 'product-not-found', { productId: requested.id });
-          // El ID real del documento es la identidad del producto. Un campo
-          // id antiguo o incorrecto dentro del documento no debe sobrescribirlo.
-          const product = { ...(snapshot.data() || {}), id: snapshot.id };
+          const product = { id: snapshot.id, ...snapshot.data() };
           if (product.active === false) throw clientPaymentError(`${clean(product.name) || 'Un producto'} ya no está activo.`, 'product-not-active', { productId: requested.id });
           const stock = getProductStock(product);
           if (stock < requested.quantity) {
@@ -481,19 +437,10 @@
             };
         const supermarketSettings = supermarketSettingsSnapshot?.exists() ? (supermarketSettingsSnapshot.data() || {}) : {};
         const commissionPercent = roundMoney(Math.max(0, Math.min(100, Number(walletSettings.globalCommissionPercent || 0))));
-        // Replica exactamente la prioridad y validación de firestore.rules:
-        // globalCashbackAmount, después cashbackAmount heredado y al final $10.
-        const configuredCashbackValue = hasOwn(walletSettingsRaw, 'globalCashbackAmount')
-          ? walletSettingsRaw.globalCashbackAmount
-          : (hasOwn(walletSettingsRaw, 'cashbackAmount') ? walletSettingsRaw.cashbackAmount : DEFAULT_CASHBACK_AMOUNT);
-        const configuredCashback = roundMoney(
-          typeof configuredCashbackValue === 'number'
-          && Number.isFinite(configuredCashbackValue)
-          && configuredCashbackValue >= 0
-          && configuredCashbackValue <= 1000000
-            ? configuredCashbackValue
-            : DEFAULT_CASHBACK_AMOUNT
-        );
+        const configuredCashbackValue = Number(walletSettings.globalCashbackAmount ?? DEFAULT_CASHBACK_AMOUNT);
+        const configuredCashback = roundMoney(Number.isFinite(configuredCashbackValue) && configuredCashbackValue >= 0
+          ? Math.min(configuredCashbackValue, 1000000)
+          : DEFAULT_CASHBACK_AMOUNT);
         const supermarketFallback = normalizeShippingFee(supermarketSettings.shippingFee, GENERAL_SHIPPING_FEE);
         const subtotal = roundMoney(liveItems.reduce((sum, item) => sum + item.lineTotal, 0));
         const shippingFee = calculateShippingFee(liveItems, supermarketFallback);
@@ -517,16 +464,9 @@
         const relatedSnapshots = await getTransactionSnapshots(transaction, [...ownerProfileRefs, ...ownerWalletRefs]);
 
         const buyerWalletRaw = buyerWalletSnapshot.data() || {};
-        const buyerWalletSource = { ...buyerWalletRaw, id: buyerId, uid: buyerId, userId: buyerId };
         const buyerWallet = typeof Wallet?.normalizeWallet === 'function'
-          ? Wallet.normalizeWallet(buyerWalletSource, buyerProfile)
-          : { ...buyerWalletSource, balance: roundMoney(buyerWalletRaw.balance || 0), activated: buyerWalletRaw.activated === true, firstRechargeCompleted: buyerWalletRaw.firstRechargeCompleted === true };
-        buyerWallet.id = buyerId;
-        buyerWallet.uid = buyerId;
-        buyerWallet.userId = buyerId;
-        buyerWallet.userName = clean(buyerWallet.userName || buyerProfile.name || 'Usuario').slice(0, 180);
-        buyerWallet.userEmail = validStoredEmail(buyerWallet.userEmail, buyerProfile.email || buyerEmail);
-        buyerWallet.userPhone = clean(buyerWallet.userPhone || buyerProfile.phone || '').slice(0, 80);
+          ? Wallet.normalizeWallet({ id: buyerWalletSnapshot.id, ...buyerWalletRaw }, buyerProfile)
+          : { id: buyerId, ...buyerWalletRaw, balance: roundMoney(buyerWalletRaw.balance || 0), activated: buyerWalletRaw.activated === true, firstRechargeCompleted: buyerWalletRaw.firstRechargeCompleted === true };
         if (!(buyerWallet.activated === true && buyerWallet.firstRechargeCompleted === true)) throw clientPaymentError('La cartera no está activa.', 'wallet-not-active');
         if (roundMoney(buyerWallet.balance) < total) {
           throw clientPaymentError('Saldo insuficiente en la cartera.', 'wallet-insufficient-funds', { availableBalance: roundMoney(buyerWallet.balance), requiredAmount: total });
@@ -548,21 +488,14 @@
           const walletSnapshot = relatedSnapshots.get(walletRef.path);
           const profileRef = dataDoc(fbase, db, appId, 'operators', ownerId);
           const profileSnapshot = relatedSnapshots.get(profileRef.path);
-          const profile = profileSnapshot?.exists() ? { ...(profileSnapshot.data() || {}), id: profileSnapshot.id } : {};
+          const profile = profileSnapshot?.exists() ? { id: profileSnapshot.id, ...profileSnapshot.data() } : {};
           if (!walletSnapshot?.exists()) throw clientPaymentError('No se encontró la cartera de uno de los vendedores.', 'seller-wallet-not-found', { sellerId: ownerId });
           const raw = walletSnapshot.data() || {};
-          const walletSource = { ...raw, id: ownerId, uid: ownerId, userId: ownerId };
           const wallet = typeof Wallet?.normalizeWallet === 'function'
-            ? Wallet.normalizeWallet(walletSource, profile)
-            : { ...walletSource, balance: roundMoney(raw.balance || 0), activated: raw.activated === true, firstRechargeCompleted: raw.firstRechargeCompleted === true };
-          wallet.id = ownerId;
-          wallet.uid = ownerId;
-          wallet.userId = ownerId;
-          wallet.userName = clean(wallet.userName || profile.name || 'Usuario').slice(0, 180);
-          wallet.userEmail = validStoredEmail(wallet.userEmail, profile.email);
-          wallet.userPhone = clean(wallet.userPhone || profile.phone || '').slice(0, 80);
+            ? Wallet.normalizeWallet({ id: walletSnapshot.id, ...raw }, profile)
+            : { id: ownerId, ...raw, balance: roundMoney(raw.balance || 0), activated: raw.activated === true, firstRechargeCompleted: raw.firstRechargeCompleted === true };
           if (!(wallet.activated === true && wallet.firstRechargeCompleted === true)) throw clientPaymentError('La cartera de uno de los vendedores no está activa.', 'seller-wallet-not-active', { sellerId: ownerId });
-          walletStates.set(ownerId, { ref: walletRef, raw, wallet, profile, currentBalance: roundMoney(wallet.balance), commissionTotal: 0, changed: false, isBuyer: false });
+          walletStates.set(ownerId, { ref: walletRef, raw, wallet, currentBalance: roundMoney(wallet.balance), commissionTotal: 0, changed: false, isBuyer: false });
         });
 
         const now = Date.now();
@@ -637,7 +570,6 @@
           const commission = commissionResults.get(saleId);
           const remainingStock = Math.max(0, item.stock - item.requested.quantity);
           const inventoryPatch = {
-            id: item.product.id,
             stock: remainingStock,
             availableStock: remainingStock,
             updatedAt: now,
@@ -654,14 +586,11 @@
           const ownerDocId = item.userPublication && item.ownerId ? safeId(item.ownerId) : '';
           const ownerProfileRef = ownerDocId ? dataDoc(fbase, db, appId, 'operators', ownerDocId) : null;
           const ownerProfileSnapshot = ownerProfileRef ? relatedSnapshots.get(ownerProfileRef.path) : null;
-          const ownerProfile = ownerProfileSnapshot?.exists() ? { ...(ownerProfileSnapshot.data() || {}), id: ownerProfileSnapshot.id } : {};
-          const sellerName = clean(ownerProfile.name || item.product.ownerName || (ownerDocId ? 'Usuario' : 'Admin Central')).slice(0, 180);
-          const sellerEmail = validStoredEmail(ownerProfile.email || item.product.ownerEmail || (ownerDocId ? '' : ADMIN_EMAIL));
-          const sellerPhone = clean(ownerProfile.phone || item.product.ownerPhone || '-').slice(0, 80);
-          const sellerNotificationEmail = validStoredEmail(
-            ownerProfile.saleNotificationEmail || item.product.saleNotificationEmail || item.product.sellerNotificationEmail,
-            sellerEmail
-          );
+          const ownerProfile = ownerProfileSnapshot?.exists() ? { id: ownerProfileSnapshot.id, ...ownerProfileSnapshot.data() } : {};
+          const sellerName = clean(ownerProfile.name || item.product.ownerName || (ownerDocId ? 'Usuario' : 'Admin Central'));
+          const sellerEmail = normalizeEmail(ownerProfile.email || item.product.ownerEmail || (ownerDocId ? '' : ADMIN_EMAIL));
+          const sellerPhone = clean(ownerProfile.phone || item.product.ownerPhone || '-');
+          const sellerNotificationEmail = normalizeEmail(ownerProfile.saleNotificationEmail || item.product.saleNotificationEmail || item.product.sellerNotificationEmail || sellerEmail);
           const sale = {
             saleId,
             orderSaleId: safeId(`wallet_${paymentId}`),
@@ -684,7 +613,7 @@
             productTotal: item.lineTotal,
             productSizes: item.requested.sizes,
             productColors: item.requested.colors,
-            productCategory: clean(item.product.category || item.product.productCategory || item.product.categoria || '').slice(0, 180),
+            productCategory: clean(item.product.category || item.product.productCategory || item.product.categoria || ''),
             sellerId: ownerDocId,
             sellerName,
             sellerEmail,
@@ -742,7 +671,6 @@
                 paymentId
               }),
               commissionPercent,
-              walletPaymentItemIndex: index,
               saleId,
               productId: item.product.id,
               productName: sale.productName
@@ -773,43 +701,30 @@
             balance: roundMoney(state.currentBalance),
             activated: true,
             firstRechargeCompleted: true,
-            totalCommissions: roundMoney(nonNegativeMoney(raw.totalCommissions ?? current.totalCommissions, 0) + state.commissionTotal),
+            totalCommissions: roundMoney(Number(current.totalCommissions || 0) + state.commissionTotal),
             updatedAt: now,
             updatedBy: buyerEmail,
             status: state.currentBalance > 0 ? 'Activa' : 'Sin saldo'
           };
           // Las carteras antiguas de vendedores pueden no contener todavía todos
-          // los campos del esquema actual o conservarlos como texto. El ID del
-          // documento es autoritativo y los valores financieros se normalizan
-          // dentro de la misma transacción, sin alterar el importe del cobro.
+          // los campos del esquema actual. Se normalizan dentro de la misma
+          // transacción sin modificar la identidad ni el saldo fuera del cobro.
           if (!isBuyer) {
-            const profile = state.profile || {};
-            const rawEmail = normalizeEmail(current.userEmail || profile.email || '');
-            const safeEmail = rawEmail.length >= 5 && rawEmail.length <= 254
-              ? rawEmail
-              : normalizeEmail(profile.email || '');
-            const createdAtValue = normalizeWalletMillis(current.createdAt ?? raw.createdAt, now);
-            walletPatch.id = state.ref.id;
-            walletPatch.uid = state.ref.id;
-            walletPatch.userId = state.ref.id;
-            walletPatch.userName = clean(current.userName || profile.name || 'Usuario').slice(0, 180);
-            walletPatch.userEmail = safeEmail;
-            walletPatch.userPhone = clean(current.userPhone || profile.phone || '').slice(0, 80);
+            walletPatch.id = clean(current.id || state.ref.id);
+            walletPatch.uid = clean(current.uid || current.userId || state.ref.id);
+            walletPatch.userId = clean(current.userId || current.uid || state.ref.id);
+            walletPatch.userName = clean(current.userName || 'Usuario');
+            walletPatch.userEmail = normalizeEmail(current.userEmail || '');
+            walletPatch.userPhone = clean(current.userPhone || '');
             walletPatch.currency = 'MXN';
-            walletPatch.rechargeCount = nonNegativeWholeNumber(raw.rechargeCount ?? current.rechargeCount, 0);
-            walletPatch.totalRecharged = nonNegativeMoney(raw.totalRecharged ?? current.totalRecharged, 0);
-            walletPatch.createdAt = createdAtValue;
-            walletPatch.createdBy = clean(raw.createdBy || profile.email || 'sistema').slice(0, 254);
-            walletPatch.firstRechargeAt = normalizeWalletMillis(current.firstRechargeAt ?? raw.firstRechargeAt, null);
-            walletPatch.lastRechargeAt = normalizeWalletMillis(current.lastRechargeAt ?? raw.lastRechargeAt, null);
+            walletPatch.rechargeCount = Math.max(0, Math.floor(Number(current.rechargeCount || 0)));
+            walletPatch.totalRecharged = roundMoney(current.totalRecharged || 0);
+            walletPatch.createdAt = current.createdAt || raw.createdAt || now;
           }
           if (!isBuyer && state.commissionTotal > 0) walletPatch.lastWalletPaymentId = paymentId;
           if (isBuyer) {
-            // normalizeWallet no conserva estos acumulados en todas las versiones.
-            // Se toman del documento original para no reiniciarlos y evitar que las
-            // reglas rechacen la segunda compra pagada con la misma cartera.
-            walletPatch.totalPurchases = roundMoney(nonNegativeMoney(raw.totalPurchases ?? current.totalPurchases, 0) + total);
-            walletPatch.totalCashback = roundMoney(nonNegativeMoney(raw.totalCashback ?? current.totalCashback, 0) + cashbackAmount);
+            walletPatch.totalPurchases = roundMoney(Number(current.totalPurchases || 0) + total);
+            walletPatch.totalCashback = roundMoney(Number(current.totalCashback || 0) + cashbackAmount);
             walletPatch.lastPurchaseAt = now;
             if (cashbackAmount > 0) walletPatch.lastCashbackAt = now;
             else if (Object.prototype.hasOwnProperty.call(raw, 'lastCashbackAt')) walletPatch.lastCashbackAt = raw.lastCashbackAt;
@@ -858,7 +773,7 @@
           paymentMethod: 'Cartera',
           status: 'Pagado',
           buyerId,
-          buyerName: clean(buyerProfile.name || normalizedOrder.delivery.fullName).slice(0, 180),
+          buyerName: clean(buyerProfile.name || normalizedOrder.delivery.fullName),
           buyerEmail,
           walletId: buyerId,
           subtotal,
@@ -872,7 +787,7 @@
             index,
             id: item.product.id,
             name: clean(item.product.name || item.product.id).slice(0, 180),
-            category: clean(item.product.category || item.product.productCategory || item.product.categoria || '').slice(0, 180),
+            category: clean(item.product.category || item.product.productCategory || item.product.categoria || ''),
             quantity: item.requested.quantity,
             unitPrice: item.unitPrice,
             lineTotal: item.lineTotal,
@@ -947,7 +862,7 @@
     } catch (directError) {
       const normalized = normalizeFirestorePaymentError(directError);
       if (clean(normalized.code).toLowerCase().includes('permission-denied')) {
-        normalized.message = 'Firestore rechazó la transacción del cobro. Publica el archivo firestore.rules incluido en esta corrección, reemplaza los módulos de cartera y vuelve a iniciar sesión.';
+        normalized.message = 'Firestore rechazó una de las operaciones del cobro. Usa las reglas V6 incluidas en este paquete y vuelve a iniciar sesión.';
       }
       throw normalized;
     }
@@ -1157,7 +1072,7 @@
   }
 
   global.DriveMxWalletPayment = {
-    BUILD: '2026-08-24-wallet-transaction-fix-v8',
+    BUILD: '2026-08-22-wallet-rules-safe-v6',
     SECONDARY_APP_NAME,
     clean,
     normalizeEmail,
@@ -1173,6 +1088,7 @@
     WalletBalanceBadge
   };
 })(window);
+
 
 
 
