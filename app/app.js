@@ -1,11 +1,5 @@
-;(async function bootstrapDriveMxApplication(global) {
-'use strict';
-
-const fbase = await (global.FirebaseSDKReady || Promise.resolve(global.FirebaseSDK));
-if (!fbase) throw new Error('Firebase SDK no está disponible para iniciar Drive MX.');
-if (!global.React || !global.ReactDOM) throw new Error('React no está disponible para iniciar Drive MX.');
-
-const { useState, useEffect, useRef, useCallback } = global.React;
+const { useState, useEffect, useRef, useCallback } = React;
+const fbase = window.FirebaseSDK;
 const Wallet = window.DriveMxWallet;
 const WalletUI = window.DriveMxWalletUI;
 const WalletPayment = window.DriveMxWalletPayment || {
@@ -40,33 +34,6 @@ const AdsManager = window.DriveMxAdsManager;
 const HomeProducts = window.DriveMxHomeProducts || {};
 const ProductDetails = window.DriveMxProductDetails || {};
 const Supermercado = window.DriveMxSupermercado || window.DriveMxSupermercadoCore || {};
-const SupermarketAccess = global.DriveMxSupermarketAccess || {};
-const useSupermarketAccess = typeof SupermarketAccess.useSupermarketAccess === 'function'
-    ? SupermarketAccess.useSupermarketAccess
-    : ({ sessionUser } = {}) => ({
-        authorized: sessionUser?.role === 'admin',
-        promptVisible: false,
-        password: '',
-        setPassword: () => {},
-        processing: false,
-        invalidAttempt: false,
-        requestCategory: (category, applyCategory) => {
-            const isSupermarket = typeof Supermercado.isSupermarketCategory === 'function'
-                ? Supermercado.isSupermarketCategory(category)
-                : String(category || '').trim().toLowerCase() === 'supermercado';
-            if (!isSupermarket || sessionUser?.role === 'admin') {
-                applyCategory?.(category);
-                return true;
-            }
-            global.alert?.('El módulo de acceso a Supermercado no está disponible. Recarga la aplicación.');
-            return false;
-        },
-        submitPassword: (event) => {
-            event?.preventDefault?.();
-            event?.stopPropagation?.();
-        },
-        cancelPrompt: () => {}
-    });
 const CostoEnvio = window.DriveMxCostoEnvio || {};
 const NewShipmentUI = window.DriveMxNewShipment || {};
 const GuideAssignmentUI = window.DriveMxGuideAssignment || {};
@@ -454,13 +421,6 @@ const App = () => {
         onSessionProfileChange: (profile) => featureManagersRef.current.onSessionProfileChange?.(profile)
     });
     const { fbUser, sessionUser } = authManager;
-    const supermarketAccessManager = useSupermarketAccess({
-        fbase,
-        appId,
-        sessionUser,
-        verifyAdminPassword: authManager.verifyAdminPassword,
-        onSessionUserChange: authManager.mergeSessionUser
-    });
     const walletPaymentManager = WalletPayment.useWalletPayment({
         fbase,
         firebaseConfig: window.firebaseConfig,
@@ -489,7 +449,7 @@ const App = () => {
         supermarketSettings,
         setSupermarketSettings,
         adminEmail: ADMIN_EMAIL,
-        onSessionUserChange: authManager.mergeSessionUser
+        onSessionUserChange: authManager.setSessionUser
     });
     const controlProducts = adminProductsManager.controlProducts;
     const userProductsManager = UserProductsUI.useUserProductsManager({
@@ -504,8 +464,8 @@ const App = () => {
         Wallet,
         supermarketShippingFee: supermarketSettings.shippingFee,
         ensureAccountAllowed,
-        supermarketAccessManager,
-        onSessionUserChange: authManager.mergeSessionUser
+        verifyAdminPassword: authManager.verifyAdminPassword,
+        onSessionUserChange: authManager.setSessionUser
     });
     const currentUserProducts = userProductsManager.currentUserProducts;
     const currentUserSales = userProductsManager.currentUserSales;
@@ -537,7 +497,7 @@ const App = () => {
         shippingFee: GLOBAL_SHIPPING_FEE,
         ensureAccountAllowed,
         verifyAdminPassword: authManager.verifyAdminPassword,
-        onSessionProfileChange: authManager.mergeSessionUser,
+        onSessionProfileChange: authManager.setSessionUser,
         activeView: view
     });
     const {
@@ -2318,7 +2278,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 throw error;
             }
 
-            const currentProduct = { ...publicProductSnapshot.data(), id: publicProductSnapshot.id };
+            const currentProduct = { id: publicProductSnapshot.id, ...publicProductSnapshot.data() };
             const currentStock = getProductStock(currentProduct);
             if (currentStock <= 0) {
                 const error = new Error(`El producto ${currentProduct.name || productId} está agotado.`);
@@ -3807,17 +3767,5 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     );
 };
 
-global.ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-})(window).catch((error) => {
-    console.error('No se pudo iniciar Drive MX:', error);
-    const root = document.getElementById('root');
-    if (root && !root.hasChildNodes()) {
-        root.setAttribute('role', 'alert');
-        root.style.padding = '2rem';
-        root.style.fontFamily = 'system-ui, sans-serif';
-        root.style.fontWeight = '700';
-        root.style.color = '#b91c1c';
-        root.textContent = error?.message || 'No se pudo iniciar la aplicación. Recarga la página.';
-    }
-});
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 
