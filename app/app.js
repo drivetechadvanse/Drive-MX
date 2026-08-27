@@ -2291,7 +2291,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         const userSaleRef = isWalletPayment && ownerDocId
             ? fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_SALES_COLLECTION, ownerDocId, 'items', id)
             : null;
-        const shouldDebitCommission = Boolean(saleSellerId) && isUserPanelPublication(sourceProduct);
+        const shouldDebitCommission = Boolean(saleSellerId)
+            && isUserPanelPublication(sourceProduct)
+            && !isWalletPayment;
         let walletId = '';
         let walletRef = null;
         let movementRef = null;
@@ -2492,7 +2494,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     inventoryUpdatedAt: updatedAt,
                     walletCommissionPercent: commissionResult.percent ?? walletCommissionPercent,
                     walletCommissionAmount: Number(commissionResult.commissionAmount || 0),
-                    walletCommissionStatus: commissionResult.applies ? (Number(commissionResult.commissionAmount || 0) > 0 ? 'Descontada' : 'Sin comisión') : 'No aplica',
+                    walletCommissionStatus: isWalletPayment && Boolean(saleSellerId) && isUserPanelPublication(sourceProduct)
+                        ? 'Pendiente de procesamiento'
+                        : (commissionResult.applies ? (Number(commissionResult.commissionAmount || 0) > 0 ? 'Descontada' : 'Sin comisión') : 'No aplica'),
                     walletBalanceBeforeCommission: commissionResult.balanceBefore,
                     walletBalanceAfterCommission: commissionResult.balanceAfter,
                     updatedAt
