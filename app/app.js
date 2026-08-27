@@ -3966,4 +3966,3 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
 };
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-
