@@ -209,11 +209,15 @@
     const movementId = safeDocId(`mov_purchase_${paymentId}`);
     const movementRef = dataDoc(fbase, db, appId, 'wallets', uid, 'movements', movementId);
     const productRefs = normalizedOrder.products.map((item) => dataDoc(fbase, db, appId, 'products', item.id));
+    let firestoreStage = 'inicio';
 
     try {
       return await fbase.runTransaction(db, async (transaction) => {
+        firestoreStage = 'leer-perfil';
         const profileSnapshot = await transaction.get(profileRef);
+        firestoreStage = 'leer-cartera';
         const walletSnapshot = await transaction.get(walletRef);
+        firestoreStage = 'leer-movimiento';
         const movementSnapshot = await transaction.get(movementRef);
 
         if (!profileSnapshot.exists()) {
@@ -273,6 +277,7 @@
         }
 
         const productSnapshots = [];
+        firestoreStage = 'leer-productos';
         for (const productRef of productRefs) productSnapshots.push(await transaction.get(productRef));
 
         const liveProducts = normalizedOrder.products.map((requested, index) => {
@@ -360,6 +365,7 @@
           createdBy: email
         };
 
+        firestoreStage = 'commit-cartera-y-movimiento';
         transaction.set(walletRef, {
           balance: balanceAfter,
           updatedAt: paidAt,
@@ -385,7 +391,12 @@
         };
       });
     } catch (error) {
-      throw normalizeFirestoreError(error);
+      const normalized = normalizeFirestoreError(error);
+      if (clean(normalized?.code).toLowerCase().includes('permission-denied')) {
+        normalized.message = `Firestore rechazó el pago con cartera. Etapa: ${firestoreStage}.`;
+        normalized.details = { ...(normalized.details || {}), firestoreStage };
+      }
+      throw normalized;
     }
   }
 
