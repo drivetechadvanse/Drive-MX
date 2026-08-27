@@ -2917,6 +2917,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         let paymentId = '';
         let paymentResult = null;
         let walletDebitConfirmed = false;
+        let postPaymentStage = 'antes-del-cobro';
         setOrderSending(true);
         try {
             const payload = buildOrderPayload();
@@ -2939,8 +2940,10 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     total: Number(payload.cart?.total || 0)
                 }
             };
+            postPaymentStage = 'cobro-cartera';
             paymentResult = await walletPaymentManager.pay({ paymentId, order: walletOrder });
             walletDebitConfirmed = true;
+            postPaymentStage = paymentResult?.idempotent ? 'pago-ya-existente-recuperado' : 'pago-nuevo-confirmado';
 
             const paidProductsById = new Map((Array.isArray(paymentResult.products) ? paymentResult.products : []).map((item) => [String(item.id), item]));
             const paidProducts = (Array.isArray(payload.products) ? payload.products : []).map((product) => {
@@ -2972,6 +2975,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 }
             };
 
+            postPaymentStage = 'registrar-venta-inventario';
             await registerCompletedSale({
                 payload: paidPayload,
                 paymentMethod: 'Cartera',
@@ -2986,6 +2990,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 }
             });
 
+            postPaymentStage = 'venta-registrada';
             let emailSent = true;
             try {
                 const emailPayload = appendSaleNotificationToPayload({
@@ -3025,7 +3030,23 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             }, error);
 
             if (walletDebitConfirmed) {
-                alert('El pago ya fue descontado una sola vez, pero no terminó el registro de la compra. Conserva el carrito y vuelve a presionar “Pagar con cartera”; se reutilizará el mismo pago sin volver a descontar el saldo.');
+                const technicalCode = String(error?.code || 'SIN_CODIGO');
+                const technicalMessage = String(error?.message || 'Error desconocido');
+                const technicalStage = String(error?.stage || postPaymentStage || 'registro-posterior-al-cobro');
+                console.error('[Cartera][Registro posterior al cobro] Diagnóstico exacto.', {
+                    paymentId,
+                    idempotent: paymentResult?.idempotent === true,
+                    stage: technicalStage,
+                    code: technicalCode,
+                    message: technicalMessage,
+                    details
+                }, error);
+                alert(
+                    `El cobro NO se repetirá. Falló el registro posterior al pago.\n\n` +
+                    `Etapa: ${technicalStage}\n` +
+                    `Código: ${technicalCode}\n` +
+                    `Detalle: ${technicalMessage}`
+                );
             } else if (code.includes('wallet-auth') || code.includes('wallet-user-invalid') || code.includes('wallet-profile')) {
                 walletPaymentManager.requestLogin();
             } else if (code.includes('wallet-insufficient-funds') || code.includes('wallet-not-found') || code.includes('wallet-not-active')) {
