@@ -136,7 +136,7 @@ function getBearerToken(req) {
 async function verifyFirebaseUser(req, { requireAdmin = false } = {}) {
   let decoded;
   try {
-    decoded = await admin.auth(getAdminApp()).verifyIdToken(getBearerToken(req), true);
+    decoded = await admin.auth(getAdminApp()).verifyIdToken(getBearerToken(req));
   } catch (error) {
     console.error('[Stripe][Auth] Token no válido:', error);
     throw publicError('La sesión ya no es válida. Inicia sesión nuevamente.', 401, 'invalid-auth-token');
@@ -208,3 +208,4 @@ module.exports = {
   sendError
 };
 
+ 
