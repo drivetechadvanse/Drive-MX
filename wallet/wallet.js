@@ -697,13 +697,21 @@
                 h('p', { className: 'text-[8px] font-black uppercase text-slate-400 mb-1' }, 'Pagar solo con Banco Azteca, el nombre del titular de la cuenta debe coincidir con el usuario registrado en el panel para que la tranferencia sea aprobada'),
                 h('p', { className: 'text-sm font-black text-slate-900 break-all' }, props.bankAccount)
               ) : h('p', { className: 'text-[10px] font-black text-red-500 uppercase' }, 'El administrador aún no configuró la cuenta bancaria.'),
-              h('button', {
-                type: 'button',
-                onClick: props.onCreatePendingRecharge,
-                disabled: props.rechargeProcessing || !props.bankAccount || !props.rechargeAmount || !rechargeValidation.ok,
-                className: 'btn-primary h-12 w-full disabled:opacity-50 disabled:cursor-not-allowed'
-              }, props.rechargeProcessing ? 'Registrando...' : 'Registrar transferencia pendiente'),
-              h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed' }, 'La recarga se abonará a tu cartera cuando el administrador confirme la transferencia.')
+              h('div', { className: 'grid sm:grid-cols-2 gap-3' },
+                h('button', {
+                  type: 'button',
+                  onClick: props.onCreatePendingRecharge,
+                  disabled: props.rechargeProcessing || props.stripeRechargeProcessing || !props.bankAccount || !props.rechargeAmount || !rechargeValidation.ok,
+                  className: 'btn-primary h-12 w-full disabled:opacity-50 disabled:cursor-not-allowed'
+                }, props.rechargeProcessing ? 'Registrando...' : 'Registrar transferencia pendiente'),
+                h('button', {
+                  type: 'button',
+                  onClick: props.onCreateStripeRecharge,
+                  disabled: props.rechargeProcessing || props.stripeRechargeProcessing || !props.rechargeAmount || !rechargeValidation.ok || typeof props.onCreateStripeRecharge !== 'function',
+                  className: 'h-12 w-full rounded-xl bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed'
+                }, props.stripeRechargeProcessing ? 'Abriendo Stripe...' : 'Pagar con tarjeta Stripe')
+              ),
+              h('p', { className: 'text-[9px] font-bold text-slate-400 uppercase leading-relaxed' }, 'La transferencia se abona cuando el administrador la confirma. El pago con tarjeta se abona únicamente después de que Stripe confirme el cobro.')
             )
           ) : null
         )
@@ -788,9 +796,12 @@
     function AdminWalletsPanel({ users = [], wallets = [], recharges = [], onApproveRecharge = null, onDeleteRecharge = null, rechargeProcessingId = '' } = {}) {
       const registeredUsers = (Array.isArray(users) ? users : []).filter((user) => user.role !== 'admin');
       const rechargeList = (Array.isArray(recharges) ? recharges : []).slice(0, 50);
-      const getRechargeStatusClass = (status = '') => String(status || '').toLowerCase() === 'pendiente'
-        ? 'bg-yellow-50 text-yellow-700'
-        : 'bg-green-50 text-green-600';
+      const getRechargeStatusClass = (status = '') => {
+        const normalized = String(status || '').toLowerCase().trim();
+        if (normalized === 'completada' || normalized === 'pagado' || normalized === 'paid') return 'bg-green-50 text-green-600';
+        if (normalized === 'pendiente' || normalized === 'processing' || normalized === 'unpaid') return 'bg-yellow-50 text-yellow-700';
+        return 'bg-red-50 text-red-600';
+      };
       return h('div', { className: 'card-glass overflow-hidden' },
         h('div', { className: 'bg-slate-50 border-b border-slate-100 px-6 py-4' },
           h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400' }, 'Carteras de Usuarios'),
@@ -836,6 +847,9 @@
                 rechargeList.map((item) => {
                   const itemId = item.id || item.rechargeId || item.referenceId;
                   const isPending = String(item.status || '').toLowerCase() === 'pendiente';
+                  const isStripeRecharge = String(item.paymentProvider || '').toLowerCase() === 'stripe'
+                    || String(item.paymentMethod || '').toLowerCase().includes('stripe')
+                    || Boolean(item.stripeCheckoutSessionId);
                   const isProcessing = rechargeProcessingId === itemId;
                   return h('tr', { key: itemId, className: 'text-[10px] font-bold text-slate-600 align-top' },
                     h('td', { className: 'px-6 py-4' }, item.createdAt ? new Date(item.createdAt).toLocaleString('es-MX') : '-'),
@@ -848,7 +862,10 @@
                     h('td', { className: 'px-6 py-4 font-mono text-[8px] text-slate-400 break-anywhere' }, item.referenceId || itemId || '-'),
                     h('td', { className: 'px-6 py-4 text-right' },
                       h('div', { className: 'flex justify-end gap-2 flex-wrap' },
-                        isPending && onApproveRecharge ? h('button', {
+                        isPending && isStripeRecharge ? h('span', {
+                          className: 'px-3 py-2 bg-slate-100 text-slate-500 rounded-xl text-[8px] font-black uppercase'
+                        }, 'Confirmación automática Stripe') : null,
+                        isPending && !isStripeRecharge && onApproveRecharge ? h('button', {
                           type: 'button',
                           onClick: () => onApproveRecharge(item),
                           disabled: isProcessing,
