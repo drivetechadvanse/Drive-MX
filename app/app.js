@@ -4,18 +4,12 @@ const Wallet = window.DriveMxWallet;
 const WalletUI = window.DriveMxWalletUI;
 const StripeWallet = window.DriveMxStripeWallet || {
     available: false,
-    createCheckout: async () => {
+    openEmbeddedCheckout: async () => {
         const error = new Error('El módulo de recargas con Stripe no está disponible.');
         error.code = 'stripe-wallet-module-unavailable';
         throw error;
     },
-    confirmCheckout: async () => {
-        const error = new Error('El módulo de recargas con Stripe no está disponible.');
-        error.code = 'stripe-wallet-module-unavailable';
-        throw error;
-    },
-    getReturnState: () => null,
-    clearReturnState: () => {},
+    recoverPendingCheckouts: async () => ({ credited: false, recoveredCount: 0 }),
     AdminStripeSettingsCard: null
 };
 const WalletPayment = window.DriveMxWalletPayment || {
@@ -427,7 +421,6 @@ const App = () => {
     const featureManagersRef = useRef({});
     const navigationActionsRef = useRef({});
     const walletCheckoutLoginReturnRef = useRef(null);
-    const stripeWalletReturnHandledRef = useRef('');
     const stripeRechargeInFlightRef = useRef(false);
     const authManager = EmailPasswordAuthUI.useEmailPasswordAuth({
         fbase,
@@ -981,6 +974,7 @@ const App = () => {
             setWalletRechargeAmount('');
             setWalletRechargeProcessing(false);
             setStripeRechargeProcessing(false);
+            stripeRechargeInFlightRef.current = false;
             return;
         }
         const userWalletId = Wallet.getUserWalletId(sessionUser);
@@ -994,71 +988,33 @@ const App = () => {
     }, [fbUser, sessionUser?.uid, sessionUser?.id, sessionUser?.email, sessionUser?.name, sessionUser?.phone, sessionUser?.role]);
 
     useEffect(() => {
+        if (!fbUser?.uid || fbUser.isAnonymous || !sessionUser || sessionUser.role === 'admin') return undefined;
+        if (!StripeWallet.available || typeof StripeWallet.recoverPendingCheckouts !== 'function') return undefined;
+
+        let active = true;
+        StripeWallet.recoverPendingCheckouts({ fbase })
+            .then((result = {}) => {
+                if (!active || result.credited !== true) return;
+                console.info('[Stripe] Recargas pendientes recuperadas:', result.recoveredCount || 0);
+            })
+            .catch((error) => {
+                if (!active) return;
+                const ignoredCodes = ['stripe-not-configured', 'stripe-auth-required', 'invalid-auth-token'];
+                if (!ignoredCodes.includes(String(error?.code || ''))) {
+                    console.error('Recuperar recargas Stripe pendientes:', error);
+                }
+            });
+
+        return () => { active = false; };
+    }, [fbUser?.uid, fbUser?.isAnonymous, sessionUser?.uid, sessionUser?.id, sessionUser?.role]);
+
+    useEffect(() => {
         if (!fbUser || sessionUser?.role !== 'admin') {
             setWalletRecharges([]);
             return;
         }
         return Wallet.subscribeRecharges({ fbase, appId, onChange: setWalletRecharges });
     }, [fbUser, sessionUser?.role]);
-
-    useEffect(() => {
-        const returnState = StripeWallet.getReturnState?.();
-        if (!returnState?.status) return undefined;
-
-        const returnKey = `${returnState.status}:${returnState.sessionId || ''}`;
-        if (stripeWalletReturnHandledRef.current === returnKey) return undefined;
-
-        if (returnState.status === 'cancelled') {
-            stripeWalletReturnHandledRef.current = returnKey;
-            StripeWallet.clearReturnState?.();
-            setStripeRechargeProcessing(false);
-            alert('Pago con Stripe cancelado. No se modificó el saldo de tu cartera.');
-            return undefined;
-        }
-
-        if (returnState.status !== 'success') {
-            stripeWalletReturnHandledRef.current = returnKey;
-            StripeWallet.clearReturnState?.();
-            return undefined;
-        }
-
-        if (!returnState.sessionId || !fbUser?.uid || fbUser.isAnonymous || !sessionUser || sessionUser.role === 'admin') {
-            return undefined;
-        }
-
-        stripeWalletReturnHandledRef.current = returnKey;
-        let active = true;
-        setStripeRechargeProcessing(true);
-
-        StripeWallet.confirmCheckout({ fbase, sessionId: returnState.sessionId })
-            .then((result = {}) => {
-                if (!active) return;
-                const amountText = Wallet.formatMoney(Number(result.amount || 0));
-                const balanceNumber = Number(result.balanceAfter);
-                const balanceText = Number.isFinite(balanceNumber) ? ` Saldo disponible: ${Wallet.formatMoney(balanceNumber)}.` : '';
-
-                if (result.credited === true) {
-                    alert(`${result.idempotent ? 'La recarga ya había sido abonada' : 'Recarga con Stripe confirmada'} por ${amountText}.${balanceText}`);
-                } else {
-                    alert(`Stripe recibió la recarga por ${amountText}, pero todavía está confirmando el pago. El saldo se abonará automáticamente cuando Stripe lo confirme.`);
-                }
-
-                StripeWallet.clearReturnState?.();
-                setWalletRechargeAmount('');
-                setShowWalletRecharge(false);
-            })
-            .catch((error) => {
-                if (!active) return;
-                stripeWalletReturnHandledRef.current = '';
-                console.error('Confirmar recarga Stripe:', error);
-                alert(error?.message || 'No se pudo confirmar la recarga con Stripe. El webhook podrá completar el abono cuando Stripe confirme el pago.');
-            })
-            .finally(() => {
-                if (active) setStripeRechargeProcessing(false);
-            });
-
-        return () => { active = false; };
-    }, [fbUser?.uid, fbUser?.isAnonymous, sessionUser?.uid, sessionUser?.id, sessionUser?.role]);
 
 
 
@@ -2843,7 +2799,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
     const createStripeWalletRecharge = async () => {
         if (stripeRechargeInFlightRef.current) return;
         if (!ensureAccountAllowed()) return;
-        if (!StripeWallet.available || typeof StripeWallet.createCheckout !== 'function') {
+        if (!StripeWallet.available || typeof StripeWallet.openEmbeddedCheckout !== 'function') {
             alert('El pago con tarjeta Stripe no está disponible.');
             return;
         }
@@ -2869,15 +2825,24 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         stripeRechargeInFlightRef.current = true;
         setStripeRechargeProcessing(true);
         try {
-            const result = await StripeWallet.createCheckout({
+            const result = await StripeWallet.openEmbeddedCheckout({
                 fbase,
                 amount: validation.amount
             });
-            if (!result?.checkoutUrl) throw new Error('Stripe no devolvió la página segura para realizar el pago.');
-            window.location.assign(result.checkoutUrl);
+
+            if (result?.credited === true) {
+                const amountText = Wallet.formatMoney(Number(result.amount || validation.amount));
+                const balanceNumber = Number(result.balanceAfter);
+                const balanceText = Number.isFinite(balanceNumber)
+                    ? ` Saldo disponible: ${Wallet.formatMoney(balanceNumber)}.`
+                    : '';
+                alert(`Recarga con Stripe confirmada por ${amountText}.${balanceText}`);
+                setWalletRechargeAmount('');
+                setShowWalletRecharge(false);
+            }
         } catch (error) {
-            console.error('Iniciar recarga Stripe:', error);
-            alert(error?.message || 'No se pudo iniciar la recarga con tarjeta Stripe.');
+            console.error('Recargar cartera con Stripe:', error);
+            alert(error?.message || 'No se pudo completar la recarga con tarjeta Stripe.');
         } finally {
             stripeRechargeInFlightRef.current = false;
             setStripeRechargeProcessing(false);
