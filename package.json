@@ -4,6 +4,7 @@
   "private": true,
   "dependencies": {
     "nodemailer": "^6.9.16",
-    "firebase-admin": "^12.7.0"
+    "firebase-admin": "^12.7.0",
+    "stripe": "^22.6.0"
   }
 }
