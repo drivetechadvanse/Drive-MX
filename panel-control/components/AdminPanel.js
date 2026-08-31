@@ -14,6 +14,7 @@ const h = globalThis.React?.createElement;
 export function AdminPanel(props = {}) {
   if (!h) return null;
   const WalletUI = props.WalletUI || globalThis.DriveMxWalletUI || {};
+  const StripeWallet = props.StripeWallet || globalThis.DriveMxStripeWallet || {};
   const CashbackUI = props.CashbackUI || globalThis.DriveMxCashback || {};
   const UsersUI = props.UsersUI || globalThis.DriveMxUsersUI || {};
   const AdsManager = props.AdsManager || globalThis.DriveMxAdsManager || {};
@@ -56,6 +57,10 @@ export function AdminPanel(props = {}) {
           savePaymentSettings: props.savePaymentSettings,
           paymentSaving: props.paymentSaving
         }),
+        StripeWallet.AdminStripeSettingsCard ? h(StripeWallet.AdminStripeSettingsCard, {
+          fbase: props.fbase,
+          sessionUser: props.sessionUser
+        }) : null,
         WalletUI.AdminCommissionSettings ? h(WalletUI.AdminCommissionSettings, {
           settings: props.walletSettings,
           value: props.walletSettings?.globalCommissionPercent,
