@@ -210,6 +210,18 @@
     const sessionUserRef = useRef(null);
     const blockedAccountHandledRef = useRef(false);
     const loginProfileGraceUntilRef = useRef(0);
+    const anonymousSignInPromiseRef = useRef(null);
+    const sessionRestoreInFlightRef = useRef(false);
+    const suppressSessionRestoreRef = useRef(false);
+
+    const ensureAnonymousSession = useCallback(async (auth) => {
+      if (auth?.currentUser?.isAnonymous) return auth.currentUser;
+      if (!anonymousSignInPromiseRef.current) {
+        anonymousSignInPromiseRef.current = fbase.signInAnonymously(auth)
+          .finally(() => { anonymousSignInPromiseRef.current = null; });
+      }
+      return anonymousSignInPromiseRef.current;
+    }, [fbase]);
 
     const setSessionUser = useCallback((nextValue) => {
       setSessionUserState((previous) => {
@@ -225,23 +237,33 @@
         return undefined;
       }
 
+      let active = true;
       let unsubscribe = () => {};
       try {
         const app = ensureDefaultFirebaseApp(fbase, firebaseConfig);
         const auth = fbase.getAuth(app);
-        unsubscribe = fbase.onAuthStateChanged(auth, (user) => setFbUser(user || { uid: 'local' }));
-        if (!auth.currentUser) {
-          fbase.signInAnonymously(auth).catch((error) => {
+        unsubscribe = fbase.onAuthStateChanged(auth, (user) => {
+          if (!active) return;
+          if (user) {
+            setFbUser(user);
+            return;
+          }
+
+          setFbUser(null);
+          ensureAnonymousSession(auth).catch((error) => {
             console.error('Firebase Auth anónimo:', error);
-            setFbUser({ uid: 'local' });
+            if (active) setFbUser({ uid: 'local' });
           });
-        }
+        });
       } catch (error) {
         console.error('Inicializar Firebase Auth:', error);
         setFbUser({ uid: 'local' });
       }
-      return () => unsubscribe?.();
-    }, [fbase, firebaseConfig]);
+      return () => {
+        active = false;
+        unsubscribe?.();
+      };
+    }, [fbase, firebaseConfig, ensureAnonymousSession]);
 
     const getStaffProfile = useCallback(async (firebaseUser) => {
       if (!firebaseUser?.uid) return null;
@@ -382,11 +404,65 @@
     }, [fbase, firebaseConfig, appId, usersCollection, users, adminEmail]);
 
     const restoreAnonymousSession = useCallback(async (auth) => {
-      try { await fbase.signOut(auth); } catch (error) {}
-      try { await fbase.signInAnonymously(auth); } catch (error) {
-        console.error('Restaurar sesión anónima:', error);
+      suppressSessionRestoreRef.current = true;
+      try {
+        try { await fbase.signOut(auth); } catch (error) {}
+        try { await ensureAnonymousSession(auth); } catch (error) {
+          console.error('Restaurar sesión anónima:', error);
+        }
+      } finally {
+        suppressSessionRestoreRef.current = false;
       }
-    }, [fbase]);
+    }, [fbase, ensureAnonymousSession]);
+
+    useEffect(() => {
+      const canRestore = Boolean(
+        fbUser?.uid
+        && fbUser.uid !== 'local'
+        && fbUser.isAnonymous === false
+        && fbUser.email
+        && !sessionUserRef.current
+        && !loginProcessing
+        && !sessionRestoreInFlightRef.current
+        && !suppressSessionRestoreRef.current
+      );
+      if (!canRestore) return undefined;
+
+      let active = true;
+      sessionRestoreInFlightRef.current = true;
+
+      getStaffProfile(fbUser)
+        .then(async (profile) => {
+          if (!active || suppressSessionRestoreRef.current) return;
+          if (!profile) {
+            throw new Error('La cuenta existe, pero no se pudo recuperar su perfil de acceso.');
+          }
+          if (profile.role !== 'admin' && isUserBlocked(profile)) {
+            if (!blockedAccountHandledRef.current) {
+              blockedAccountHandledRef.current = true;
+              alert(BLOCKED_ACCOUNT_MESSAGE);
+            }
+            const app = ensureDefaultFirebaseApp(fbase, firebaseConfig);
+            await restoreAnonymousSession(fbase.getAuth(app));
+            return;
+          }
+
+          blockedAccountHandledRef.current = false;
+          loginProfileGraceUntilRef.current = Date.now() + 10000;
+          setSessionUser(profile);
+          onLogin(profile);
+        })
+        .catch((error) => {
+          if (!active) return;
+          console.error('Restaurar sesión autenticada:', error);
+          alert(error?.message || 'No se pudo restaurar la sesión del usuario. Inicia sesión nuevamente.');
+        })
+        .finally(() => {
+          sessionRestoreInFlightRef.current = false;
+        });
+
+      return () => { active = false; };
+    }, [fbUser?.uid, fbUser?.email, fbUser?.isAnonymous, loginProcessing]);
 
     const handleLogin = useCallback(async (event) => {
       event?.preventDefault?.();
