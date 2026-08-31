@@ -40,55 +40,67 @@ function stripeAttemptsCollection(db) {
   return privateRoot(db).doc(STRIPE_CONFIG_DOC).collection('checkout_attempts');
 }
 
-function stripeEventsCollection(db) {
-  return privateRoot(db).doc(STRIPE_CONFIG_DOC).collection('webhook_events');
+function stripePendingCheckoutsCollection(db, userId) {
+  return privateRoot(db)
+    .doc(STRIPE_CONFIG_DOC)
+    .collection('users')
+    .doc(safeDocId(userId))
+    .collection('pending_checkouts');
 }
 
-function normalizeSecretKey(value) {
+function normalizeKey(value) {
   return clean(value).replace(/\s+/g, '');
 }
 
-function normalizeWebhookSecret(value) {
-  return clean(value).replace(/\s+/g, '');
+function getKeyMode(value = '') {
+  const key = normalizeKey(value);
+  if (key.startsWith('pk_live_') || key.startsWith('sk_live_')) return 'live';
+  if (key.startsWith('pk_test_') || key.startsWith('sk_test_')) return 'test';
+  return '';
+}
+
+function validatePublishableKey(value) {
+  const key = normalizeKey(value);
+  if (!/^pk_(test|live)_[A-Za-z0-9_]{12,}$/.test(key)) {
+    throw publicError('La clave publicable de Stripe no es válida.', 400, 'invalid-stripe-publishable-key');
+  }
+  return key;
 }
 
 function validateSecretKey(value) {
-  const key = normalizeSecretKey(value);
-  if (!/^sk_(test|live)_[A-Za-z0-9]+$/.test(key)) {
+  const key = normalizeKey(value);
+  if (!/^sk_(test|live)_[A-Za-z0-9_]{12,}$/.test(key)) {
     throw publicError('La clave secreta de Stripe no es válida.', 400, 'invalid-stripe-secret-key');
   }
   return key;
 }
 
-function validateWebhookSecret(value) {
-  const secret = normalizeWebhookSecret(value);
-  if (!/^whsec_[A-Za-z0-9]+$/.test(secret)) {
-    throw publicError('El secreto de firma del webhook de Stripe no es válido.', 400, 'invalid-stripe-webhook-secret');
-  }
-  return secret;
+function maskKey(value = '') {
+  const key = normalizeKey(value);
+  if (!key) return '';
+  const prefix = key.slice(0, Math.min(12, Math.max(8, key.indexOf('_', 3) + 1)));
+  return `${prefix}••••••••${key.slice(-4)}`;
 }
 
-function getModeFromSecretKey(secretKey = '') {
-  if (secretKey.includes('_live_')) return 'live';
-  if (secretKey.includes('_test_')) return 'test';
-  return '';
-}
-
-function maskSecret(value = '') {
-  const secret = clean(value);
-  if (!secret) return '';
-  const prefixEnd = Math.max(secret.indexOf('_', 3) + 1, 8);
-  const prefix = secret.slice(0, Math.min(prefixEnd, 12));
-  const suffix = secret.slice(-4);
-  return `${prefix}••••••••${suffix}`;
+function publicConfig(config = {}) {
+  return {
+    configured: config.configured === true,
+    mode: config.mode || '',
+    updatedAt: Number(config.updatedAt || 0),
+    updatedBy: clean(config.updatedBy || ''),
+    publishableKeyMasked: config.publishableKeyMasked || maskKey(config.publishableKey),
+    secretKeyMasked: config.secretKeyMasked || maskKey(config.secretKey)
+  };
 }
 
 async function loadStripeConfig(db, { requireComplete = true } = {}) {
   const snapshot = await stripeConfigRef(db).get();
   const stored = snapshot.exists ? (snapshot.data() || {}) : {};
-  const secretKey = normalizeSecretKey(stored.secretKey || process.env.STRIPE_SECRET_KEY || '');
-  const webhookSecret = normalizeWebhookSecret(stored.webhookSecret || process.env.STRIPE_WEBHOOK_SECRET || '');
-  const configured = Boolean(secretKey && webhookSecret);
+  const publishableKey = normalizeKey(stored.publishableKey || '');
+  const secretKey = normalizeKey(stored.secretKey || '');
+  const publishableMode = getKeyMode(publishableKey);
+  const secretMode = getKeyMode(secretKey);
+  const configured = Boolean(publishableKey && secretKey && publishableMode && publishableMode === secretMode);
 
   if (requireComplete && !configured) {
     throw publicError(
@@ -99,27 +111,41 @@ async function loadStripeConfig(db, { requireComplete = true } = {}) {
   }
 
   return {
+    publishableKey,
     secretKey,
-    webhookSecret,
     configured,
-    mode: getModeFromSecretKey(secretKey),
+    mode: configured ? secretMode : '',
     updatedAt: Number(stored.updatedAt || 0),
     updatedBy: clean(stored.updatedBy || ''),
-    secretKeyMasked: maskSecret(secretKey),
-    webhookSecretMasked: maskSecret(webhookSecret)
+    publishableKeyMasked: maskKey(publishableKey),
+    secretKeyMasked: maskKey(secretKey)
   };
 }
 
-async function saveStripeConfig(db, { secretKey, webhookSecret, actor = '' } = {}) {
+async function saveStripeConfig(db, { publishableKey, secretKey, actor = '' } = {}) {
   const existing = await loadStripeConfig(db, { requireComplete: false });
-  const nextSecretKey = clean(secretKey) ? validateSecretKey(secretKey) : existing.secretKey;
-  const nextWebhookSecret = clean(webhookSecret) ? validateWebhookSecret(webhookSecret) : existing.webhookSecret;
+  const nextPublishableKey = clean(publishableKey)
+    ? validatePublishableKey(publishableKey)
+    : existing.publishableKey;
+  const nextSecretKey = clean(secretKey)
+    ? validateSecretKey(secretKey)
+    : existing.secretKey;
 
-  if (!nextSecretKey || !nextWebhookSecret) {
+  if (!nextPublishableKey || !nextSecretKey) {
     throw publicError(
-      'Ingresa la clave secreta de Stripe y el secreto de firma del webhook.',
+      'Ingresa la clave publicable y la clave secreta de Stripe.',
       400,
       'stripe-keys-required'
+    );
+  }
+
+  const publishableMode = getKeyMode(nextPublishableKey);
+  const secretMode = getKeyMode(nextSecretKey);
+  if (!publishableMode || publishableMode !== secretMode) {
+    throw publicError(
+      'La clave publicable y la clave secreta deben pertenecer al mismo modo de Stripe: prueba o producción.',
+      400,
+      'stripe-key-mode-mismatch'
     );
   }
 
@@ -127,7 +153,7 @@ async function saveStripeConfig(db, { secretKey, webhookSecret, actor = '' } = {
   try {
     await stripe.balance.retrieve();
   } catch (error) {
-    console.error('[Stripe][Configuración] Stripe rechazó la clave proporcionada.', error);
+    console.error('[Stripe][Configuración] Stripe rechazó la clave secreta.', error);
     throw publicError(
       'Stripe rechazó la clave secreta. Verifica que esté completa y activa.',
       400,
@@ -136,22 +162,19 @@ async function saveStripeConfig(db, { secretKey, webhookSecret, actor = '' } = {
   }
 
   const next = {
+    publishableKey: nextPublishableKey,
     secretKey: nextSecretKey,
-    webhookSecret: nextWebhookSecret,
-    mode: getModeFromSecretKey(nextSecretKey),
+    mode: secretMode,
     enabled: true,
     updatedAt: Date.now(),
     updatedBy: clean(actor).slice(0, 254)
   };
   await stripeConfigRef(db).set(next, { merge: true });
-  return {
-    configured: true,
-    mode: next.mode,
-    updatedAt: next.updatedAt,
-    updatedBy: next.updatedBy,
-    secretKeyMasked: maskSecret(nextSecretKey),
-    webhookSecretMasked: maskSecret(nextWebhookSecret)
-  };
+
+  return publicConfig({
+    ...next,
+    configured: true
+  });
 }
 
 function createStripeClient(config) {
@@ -163,10 +186,10 @@ function createStripeClient(config) {
 
 function isWalletActivated(wallet = {}) {
   return Boolean(
-    wallet.activated === true ||
-    wallet.firstRechargeCompleted === true ||
-    Number(wallet.rechargeCount || 0) > 0 ||
-    Number(wallet.totalRecharged || 0) >= MIN_FIRST_RECHARGE
+    wallet.activated === true
+    || wallet.firstRechargeCompleted === true
+    || Number(wallet.rechargeCount || 0) > 0
+    || Number(wallet.totalRecharged || 0) >= MIN_FIRST_RECHARGE
   );
 }
 
@@ -187,8 +210,9 @@ function validateAmount(rawAmount, wallet = {}, settings = {}, productCount = 0)
       'invalid-recharge-amount'
     );
   }
+
   const amountCents = Math.round(amount * 100);
-  if (amountCents < 1) {
+  if (!Number.isInteger(amountCents) || amountCents < 1) {
     throw publicError('El monto de la recarga no es válido.', 400, 'invalid-recharge-amount');
   }
 
@@ -224,7 +248,8 @@ function assertActiveUserProfile(profile = {}) {
   if (profile.role === 'admin') {
     throw publicError('La recarga con Stripe es para carteras de usuarios.', 403, 'user-wallet-required');
   }
-  if (profile.active === false || profile.blocked === true || profile.accountStatus === 'Bloqueado' || profile.accountStatus === 'Inactivo') {
+  const status = lower(profile.accountStatus || '');
+  if (profile.active === false || profile.blocked === true || status.includes('bloqueado') || status.includes('inactivo')) {
     throw publicError('La cuenta del usuario está bloqueada o inactiva.', 403, 'user-account-blocked');
   }
 }
@@ -282,8 +307,7 @@ async function getCheckoutContext(db, decoded) {
   const settings = settingsSnapshot.exists ? (settingsSnapshot.data() || {}) : {};
   let activeProductCount = 0;
   productsSnapshot.forEach((documentSnapshot) => {
-    const product = documentSnapshot.data() || {};
-    if (product.active !== false) activeProductCount += 1;
+    if ((documentSnapshot.data() || {}).active !== false) activeProductCount += 1;
   });
 
   if (!walletSnapshot.exists) await walletRef.set(wallet, { merge: true });
@@ -297,7 +321,16 @@ function normalizeRequestId(value, userId) {
   return `SWR-${safeDocId(userId)}-${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
 }
 
-async function createWalletCheckout({ db, decoded, rawAmount, requestId, baseUrl }) {
+async function retrieveSession(stripe, sessionId) {
+  try {
+    return await stripe.checkout.sessions.retrieve(sessionId);
+  } catch (error) {
+    console.error('[Stripe][Checkout] No se pudo consultar la sesión.', error);
+    throw publicError('No se pudo consultar el estado del pago en Stripe.', 502, 'stripe-session-retrieve-failed');
+  }
+}
+
+async function createWalletCheckout({ db, decoded, rawAmount, requestId }) {
   const config = await loadStripeConfig(db);
   const stripe = createStripeClient(config);
   const context = await getCheckoutContext(db, decoded);
@@ -312,22 +345,36 @@ async function createWalletCheckout({ db, decoded, rawAmount, requestId, baseUrl
     if (existing.userId !== context.userId || Number(existing.amountCents || 0) !== validation.amountCents) {
       throw publicError('La referencia de esta recarga ya fue utilizada con otro monto.', 409, 'stripe-attempt-conflict');
     }
-    if (existing.checkoutUrl && existing.checkoutSessionId) {
-      return {
-        checkoutUrl: existing.checkoutUrl,
-        checkoutSessionId: existing.checkoutSessionId,
-        rechargeId: existing.rechargeId,
-        amount: validation.amount,
-        currency: DISPLAY_CURRENCY,
-        reused: true
-      };
+
+    if (existing.checkoutSessionId) {
+      const existingSession = await retrieveSession(stripe, existing.checkoutSessionId);
+      if (existingSession.payment_status === 'paid') {
+        const result = await finalizePaidCheckout({ db, session: existingSession, source: 'embedded-checkout' });
+        return {
+          ...result,
+          checkoutSessionId: existingSession.id,
+          rechargeId: existing.rechargeId,
+          amount: validation.amount,
+          currency: DISPLAY_CURRENCY,
+          reused: true
+        };
+      }
+      if (existingSession.status === 'open' && existingSession.client_secret) {
+        return {
+          credited: false,
+          publishableKey: config.publishableKey,
+          clientSecret: existingSession.client_secret,
+          checkoutSessionId: existingSession.id,
+          rechargeId: existing.rechargeId,
+          amount: validation.amount,
+          currency: DISPLAY_CURRENCY,
+          reused: true
+        };
+      }
     }
   }
 
   const rechargeId = `SWR_${attemptHash.slice(0, 40)}`;
-  const cleanBaseUrl = String(baseUrl || '').replace(/\/+$/, '');
-  const successUrl = `${cleanBaseUrl}/?stripe_wallet=success&session_id={CHECKOUT_SESSION_ID}`;
-  const cancelUrl = `${cleanBaseUrl}/?stripe_wallet=cancelled`;
   const metadata = {
     purpose: PURPOSE,
     appId: APP_ID,
@@ -341,7 +388,9 @@ async function createWalletCheckout({ db, decoded, rawAmount, requestId, baseUrl
   let session;
   try {
     session = await stripe.checkout.sessions.create({
+      ui_mode: 'embedded_page',
       mode: 'payment',
+      redirect_on_completion: 'never',
       payment_method_types: ['card'],
       customer_email: context.profile.email,
       client_reference_id: context.userId,
@@ -358,22 +407,20 @@ async function createWalletCheckout({ db, decoded, rawAmount, requestId, baseUrl
         }
       }],
       metadata,
-      payment_intent_data: { metadata },
-      success_url: successUrl,
-      cancel_url: cancelUrl
+      payment_intent_data: { metadata }
     }, {
       idempotencyKey: `drive-mx-wallet-${attemptHash}`
     });
   } catch (error) {
     console.error('[Stripe][Checkout] No se pudo crear la sesión.', error);
     throw publicError(
-      error?.message || 'Stripe no pudo iniciar el pago con tarjeta.',
+      error?.raw?.message || error?.message || 'Stripe no pudo iniciar el pago con tarjeta.',
       502,
       'stripe-checkout-create-failed'
     );
   }
 
-  if (!session?.id || !session?.url) {
+  if (!session?.id || !session?.client_secret) {
     throw publicError('Stripe no devolvió una sesión de pago válida.', 502, 'stripe-checkout-invalid-response');
   }
 
@@ -392,7 +439,6 @@ async function createWalletCheckout({ db, decoded, rawAmount, requestId, baseUrl
     amountCents: validation.amountCents,
     currency: DISPLAY_CURRENCY,
     checkoutSessionId: session.id,
-    checkoutUrl: session.url,
     paymentIntentId: clean(session.payment_intent || ''),
     status: 'Pendiente',
     livemode: session.livemode === true,
@@ -400,37 +446,29 @@ async function createWalletCheckout({ db, decoded, rawAmount, requestId, baseUrl
     updatedAt: createdAt
   };
 
-  const rechargeData = {
-    id: rechargeId,
-    rechargeId,
-    referenceId: session.id,
-    walletId: context.userId,
-    userId: context.userId,
-    userName: context.profile.name,
-    userEmail: context.profile.email,
-    userPhone: context.profile.phone,
-    type: 'recharge',
-    direction: 'credit',
-    concept: 'Recarga de saldo con tarjeta Stripe',
-    amount: validation.amount,
-    currency: DISPLAY_CURRENCY,
-    paymentMethod: 'Tarjeta Stripe',
-    paymentProvider: 'stripe',
-    stripeCheckoutSessionId: session.id,
-    stripePaymentIntentId: clean(session.payment_intent || ''),
-    status: 'Pendiente',
-    createdAt,
-    updatedAt: createdAt,
-    createdBy: context.profile.email
-  };
-
+  // La solicitud incompleta permanece en colecciones privadas. El registro
+  // público de recarga se crea solamente cuando Stripe confirma el cobro.
+  const pendingRef = stripePendingCheckoutsCollection(db, context.userId).doc(attemptHash);
   await Promise.all([
     attemptRef.set(attemptData, { merge: true }),
-    context.root.collection('wallet_recharges').doc(rechargeId).set(rechargeData, { merge: true })
+    pendingRef.set({
+      attemptHash,
+      requestId: normalizedRequestId,
+      rechargeId,
+      userId: context.userId,
+      checkoutSessionId: session.id,
+      amount: validation.amount,
+      amountCents: validation.amountCents,
+      status: 'Pendiente',
+      createdAt,
+      updatedAt: createdAt
+    }, { merge: true })
   ]);
 
   return {
-    checkoutUrl: session.url,
+    credited: false,
+    publishableKey: config.publishableKey,
+    clientSecret: session.client_secret,
     checkoutSessionId: session.id,
     rechargeId,
     amount: validation.amount,
@@ -470,12 +508,13 @@ function validateStripeSession(session = {}) {
   };
 }
 
-async function finalizePaidCheckout({ db, session, source = 'stripe' }) {
+async function finalizePaidCheckout({ db, session, source = 'embedded-checkout' }) {
   const validated = validateStripeSession(session);
   if (session.payment_status !== 'paid') {
     return {
       credited: false,
       status: session.payment_status || session.status || 'processing',
+      sessionStatus: session.status || '',
       userId: validated.userId,
       rechargeId: validated.rechargeId,
       amount: validated.amount
@@ -488,7 +527,9 @@ async function finalizePaidCheckout({ db, session, source = 'stripe' }) {
   const movementId = safeDocId(`mov_recharge_stripe_${session.id}`);
   const movementRef = walletRef.collection('movements').doc(movementId);
   const rechargeRef = root.collection('wallet_recharges').doc(validated.rechargeId);
-  const attemptRef = stripeAttemptsCollection(db).doc(hashId(`${validated.userId}:${validated.metadata.requestId || ''}`));
+  const attemptHash = hashId(`${validated.userId}:${validated.metadata.requestId || ''}`);
+  const attemptRef = stripeAttemptsCollection(db).doc(attemptHash);
+  const pendingRef = stripePendingCheckoutsCollection(db, validated.userId).doc(attemptHash);
   const confirmedAt = Date.now();
 
   return db.runTransaction(async (transaction) => {
@@ -516,6 +557,7 @@ async function finalizePaidCheckout({ db, session, source = 'stripe' }) {
 
     if (movementSnapshot.exists) {
       const movement = movementSnapshot.data() || {};
+      transaction.delete(pendingRef);
       return {
         credited: true,
         idempotent: true,
@@ -612,6 +654,7 @@ async function finalizePaidCheckout({ db, session, source = 'stripe' }) {
       updatedAt: confirmedAt,
       confirmationSource: source
     }, { merge: true });
+    transaction.delete(pendingRef);
 
     return {
       credited: true,
@@ -626,38 +669,87 @@ async function finalizePaidCheckout({ db, session, source = 'stripe' }) {
   });
 }
 
-async function markCheckoutStatus({ db, session, status, source = 'stripe' }) {
+async function markCheckoutStatus({ db, session, status, source = 'embedded-checkout' }) {
   const validated = validateStripeSession(session);
-  const root = dataRoot(db);
+  const attemptHash = hashId(`${validated.userId}:${validated.metadata.requestId || ''}`);
+  const attemptRef = stripeAttemptsCollection(db).doc(attemptHash);
+  const pendingRef = stripePendingCheckoutsCollection(db, validated.userId).doc(attemptHash);
   const updatedAt = Date.now();
-  const rechargeRef = root.collection('wallet_recharges').doc(validated.rechargeId);
-  await rechargeRef.set({
+  const batch = db.batch();
+  batch.set(attemptRef, {
     status,
     paymentStatus: session.payment_status || '',
-    stripeCheckoutSessionId: session.id,
-    stripePaymentIntentId: sessionPaymentIntentId(session),
+    checkoutSessionId: session.id,
+    paymentIntentId: sessionPaymentIntentId(session),
     updatedAt,
     confirmationSource: source
   }, { merge: true });
+  if (String(status || '').toLowerCase() === 'expirada') batch.delete(pendingRef);
+  await batch.commit();
   return {
     credited: false,
     status,
+    sessionStatus: session.status || '',
     userId: validated.userId,
     rechargeId: validated.rechargeId,
     amount: validated.amount
   };
 }
 
-async function rememberWebhookEvent(db, event, result = {}) {
-  if (!event?.id) return;
-  await stripeEventsCollection(db).doc(safeDocId(event.id)).set({
-    eventId: event.id,
-    eventType: event.type || '',
-    created: Number(event.created || 0),
-    livemode: event.livemode === true,
-    processedAt: Date.now(),
-    result
-  }, { merge: true });
+async function recoverPaidCheckouts({ db, decoded, maxAttempts = 5 }) {
+  const userId = safeDocId(decoded?.uid || '');
+  if (!userId || userId !== decoded?.uid) {
+    throw publicError('No se pudo identificar al usuario autenticado.', 401, 'invalid-auth-user');
+  }
+
+  const config = await loadStripeConfig(db);
+  const stripe = createStripeClient(config);
+  const pendingSnapshot = await stripePendingCheckoutsCollection(db, userId)
+    .orderBy('createdAt', 'desc')
+    .limit(Math.max(1, Math.min(10, Number(maxAttempts || 5))))
+    .get();
+
+  let checkedCount = 0;
+  let recoveredCount = 0;
+  let recoveredAmount = 0;
+  let balanceAfter = null;
+
+  for (const pendingDocument of pendingSnapshot.docs) {
+    const pending = pendingDocument.data() || {};
+    const sessionId = clean(pending.checkoutSessionId || '');
+    if (!sessionId) continue;
+    checkedCount += 1;
+
+    try {
+      const session = await retrieveSession(stripe, sessionId);
+      const validated = validateStripeSession(session);
+      if (validated.userId !== userId) {
+        console.error('[Stripe][Recuperación] La sesión no coincide con el usuario.', { sessionId, userId, sessionUserId: validated.userId });
+        continue;
+      }
+
+      if (session.payment_status === 'paid') {
+        const result = await finalizePaidCheckout({ db, session, source: 'automatic-recovery' });
+        if (result.credited) {
+          recoveredCount += result.idempotent ? 0 : 1;
+          recoveredAmount = roundMoney(recoveredAmount + (result.idempotent ? 0 : Number(result.amount || 0)));
+          balanceAfter = result.balanceAfter ?? balanceAfter;
+        }
+      } else if (session.status === 'expired') {
+        await markCheckoutStatus({ db, session, status: 'Expirada', source: 'automatic-recovery' });
+      }
+    } catch (error) {
+      console.error('[Stripe][Recuperación] No se pudo revisar una recarga pendiente.', { sessionId, error });
+    }
+  }
+
+  return {
+    credited: recoveredCount > 0,
+    checkedCount,
+    recoveredCount,
+    recoveredAmount,
+    balanceAfter
+  };
 }
 
 module.exports = {
@@ -667,12 +759,15 @@ module.exports = {
   MAX_RECHARGE,
   roundMoney,
   safeDocId,
+  publicConfig,
   loadStripeConfig,
   saveStripeConfig,
   createStripeClient,
   createWalletCheckout,
+  retrieveSession,
   validateStripeSession,
   finalizePaidCheckout,
   markCheckoutStatus,
-  rememberWebhookEvent
+  recoverPaidCheckouts
 };
+
