@@ -31,7 +31,7 @@
         import "./new-shipment/new-shipment.js";
         import "./guide-assignment/guide-assignment.js";
         import "./conductores/conductores.js";
-        import "./panel-control/panel-control.js?v=20260831-stripe-wallet-v1";
+        import "./panel-control/panel-control.js?v=20260831-stripe-wallet-panel-v2";
         
         const firebaseConfig = {
             apiKey: "AIzaSyDd3WMEe3KmfHsIEMO8PEa5Cd-LMxhCBuU",
@@ -46,8 +46,8 @@
         window.firebaseConfig = firebaseConfig;
         window.FirebaseSDK = { initializeApp, getApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, setPersistence, inMemoryPersistence, getFirestore, doc, getDoc, setDoc, collection, onSnapshot, deleteDoc, query, where, getDocs, runTransaction, getStorage, ref, uploadBytes, getDownloadURL };
     </script>
-    <script src="./wallet/wallet.js?v=20260831-stripe-wallet-v1"></script>
-    <script src="./stripe-wallet/stripe-wallet.js?v=20260831-stripe-wallet-v1"></script>
+    <script src="./wallet/wallet.js?v=20260831-stripe-wallet-v2"></script>
+    <script src="./stripe-wallet/stripe-wallet.js?v=20260831-stripe-wallet-v2"></script>
     <script src="./cashback/cashback.js?v=20260822-blankfix-1"></script>
     <script src="./wallet-payment/wallet-payment.js?v=20260826-existing-wallet-payment-v1"></script>
     <script src="./supermarket-access/supermarket-access.js?v=20260822-blankfix-1"></script>
@@ -56,12 +56,11 @@
     <script src="./business-storefronts/business-storefronts.js"></script>
     <script type="text/babel" data-presets="react" src="./admin-products/admin-products.js"></script>
     <script type="text/babel" data-presets="react" src="./user-products/user-products.js?v=20260822-blankfix-1"></script>
-    <script type="text/babel" data-presets="react" src="./auth-email-password/auth-email-password.js?v=20260831-stripe-wallet-v1"></script>
+    <script type="text/babel" data-presets="react" src="./auth-email-password/auth-email-password.js?v=20260822-blankfix-1"></script>
     <script type="text/babel" data-presets="react" src="./packages-guides/packages-guides.js"></script>
     <script src="./cart/cart.js"></script>
     <script src="./support/support.js"></script>
 
-    <script type="text/babel" data-presets="react" src="./app/app.js?v=20260831-stripe-wallet-v1"></script>
+    <script type="text/babel" data-presets="react" src="./app/app.js?v=20260831-stripe-wallet-v2"></script>
 </body>
 </html>
-
