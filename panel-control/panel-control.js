@@ -1,4 +1,4 @@
-import { AdminPanel } from './components/AdminPanel.js';
+import { AdminPanel } from './components/AdminPanel.js?v=20260831-stripe-wallet-v1';
 import { AdminTrackingPanel } from './components/AdminTrackingPanel.js';
 import * as PanelControlServices from './services/panelControlService.js';
 
