@@ -1,36 +1,34 @@
 'use strict';
 
 const {
-  getDb,
+  getBearerToken,
+  decodeToken,
   parseBody,
-  verifyFirebaseUser,
-  getBaseUrl,
   setCommonHeaders,
   sendError
-} = require('../server/stripe/firebase-admin');
+} = require('../server/stripe/firebase-rest');
 const { createWalletCheckout } = require('../server/stripe/stripe-wallet');
 
 module.exports = async function handler(req, res) {
   setCommonHeaders(res, 'POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST, OPTIONS');
-    return res.status(405).json({ success: false, error: 'Método no permitido.', code: 'method-not-allowed' });
+    return res.status(405).json({ success: false, code: 'method-not-allowed', error: 'Método no permitido.' });
   }
 
   try {
-    const decoded = await verifyFirebaseUser(req);
+    const userToken = getBearerToken(req);
+    const decoded = decodeToken(userToken);
     const body = parseBody(req);
-    const result = await createWalletCheckout({
-      db: getDb(),
+    const checkout = await createWalletCheckout({
+      userToken,
       decoded,
       rawAmount: body.amount,
-      requestId: body.requestId,
-      baseUrl: getBaseUrl(req)
+      requestId: body.requestId
     });
-
-    return res.status(200).json({ success: true, ...result });
+    return res.status(200).json({ success: true, ...checkout });
   } catch (error) {
-    return sendError(res, error, 'No se pudo iniciar el pago con tarjeta Stripe.');
+    return sendError(res, error);
   }
 };
+
