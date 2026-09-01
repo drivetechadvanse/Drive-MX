@@ -1595,7 +1595,6 @@ const App = () => {
         const checkoutItem = createPurchasableProduct(product, requestedQuantity);
         if (!ensureSupermarketMinimumAllowed([checkoutItem])) return;
         if (!ensureCheckoutInventoryAllowed([checkoutItem])) return;
-        if (!ensureCheckoutWalletsAllowed([checkoutItem])) return;
         setCheckoutProductIds([]);
         setSelectedProductId(product.id);
         setSelectedProductQuantity(checkoutItem.quantity || 1);
@@ -1611,7 +1610,6 @@ const App = () => {
         }
         if (!ensureSupermarketMinimumAllowed(validCartProducts)) return;
         if (!ensureCheckoutInventoryAllowed(validCartProducts)) return;
-        if (!ensureCheckoutWalletsAllowed(validCartProducts)) return;
         const nextCart = validCartProducts.map(product => createCartItemFromProduct(product, product.quantity || 1));
         persistCart(nextCart);
         setCheckoutProductIds(nextCart.map(product => product.id));
@@ -3017,7 +3015,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         }
         if (!ensureSupermarketMinimumAllowed(checkoutProducts)) return;
         if (!ensureCheckoutInventoryAllowed(checkoutProducts)) return;
-        if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
         const availableBalance = Wallet.roundMoney(verifiedWallet?.balance ?? walletPaymentManager.availableBalance ?? 0);
         const walletIsActive = typeof Wallet.isWalletActivated === 'function'
             ? Wallet.isWalletActivated(verifiedWallet || walletPaymentManager.wallet || {})
@@ -3505,7 +3502,6 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         if (!ensureSupermarketMinimumAllowed(checkoutProducts)) return;
         if (!validateDeliveryForm()) return;
         if (!ensureCheckoutInventoryAllowed(checkoutProducts)) return;
-        if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
         setSelectedPaymentMethod('transfer');
         setView('payment-method');
     };
