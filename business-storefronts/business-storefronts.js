@@ -244,7 +244,7 @@
         }
       });
 
-    return Array.from(groupsByKey.entries()).map(([ownerKey, groupMap]) => {
+    const groups = Array.from(groupsByKey.entries()).map(([ownerKey, groupMap]) => {
       const sortedProducts = sortStorefrontProducts(Array.from(groupMap.values()));
       const generalProducts = filterProductsByCategory(sortedProducts, 'general');
       const supermarketProducts = filterProductsByCategory(sortedProducts, 'supermercado');
@@ -258,6 +258,13 @@
         products: sortedProducts
       };
     });
+
+    // El bloque oficial de Drive MX siempre encabeza la portada. Los bloques
+    // de usuarios conservan entre sí el mismo orden en el que fueron recibidos.
+    return [
+      ...groups.filter((group) => group.ownerKey === ADMIN_OWNER_KEY),
+      ...groups.filter((group) => group.ownerKey !== ADMIN_OWNER_KEY)
+    ];
   }
 
   function isSupermarketProduct(product = {}) {
@@ -692,4 +699,5 @@
     RelatedBusinessProducts
   };
 })(window);
+
 
