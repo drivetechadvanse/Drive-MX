@@ -15,6 +15,7 @@
     stock: '',
     description: '',
     specifications: '',
+    rfc: '',
     sizes: [],
     colors: [''],
     images: [],
@@ -22,6 +23,8 @@
     imageUrl: '',
     active: true
   };
+
+  const normalizeRfc = (value = '') => String(value || '').trim().toUpperCase().replace(/\s+/g, '');
 
   const isSupermarketProduct = (product = {}) => {
     const Supermercado = global.DriveMxSupermercado || global.DriveMxSupermercadoCore || {};
@@ -279,6 +282,11 @@
         alert('Ingresa el nombre del producto.');
         return;
       }
+      const rfc = normalizeRfc(productForm.rfc);
+      if (!rfc) {
+        alert('Ingresa el RFC.');
+        return;
+      }
       const businessModule = global.DriveMxBusinessStorefronts || {};
       const publishingToSupermarket = isSupermarketProduct(productForm);
       const normalizedBusinessName = typeof businessModule.normalizeBusinessName === 'function'
@@ -321,6 +329,7 @@
           stock: Math.max(0, Math.floor(Number(productForm.stock || 0))),
           description: String(productForm.description || '').trim(),
           specifications: String(productForm.specifications || '').trim(),
+          rfc,
           sizes: Core.normalizeProductSizes(productForm.sizes),
           colors: Core.normalizeProductColors(productForm.colors),
           images,
@@ -444,6 +453,7 @@
         stock: product.stock ?? '',
         description: product.description || '',
         specifications: product.specifications || '',
+        rfc: product.rfc || product.ownerRfc || product.sellerRfc || '',
         sizes: Core.normalizeProductSizes(product.sizes || product.medidas),
         colors: colors.length ? colors : [''],
         images,
@@ -755,6 +765,7 @@
               />
             )}
 
+            <input required maxLength="20" autoCapitalize="characters" className="input-field md:col-span-5" placeholder="RFC" value={productForm.rfc || ''} onChange={(event) => setProductForm((previous) => ({ ...previous, rfc: normalizeRfc(event.target.value) }))} />
             <input required className="input-field md:col-span-2" placeholder="NOMBRE" value={productForm.name || ''} onChange={(event) => setProductForm((previous) => ({ ...previous, name: event.target.value }))} />
             <input required type="number" min="0" step="0.01" className="input-field" placeholder="PRECIO" value={productForm.price ?? ''} onChange={(event) => setProductForm((previous) => ({ ...previous, price: event.target.value }))} />
             <input required type="number" min="0" step="1" className="input-field" placeholder="INVENTARIO" value={productForm.stock ?? ''} onChange={(event) => setProductForm((previous) => ({ ...previous, stock: event.target.value }))} />
@@ -842,6 +853,7 @@
     AdminProductsPanel
   };
 })(window);
+
 
 
 
