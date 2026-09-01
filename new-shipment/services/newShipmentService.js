@@ -4,6 +4,9 @@ export const USER_SHIPMENTS_COLLECTION = 'user_shipments';
 export const TRACKING_GUIDES_COLLECTION = 'tracking_guides';
 
 const DUPLICATE_GUIDE_ERROR = 'DRIVE_MX_DUPLICATE_GUIDE';
+const MAIL_SETTINGS_COLLECTION = 'mail_settings';
+const LABEL_EMAIL_ENDPOINT = '/api/send-shipment-label';
+const LABEL_EMAIL_TIMEOUT_MS = 45000;
 
 export function normalizeGuideCode(value = '') {
   return String(value || '').toUpperCase().trim();
@@ -76,6 +79,177 @@ function getUserEmail(user = {}) {
 
 function getBaseDataPath(appId = '') {
   return ['artifacts', appId, 'public', 'data'];
+}
+
+function getUserName(user = {}) {
+  return String(
+    user?.name ||
+    user?.fullName ||
+    user?.displayName ||
+    user?.n ||
+    user?.email ||
+    ''
+  ).trim();
+}
+
+function getUserPhone(user = {}) {
+  return String(user?.phone || user?.phoneNumber || user?.telefono || '').trim();
+}
+
+function normalizeMailSettings(settings = {}) {
+  return {
+    senderEmail: String(settings?.senderEmail || '').trim(),
+    appPassword: String(settings?.appPassword || '').trim(),
+    receiverEmail: String(settings?.receiverEmail || '').trim()
+  };
+}
+
+async function resolveShipmentMailSettings({ fbase, appId, mailSettings = {} } = {}) {
+  const provided = normalizeMailSettings(mailSettings);
+  let stored = {};
+
+  if (fbase && appId && typeof fbase.getDoc === 'function') {
+    try {
+      const db = fbase.getFirestore();
+      const settingsRef = fbase.doc(db, ...getBaseDataPath(appId), MAIL_SETTINGS_COLLECTION, 'config');
+      const snapshot = await fbase.getDoc(settingsRef);
+      if (snapshot.exists()) stored = normalizeMailSettings(snapshot.data() || {});
+    } catch (error) {
+      // El endpoint también puede utilizar las variables de entorno configuradas
+      // en Vercel, por eso una lectura fallida no cancela la guía recién creada.
+      console.warn('No se pudo leer la configuración de correo para la etiqueta:', error);
+    }
+  }
+
+  return {
+    senderEmail: provided.senderEmail || stored.senderEmail || '',
+    appPassword: provided.appPassword || stored.appPassword || '',
+    receiverEmail: provided.receiverEmail || stored.receiverEmail || ''
+  };
+}
+
+function attachLabelEmailResult(shipment, result = {}) {
+  if (!shipment || typeof shipment !== 'object') return shipment;
+  const properties = {
+    labelEmailSent: result.success === true,
+    labelEmailRecipient: String(result.recipientEmail || '').trim(),
+    labelEmailMessageId: String(result.messageId || '').trim(),
+    labelEmailError: String(result.error || '').trim(),
+    labelEmailErrorCode: String(result.code || '').trim()
+  };
+
+  Object.entries(properties).forEach(([key, value]) => {
+    Object.defineProperty(shipment, key, {
+      value,
+      enumerable: false,
+      configurable: true,
+      writable: true
+    });
+  });
+  return shipment;
+}
+
+export async function sendShipmentLabelEmail({
+  fbase,
+  appId,
+  shipment = {},
+  currentUser = {},
+  assignedUser = null,
+  mailSettings = {}
+} = {}) {
+  const guideCode = normalizeGuideCode(shipment.id || shipment.trackingNumber);
+  const recipientEmail = String(shipment.createdByEmail || getUserEmail(currentUser)).trim().toLowerCase();
+  const selectedUser = assignedUser && typeof assignedUser === 'object' ? assignedUser : currentUser;
+  const assignedUserId = String(
+    shipment.assignedUserId ||
+    shipment.op ||
+    getUserId(selectedUser)
+  ).trim();
+  const assignedUserName = getUserName(selectedUser) || assignedUserId;
+
+  if (!guideCode) throw new Error('No se encontró el número de guía para generar la etiqueta.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+    const error = new Error('La guía fue creada, pero el correo del usuario creador no es válido para enviar la etiqueta PDF.');
+    error.code = 'LABEL_RECIPIENT_INVALID';
+    throw error;
+  }
+  if (typeof fetch !== 'function') {
+    const error = new Error('La guía fue creada, pero el navegador no pudo iniciar el envío de la etiqueta PDF.');
+    error.code = 'LABEL_FETCH_UNAVAILABLE';
+    throw error;
+  }
+
+  const resolvedMailSettings = await resolveShipmentMailSettings({ fbase, appId, mailSettings });
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), LABEL_EMAIL_TIMEOUT_MS) : null;
+
+  try {
+    const response = await fetch(LABEL_EMAIL_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        requestId: `shipment_label_${guideCode}_${Number(shipment.createdAt || Date.now())}`,
+        mailSettings: resolvedMailSettings,
+        recipientEmail,
+        creator: {
+          uid: getUserId(currentUser),
+          name: getUserName(currentUser),
+          email: recipientEmail,
+          phone: getUserPhone(currentUser)
+        },
+        shipment: {
+          id: guideCode,
+          trackingNumber: guideCode,
+          fullName: shipment.fullName || shipment.customer?.fullName || '',
+          phone: shipment.phone || shipment.customer?.phone || '',
+          o: shipment.o || '',
+          d: shipment.d || '',
+          zip: shipment.zip || '',
+          references: shipment.references || '',
+          op: shipment.op || assignedUserId,
+          assignedUserId,
+          assignedUserName,
+          assignedUserEmail: String(selectedUser?.email || '').trim().toLowerCase(),
+          productId: shipment.productId || '',
+          sourcePanel: shipment.sourcePanel || '',
+          shipmentScope: shipment.shipmentScope || '',
+          createdAt: shipment.createdAt || Date.now(),
+          createdByEmail: recipientEmail
+        }
+      }),
+      ...(controller ? { signal: controller.signal } : {})
+    });
+
+    const rawResponse = await response.text();
+    let data = {};
+    if (rawResponse) {
+      try { data = JSON.parse(rawResponse); }
+      catch (error) { data = { error: rawResponse.slice(0, 500) }; }
+    }
+
+    if (!response.ok || data.success !== true) {
+      const error = new Error(data.error || `No se pudo enviar la etiqueta PDF (HTTP ${response.status}).`);
+      error.code = data.code || `LABEL_HTTP_${response.status}`;
+      error.stage = data.stage || 'send-shipment-label';
+      error.responseData = data;
+      throw error;
+    }
+
+    return {
+      ...data,
+      success: true,
+      recipientEmail
+    };
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error('La guía fue creada, pero el envío de la etiqueta PDF excedió el tiempo máximo de espera.');
+      timeoutError.code = 'LABEL_EMAIL_TIMEOUT';
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 export function getAdminShipmentRef({ fbase, db, appId, guideCode }) {
@@ -177,6 +351,8 @@ export async function createUniqueShipment({
   form,
   mode = 'admin',
   currentUser = {},
+  assignedUser = null,
+  mailSettings = {},
   maxAttempts = 80
 } = {}) {
   if (!fbase || !appId) throw new Error('Firebase no está disponible para crear la guía.');
@@ -222,6 +398,26 @@ export async function createUniqueShipment({
         transaction.set(sourceRef, createdShipment);
         transaction.set(trackingRef, trackingRecord);
       });
+
+      try {
+        const labelEmailResult = await sendShipmentLabelEmail({
+          fbase,
+          appId,
+          shipment: createdShipment,
+          currentUser,
+          assignedUser: assignedUser || (isUserShipment ? currentUser : null),
+          mailSettings
+        });
+        attachLabelEmailResult(createdShipment, labelEmailResult);
+      } catch (labelError) {
+        console.error('La guía fue creada, pero no se pudo enviar la etiqueta PDF:', labelError);
+        attachLabelEmailResult(createdShipment, {
+          success: false,
+          recipientEmail: createdShipment?.createdByEmail || getUserEmail(currentUser),
+          code: labelError?.code || 'LABEL_EMAIL_ERROR',
+          error: labelError?.message || 'No se pudo enviar la etiqueta PDF.'
+        });
+      }
 
       return createdShipment;
     } catch (error) {
@@ -320,6 +516,5 @@ export async function deleteAdminShipmentWithTracking({ fbase, appId, guideCode 
     transaction.delete(trackingRef);
   });
 }
-
 
 
