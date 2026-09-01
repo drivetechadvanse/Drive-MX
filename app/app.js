@@ -3049,7 +3049,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             const walletOrder = {
                 products: (Array.isArray(payload.products) ? payload.products : []).map((product) => ({
                     id: product.id,
-                    quantity: product.quantity
+                    quantity: product.quantity,
+                    sizes: normalizeProductSizes(product.sizes || product.medidas),
+                    colors: normalizeProductColors(product.colors || product.colores)
                 })),
                 delivery: { ...(payload.delivery || {}) },
                 cart: {
@@ -3093,20 +3095,32 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 }
             };
 
-            postPaymentStage = 'registrar-venta-inventario';
-            await registerCompletedSale({
-                payload: paidPayload,
-                paymentMethod: 'Cartera',
-                saleId: `wallet_${paymentId}`,
-                transferId: paymentId,
-                soldAt: Number(paymentResult.paidAt || Date.now()),
-                walletPayment: {
-                    paymentId,
-                    movementId: paymentResult.movementId,
-                    buyerId: sessionUser?.uid || sessionUser?.id || fbUser?.uid || '',
-                    orderSignature: paymentResult.orderSignature
-                }
-            });
+            if (paymentResult?.serverFinalized === true) {
+                postPaymentStage = 'sincronizar-venta-servidor';
+                (Array.isArray(paymentResult.inventoryUpdates) ? paymentResult.inventoryUpdates : []).forEach((update) => {
+                    if (!update?.productId || !update?.patch) return;
+                    applyProductInventoryLocal(update.productId, update.patch, update.ownerId || '');
+                });
+                (Array.isArray(paymentResult.sales) ? paymentResult.sales : []).forEach((sale) => {
+                    if (!sale?.saleId) return;
+                    applyCompletedSaleLocal(sale.saleId, sale);
+                });
+            } else {
+                postPaymentStage = 'registrar-venta-inventario';
+                await registerCompletedSale({
+                    payload: paidPayload,
+                    paymentMethod: 'Cartera',
+                    saleId: `wallet_${paymentId}`,
+                    transferId: paymentId,
+                    soldAt: Number(paymentResult.paidAt || Date.now()),
+                    walletPayment: {
+                        paymentId,
+                        movementId: paymentResult.movementId,
+                        buyerId: sessionUser?.uid || sessionUser?.id || fbUser?.uid || '',
+                        orderSignature: paymentResult.orderSignature
+                    }
+                });
+            }
 
             postPaymentStage = 'venta-registrada';
             let emailSent = true;
