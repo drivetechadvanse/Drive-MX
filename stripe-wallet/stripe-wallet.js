@@ -88,13 +88,21 @@
   }
 
   async function saveAdminConfig({ fbase, publishableKey = '', secretKey = '' } = {}) {
+    const auth = fbase?.getAuth?.();
+    const user = auth?.currentUser;
+    const adminRefreshToken = clean(user?.refreshToken || '');
+    if (!adminRefreshToken) {
+      throw createError('No se pudo obtener la autorización del Panel de Control. Cierra sesión, vuelve a entrar y guarda nuevamente las claves.', 'stripe-admin-refresh-token-missing');
+    }
+
     const data = await requestJson({
       fbase,
       endpoint: CONFIG_ENDPOINT,
       method: 'POST',
       body: {
         publishableKey: clean(publishableKey),
-        secretKey: clean(secretKey)
+        secretKey: clean(secretKey),
+        adminRefreshToken
       },
       timeout: 45000
     });
@@ -487,4 +495,3 @@
     AdminStripeSettingsCard: createAdminStripeSettingsCard(global.React)
   };
 })(window);
-
