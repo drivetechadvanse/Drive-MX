@@ -1,10 +1,13 @@
 const nodemailer = require("nodemailer");
+const admin = require("firebase-admin");
 const SupermercadoEmail = require("../supermercado-module/supermercado-email.js");
 
 const SALE_NOTIFICATION_MESSAGE =
   "Tu producto ha sido vendido. Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.";
 const DRIVE_MX_CART_MAX_PRODUCTS = 2;
 const SUPERMARKET_MINIMUM_PRODUCTS = 5;
+const APP_ID = "saxrecords-appcreat";
+const STAFF_USERS_COLLECTION = "operators";
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -291,6 +294,107 @@ function buildBuyerNotification(context = {}) {
   return buildDriveMxBuyerNotification(context);
 }
 
+
+function parseServiceAccountFromEnv() {
+  const rawJson =
+    process.env.FIREBASE_SERVICE_ACCOUNT_KEY ||
+    process.env.FIREBASE_SERVICE_ACCOUNT_JSON ||
+    process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+
+  if (rawJson) {
+    let parsed;
+    try {
+      parsed = JSON.parse(rawJson);
+    } catch (jsonError) {
+      try {
+        parsed = JSON.parse(Buffer.from(rawJson, "base64").toString("utf8"));
+      } catch (base64Error) {
+        return null;
+      }
+    }
+    if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+    return parsed;
+  }
+
+  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+  if (projectId && clientEmail && privateKey) {
+    return {
+      project_id: projectId,
+      client_email: clientEmail,
+      private_key: privateKey.replace(/\\n/g, "\n"),
+    };
+  }
+  return null;
+}
+
+function getAdminDb() {
+  try {
+    let app;
+    if (admin.apps.length) {
+      app = admin.app();
+    } else {
+      const serviceAccount = parseServiceAccountFromEnv();
+      app = serviceAccount
+        ? admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount),
+            projectId: serviceAccount.project_id || process.env.FIREBASE_PROJECT_ID || APP_ID,
+          })
+        : admin.initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID || APP_ID });
+    }
+    return admin.firestore(app);
+  } catch (error) {
+    console.warn("[send-order-email] No se pudo inicializar Firebase Admin para completar datos del vendedor.", {
+      code: error?.code || "",
+      message: error?.message || String(error || ""),
+    });
+    return null;
+  }
+}
+
+async function hydrateSellerContacts(orderProducts = []) {
+  const products = Array.isArray(orderProducts) ? orderProducts : [];
+  const missing = products.filter((item) => clean(item.ownerId) && (!clean(item.ownerName) || !clean(item.ownerPhone)));
+  if (missing.length === 0) return products;
+
+  const db = getAdminDb();
+  if (!db) return products;
+
+  const profiles = new Map();
+  const uniqueOwnerIds = [...new Set(missing.map((item) => clean(item.ownerId)).filter(Boolean))];
+
+  await Promise.all(uniqueOwnerIds.map(async (ownerId) => {
+    try {
+      const ref = db
+        .collection("artifacts")
+        .doc(APP_ID)
+        .collection("public")
+        .doc("data")
+        .collection(STAFF_USERS_COLLECTION)
+        .doc(ownerId);
+      const snapshot = await ref.get();
+      if (snapshot.exists) profiles.set(ownerId, snapshot.data() || {});
+    } catch (error) {
+      console.warn("[send-order-email] No se pudo consultar el perfil del vendedor.", {
+        ownerId,
+        code: error?.code || "",
+        message: error?.message || String(error || ""),
+      });
+    }
+  }));
+
+  return products.map((item) => {
+    const profile = profiles.get(clean(item.ownerId)) || {};
+    return {
+      ...item,
+      ownerName: clean(item.ownerName || profile.name || profile.userName),
+      ownerPhone: clean(item.ownerPhone || profile.phone || profile.userPhone),
+      ownerEmail: clean(item.ownerEmail || profile.email || profile.userEmail),
+    };
+  });
+}
+
 function normalizeAppPassword(value) {
   return clean(value).replace(/\s+/g, "");
 }
@@ -470,7 +574,8 @@ module.exports = async function handler(req, res) {
       references: "Referencias del domicilio",
     };
 
-    const orderProducts = normalizeProducts(product, products);
+    let orderProducts = normalizeProducts(product, products);
+    orderProducts = await hydrateSellerContacts(orderProducts);
 
     if (orderProducts.length === 0) {
       return res.status(400).json({
