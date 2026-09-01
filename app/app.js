@@ -1611,6 +1611,7 @@ const App = () => {
         }
         if (!ensureSupermarketMinimumAllowed(validCartProducts)) return;
         if (!ensureCheckoutInventoryAllowed(validCartProducts)) return;
+        if (!ensureCheckoutWalletsAllowed(validCartProducts)) return;
         const nextCart = validCartProducts.map(product => createCartItemFromProduct(product, product.quantity || 1));
         persistCart(nextCart);
         setCheckoutProductIds(nextCart.map(product => product.id));
@@ -2558,8 +2559,11 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 };
 
                 transaction.set(publicProductRef, inventoryPatch, { merge: true });
-                if (adminProductSnapshot.exists()) transaction.set(adminProductRef, inventoryPatch, { merge: true });
-                if (userProductRef && userProductSnapshot && userProductSnapshot.exists()) transaction.set(userProductRef, inventoryPatch, { merge: true });
+                // En pago con Cartera, el inventario público y la venta se confirman primero.
+                // Los espejos admin/user se sincronizan después de esta transacción para que
+                // una copia secundaria desfasada no cancele una compra de varios productos.
+                if (!isWalletPayment && adminProductSnapshot.exists()) transaction.set(adminProductRef, inventoryPatch, { merge: true });
+                if (!isWalletPayment && userProductRef && userProductSnapshot && userProductSnapshot.exists()) transaction.set(userProductRef, inventoryPatch, { merge: true });
                 transaction.set(saleRef, saleWithWallet);
                 if (userSaleRef) {
                     transaction.set(userSaleRef, {
@@ -2595,6 +2599,29 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 }
             }
             throw error;
+        }
+    };
+
+    const syncWalletInventoryMirrorsAfterSale = async ({ productId = '', ownerDocId = '', inventoryPatch = {} } = {}) => {
+        const safeProductId = String(productId || '').trim();
+        if (!safeProductId) return;
+        const db = fbase.getFirestore();
+        const refs = [
+            fbase.doc(db, 'artifacts', appId, 'public', 'data', ADMIN_PRODUCTS_COLLECTION, safeProductId),
+            ...(ownerDocId ? [fbase.doc(db, 'artifacts', appId, 'public', 'data', USER_PRODUCTS_COLLECTION, ownerDocId, 'items', safeProductId)] : [])
+        ];
+        for (const ref of refs) {
+            try {
+                const snapshot = await fbase.getDoc(ref);
+                if (!snapshot.exists()) continue;
+                await fbase.setDoc(ref, inventoryPatch, { merge: true });
+            } catch (error) {
+                console.warn('[Cartera][Inventario] El espejo secundario no pudo sincronizarse; la venta principal ya quedó registrada.', {
+                    productId: safeProductId,
+                    path: ref.path || '',
+                    ...getOperationErrorDetails(error)
+                });
+            }
         }
     };
 
@@ -2675,6 +2702,13 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             if (!result.alreadyRegistered && result.inventoryPatch) {
                 applyProductInventoryLocal(result.productId || sale.productId, result.inventoryPatch, saleSellerId);
                 applyCompletedSaleLocal(id, savedSale);
+                if (walletPaymentId) {
+                    await syncWalletInventoryMirrorsAfterSale({
+                        productId: result.productId || sale.productId,
+                        ownerDocId: result.ownerDocId || getSafeFirestoreDocId(saleSellerId),
+                        inventoryPatch: result.inventoryPatch
+                    });
+                }
             }
             // En cartera, el espejo de venta se guarda dentro de la misma transacción
             // existente que actualiza inventario y comisión, para conservar atomicidad.
@@ -3016,6 +3050,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         }
         if (!ensureSupermarketMinimumAllowed(checkoutProducts)) return;
         if (!ensureCheckoutInventoryAllowed(checkoutProducts)) return;
+        if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
         const availableBalance = Wallet.roundMoney(verifiedWallet?.balance ?? walletPaymentManager.availableBalance ?? 0);
         const walletIsActive = typeof Wallet.isWalletActivated === 'function'
             ? Wallet.isWalletActivated(verifiedWallet || walletPaymentManager.wallet || {})
@@ -3503,6 +3538,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
         if (!ensureSupermarketMinimumAllowed(checkoutProducts)) return;
         if (!validateDeliveryForm()) return;
         if (!ensureCheckoutInventoryAllowed(checkoutProducts)) return;
+        if (!ensureCheckoutWalletsAllowed(checkoutProducts)) return;
         setSelectedPaymentMethod('transfer');
         setView('payment-method');
     };
