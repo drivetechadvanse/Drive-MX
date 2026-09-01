@@ -15,7 +15,6 @@
     stock: '',
     description: '',
     specifications: '',
-    rfc: '',
     sizes: [],
     colors: [''],
     images: [],
@@ -66,6 +65,8 @@
     adminEmail = 'admin@drivemx.com',
     onSessionUserChange = () => {}
   } = {}) {
+    const [rfc, setRfc] = useState(() => normalizeRfc(sessionUser?.rfc || ''));
+    const [rfcSaving, setRfcSaving] = useState(false);
     const [adminProducts, setAdminProducts] = useState(() => {
       const cached = Core.readLocal(Core.ADMIN_PRODUCTS_LOCAL_KEY, []);
       return Array.isArray(cached) ? Core.sortProducts(cached.map((item) => Core.ensureProductId(item)).filter((item) => item.id)) : [];
@@ -74,6 +75,10 @@
     const defaultSupermarketShippingCost = Number.isFinite(configuredSupermarketShippingCost) && configuredSupermarketShippingCost >= 0
       ? configuredSupermarketShippingCost
       : 150;
+
+    useEffect(() => {
+      setRfc(normalizeRfc(sessionUser?.rfc || ''));
+    }, [sessionUser?.uid, sessionUser?.id, sessionUser?.rfc]);
     const [productForm, setProductForm] = useState(() => createFormState({}, {
       defaultShippingCost: defaultSupermarketShippingCost
     }));
@@ -276,15 +281,15 @@
         alert('Solo el administrador puede modificar productos del Panel de Control.');
         return;
       }
+      const normalizedRfc = normalizeRfc(rfc || sessionUser?.rfc || '');
+      if (!normalizedRfc) {
+        alert('Guarda el RFC obligatorio antes de publicar.');
+        return;
+      }
       const id = editingProductId || productForm.id || `prod_${Date.now()}`;
       const name = String(productForm.name || '').trim();
       if (!name) {
         alert('Ingresa el nombre del producto.');
-        return;
-      }
-      const rfc = normalizeRfc(productForm.rfc);
-      if (!rfc) {
-        alert('Ingresa el RFC.');
         return;
       }
       const businessModule = global.DriveMxBusinessStorefronts || {};
@@ -329,7 +334,6 @@
           stock: Math.max(0, Math.floor(Number(productForm.stock || 0))),
           description: String(productForm.description || '').trim(),
           specifications: String(productForm.specifications || '').trim(),
-          rfc,
           sizes: Core.normalizeProductSizes(productForm.sizes),
           colors: Core.normalizeProductColors(productForm.colors),
           images,
@@ -347,6 +351,8 @@
           ownerPhone: '',
           saleNotificationEmail: '',
           sellerNotificationEmail: '',
+          rfc: normalizedRfc,
+          ownerRfc: normalizedRfc,
           updatedAt: Date.now(),
           updatedBy: sessionUser?.email || adminEmail,
           createdAt: existing?.createdAt || Date.now(),
@@ -376,7 +382,40 @@
         alert('No se pudo guardar el producto. Intenta nuevamente.');
         setProductUploading(false);
       }
-    }, [sessionUser, editingProductId, productForm, controlProducts, uploadPendingProductImages, adminEmail, saveAdminMirror, publicProducts, resetProductForm, defaultSupermarketShippingCost, businessName, businessOwnerKey]);
+    }, [sessionUser, editingProductId, productForm, controlProducts, uploadPendingProductImages, adminEmail, saveAdminMirror, publicProducts, resetProductForm, defaultSupermarketShippingCost, businessName, businessOwnerKey, rfc]);
+
+    const saveRfc = useCallback(async (event) => {
+      event?.preventDefault?.();
+      if (sessionUser?.role !== 'admin') {
+        alert('Solo el administrador puede guardar el RFC del Panel de Control.');
+        return;
+      }
+      const normalizedRfc = normalizeRfc(rfc);
+      if (!normalizedRfc) {
+        alert('Ingresa el RFC.');
+        return;
+      }
+      const profileId = String(fbUser?.uid || sessionUser?.uid || sessionUser?.id || '').trim();
+      if (!profileId) {
+        alert('No se pudo identificar la sesión del administrador.');
+        return;
+      }
+      setRfcSaving(true);
+      try {
+        const updatedAt = Date.now();
+        const updatedBy = sessionUser?.email || adminEmail;
+        const operatorRef = fbase.doc(fbase.getFirestore(), 'artifacts', appId, 'public', 'data', 'operators', profileId);
+        await fbase.setDoc(operatorRef, { rfc: normalizedRfc, updatedAt, updatedBy }, { merge: true });
+        setRfc(normalizedRfc);
+        onSessionUserChange({ ...(sessionUser || {}), rfc: normalizedRfc, updatedAt, updatedBy });
+        alert('RFC guardado correctamente.');
+      } catch (error) {
+        console.error('Guardar RFC Panel de Control:', error);
+        alert('No se pudo guardar el RFC.');
+      } finally {
+        setRfcSaving(false);
+      }
+    }, [sessionUser, rfc, fbUser, fbase, appId, adminEmail, onSessionUserChange]);
 
     const saveBusinessName = useCallback(async (event) => {
       event?.preventDefault?.();
@@ -453,7 +492,6 @@
         stock: product.stock ?? '',
         description: product.description || '',
         specifications: product.specifications || '',
-        rfc: product.rfc || product.ownerRfc || product.sellerRfc || '',
         sizes: Core.normalizeProductSizes(product.sizes || product.medidas),
         colors: colors.length ? colors : [''],
         images,
@@ -643,6 +681,10 @@
       setBusinessName,
       businessNameSaving,
       saveBusinessName,
+      rfc,
+      setRfc,
+      rfcSaving,
+      saveRfc,
       productForm,
       setProductForm,
       productImageFiles,
@@ -675,6 +717,10 @@
       setBusinessName,
       businessNameSaving,
       saveBusinessName,
+      rfc,
+      setRfc,
+      rfcSaving,
+      saveRfc,
       productForm,
       setProductForm,
       productImageFiles,
@@ -694,6 +740,19 @@
 
     return (
       <>
+        <div className="card-glass overflow-hidden">
+          <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
+            <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">RFC</h2>
+          </div>
+          <form onSubmit={saveRfc} className="p-6 grid md:grid-cols-[1fr_auto] gap-3 items-end">
+            <div>
+              <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">RFC obligatorio</label>
+              <input required maxLength="20" autoCapitalize="characters" className="input-field" placeholder="RFC" value={rfc || ''} onChange={(event) => setRfc(normalizeRfc(event.target.value))} />
+            </div>
+            <button disabled={rfcSaving} type="submit" className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{rfcSaving ? 'Guardando...' : 'Guardar RFC'}</button>
+          </form>
+        </div>
+
         <div className="card-glass overflow-hidden">
         <div className="bg-slate-50 border-b border-slate-100 px-6 py-4 flex items-center justify-between gap-3">
           <div>
@@ -765,7 +824,6 @@
               />
             )}
 
-            <input required maxLength="20" autoCapitalize="characters" className="input-field md:col-span-5" placeholder="RFC" value={productForm.rfc || ''} onChange={(event) => setProductForm((previous) => ({ ...previous, rfc: normalizeRfc(event.target.value) }))} />
             <input required className="input-field md:col-span-2" placeholder="NOMBRE" value={productForm.name || ''} onChange={(event) => setProductForm((previous) => ({ ...previous, name: event.target.value }))} />
             <input required type="number" min="0" step="0.01" className="input-field" placeholder="PRECIO" value={productForm.price ?? ''} onChange={(event) => setProductForm((previous) => ({ ...previous, price: event.target.value }))} />
             <input required type="number" min="0" step="1" className="input-field" placeholder="INVENTARIO" value={productForm.stock ?? ''} onChange={(event) => setProductForm((previous) => ({ ...previous, stock: event.target.value }))} />
@@ -853,6 +911,7 @@
     AdminProductsPanel
   };
 })(window);
+
 
 
 
