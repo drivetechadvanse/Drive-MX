@@ -19,15 +19,23 @@ export function AdminNewShipmentCard(props = {}) {
     setLastGuide('');
 
     try {
+      const assignedUser = (Array.isArray(props.users) ? props.users : []).find((user) =>
+        String(user?.uid || user?.id || '').trim() === String(form.op || '').trim()
+      ) || null;
       const shipment = await createUniqueShipment({
         fbase: props.fbase,
         appId: props.appId,
         form,
         mode: 'admin',
-        currentUser: props.currentUser || {}
+        currentUser: props.currentUser || props.sessionUser || {},
+        assignedUser,
+        mailSettings: props.emailSettings || {}
       });
       setForm(createEmptyShipmentForm());
       setLastGuide(shipment.id);
+      if (shipment.labelEmailSent !== true) {
+        setErrorMessage(`La guía ${shipment.id} se creó correctamente, pero no se pudo enviar la etiqueta PDF: ${shipment.labelEmailError || 'Error de correo.'}`);
+      }
       props.onCreated?.(shipment);
     } catch (error) {
       console.error('Crear guía administrativa:', error);
