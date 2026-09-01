@@ -571,6 +571,23 @@ const App = () => {
         setViewState(resolved);
     }, [requestHistorySync, view]);
 
+    const openProductDetail = useCallback((product = {}) => {
+        const productId = String(product?.id || '').trim();
+        if (!productId) return;
+        setSelectedProductId(productId);
+        setSelectedProductQuantity(getInitialProductPurchaseQuantity(product));
+        setCurrentImageIndex(0);
+        setView('product-detail');
+    }, [setView]);
+
+    useEffect(() => {
+        if (view !== 'product-detail' || !selectedProductId) return undefined;
+        const frame = globalThis.requestAnimationFrame(() => {
+            globalThis.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+        });
+        return () => globalThis.cancelAnimationFrame(frame);
+    }, [view, selectedProductId]);
+
     const setIsCartOpen = useCallback((nextValue) => {
         const previous = Boolean(latestNavigationSnapshotRef.current?.isCartOpen ?? isCartOpen);
         const resolved = Boolean(resolveStateValue(nextValue, previous));
@@ -3663,7 +3680,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                         products={products}
                                         ads={ads}
                                         getProductGallery={getProductGallery}
-                                        onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
+                                        onProductClick={openProductDetail}
                                     />
                                 ) : (
                                     <>
@@ -3672,14 +3689,14 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                                 products={activeProducts}
                                                 ads={ads}
                                                 getProductGallery={getProductGallery}
-                                                onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
+                                                onProductClick={openProductDetail}
                                             />
                                         )}
                                         {Supermercado.SupermercadoHomeSection && (
                                             <Supermercado.SupermercadoHomeSection
                                                 products={supermarketProducts}
                                                 getProductGallery={getProductGallery}
-                                                onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
+                                                onProductClick={openProductDetail}
                                             />
                                         )}
                                     </>
@@ -3712,7 +3729,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 products={products}
                                 selectedProduct={selectedProduct}
                                 getProductGallery={getProductGallery}
-                                onProductClick={(product) => { setSelectedProductId(product.id); setSelectedProductQuantity(getInitialProductPurchaseQuantity(product)); setCurrentImageIndex(0); setView('product-detail'); }}
+                                onProductClick={openProductDetail}
                             />
                         )}
                     </>
