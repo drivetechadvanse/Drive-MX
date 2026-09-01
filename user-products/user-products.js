@@ -21,6 +21,13 @@
   const getSaleOwnerId = (sale = {}) => Core.normalizeOwnerValue(sale.sellerId || sale.ownerId || sale.userId);
   const getSaleOwnerEmail = (sale = {}) => String(sale.sellerEmail || sale.ownerEmail || sale.userEmail || '').trim().toLowerCase();
 
+  const userHasSupermarketAuthorization = (user = {}) => Boolean(
+    user && (
+      user.role === 'admin' ||
+      user.supermarketProductsAuthorized === true
+    )
+  );
+
   const isSaleOwnedByUser = (sale = {}, user = {}) => {
     const saleOwnerId = getSaleOwnerId(sale);
     const saleOwnerEmail = getSaleOwnerEmail(sale);
@@ -120,10 +127,6 @@
     const [supermarketPassword, setSupermarketPassword] = useState('');
     const [supermarketPasswordError, setSupermarketPasswordError] = useState('');
     const [supermarketUnlocking, setSupermarketUnlocking] = useState(false);
-    const supermarketSessionKey = `driveMxSupermarketUnlocked_${Core.safeDocumentId(getUserProfileId(sessionUser || {})) || 'anonimo'}`;
-    const [supermarketUnlocked, setSupermarketUnlocked] = useState(() => {
-      try { return global.sessionStorage?.getItem(supermarketSessionKey) === '1'; } catch (error) { return false; }
-    });
     const [userProductForm, setUserProductForm] = useState(() => createFormState());
     const [userProductImageFiles, setUserProductImageFiles] = useState([]);
     const [userProductUploading, setUserProductUploading] = useState(false);
@@ -143,14 +146,6 @@
     const safeSessionUserId = Core.safeDocumentId(sessionUserId);
     const sessionEmail = getUserProfileEmail(sessionUser || {});
     const publicList = Array.isArray(publicProducts?.products) ? publicProducts.products : [];
-
-    useEffect(() => {
-      try {
-        setSupermarketUnlocked(global.sessionStorage?.getItem(supermarketSessionKey) === '1');
-      } catch (error) {
-        setSupermarketUnlocked(false);
-      }
-    }, [supermarketSessionKey]);
 
     useEffect(() => {
       if (!sessionUser) {
@@ -403,20 +398,39 @@
       return true;
     }, [Wallet, walletSettings, wallets, sessionUser, currentUserProducts]);
 
+    const persistSupermarketAuthorization = useCallback(async () => {
+      if (!sessionUserId || !sessionUser || sessionUser.role === 'admin') return true;
+      const now = Date.now();
+      const authorizedAt = sessionUser.supermarketProductsAuthorizedAt || now;
+      const patch = {
+        supermarketProductsAuthorized: true,
+        supermarketProductsAuthorizedAt: authorizedAt,
+        updatedAt: now,
+        updatedBy: sessionUser?.email || ''
+      };
+      const operatorRef = fbase.doc(fbase.getFirestore(), 'artifacts', appId, 'public', 'data', 'operators', sessionUserId);
+      await fbase.setDoc(operatorRef, patch, { merge: true });
+      onSessionUserChange({ ...(sessionUser || {}), ...patch, id: sessionUser.id || sessionUserId, uid: sessionUser.uid || sessionUserId });
+      return true;
+    }, [sessionUserId, sessionUser, fbase, appId, onSessionUserChange]);
+
     const handleUserProductCategoryChange = useCallback((category) => {
       const normalizedCategory = String(category || '').trim().toLowerCase();
       if (normalizedCategory !== 'supermercado') {
         setUserProductForm((previous) => ({ ...previous, category }));
         return;
       }
-      if (supermarketUnlocked) {
+      if (userHasSupermarketAuthorization(sessionUser || {})) {
         setUserProductForm((previous) => ({ ...previous, category: 'supermercado' }));
+        setShowSupermarketPasswordModal(false);
+        setSupermarketPassword('');
+        setSupermarketPasswordError('');
         return;
       }
       setSupermarketPassword('');
       setSupermarketPasswordError('');
       setShowSupermarketPasswordModal(true);
-    }, [supermarketUnlocked]);
+    }, [sessionUser]);
 
     const closeSupermarketPasswordModal = useCallback(() => {
       if (supermarketUnlocking) return;
@@ -436,8 +450,7 @@
       setSupermarketPasswordError('');
       try {
         await verifyAdminPassword(password);
-        setSupermarketUnlocked(true);
-        try { global.sessionStorage?.setItem(supermarketSessionKey, '1'); } catch (storageError) {}
+        await persistSupermarketAuthorization();
         setUserProductForm((previous) => ({ ...previous, category: 'supermercado' }));
         setShowSupermarketPasswordModal(false);
         setSupermarketPassword('');
@@ -446,7 +459,7 @@
       } finally {
         setSupermarketUnlocking(false);
       }
-    }, [supermarketPassword, verifyAdminPassword, supermarketSessionKey]);
+    }, [supermarketPassword, verifyAdminPassword, persistSupermarketAuthorization]);
 
     const saveRfc = useCallback(async (event) => {
       event?.preventDefault?.();
@@ -740,12 +753,10 @@
       setSupermarketPassword('');
       setSupermarketPasswordError('');
       setSupermarketUnlocking(false);
-      setSupermarketUnlocked(false);
-      try { global.sessionStorage?.removeItem(supermarketSessionKey); } catch (error) {}
       setBusinessName('');
       setBusinessNameSaving(false);
       resetUserProductForm();
-    }, [resetUserProductForm, supermarketSessionKey]);
+    }, [resetUserProductForm]);
 
     return {
       userPanelProducts,
@@ -944,6 +955,7 @@
     }
   };
 })(window);
+
 
 
 
