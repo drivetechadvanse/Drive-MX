@@ -386,11 +386,22 @@ async function hydrateSellerContacts(orderProducts = []) {
 
   return products.map((item) => {
     const profile = profiles.get(clean(item.ownerId)) || {};
+    const ownerEmail = clean(item.ownerEmail || profile.email || profile.userEmail);
+    const notificationEmail = clean(
+      item.sellerNotificationEmail ||
+        item.saleNotificationEmail ||
+        item.notificationEmail ||
+        item.ownerNotificationEmail ||
+        profile.saleNotificationEmail ||
+        ownerEmail
+    );
     return {
       ...item,
       ownerName: clean(item.ownerName || profile.name || profile.userName),
       ownerPhone: clean(item.ownerPhone || profile.phone || profile.userPhone),
-      ownerEmail: clean(item.ownerEmail || profile.email || profile.userEmail),
+      ownerEmail,
+      saleNotificationEmail: clean(item.saleNotificationEmail || notificationEmail),
+      sellerNotificationEmail: clean(item.sellerNotificationEmail || notificationEmail),
     };
   });
 }
@@ -656,7 +667,8 @@ module.exports = async function handler(req, res) {
           item.sellerNotificationEmail ||
             item.saleNotificationEmail ||
             item.notificationEmail ||
-            item.ownerNotificationEmail
+            item.ownerNotificationEmail ||
+            item.ownerEmail
         ),
         message: SALE_NOTIFICATION_MESSAGE,
         sellerName: item.ownerName,
@@ -680,7 +692,8 @@ module.exports = async function handler(req, res) {
         product.sellerNotificationEmail ||
         product.saleNotificationEmail ||
         product.notificationEmail ||
-        product.ownerNotificationEmail
+        product.ownerNotificationEmail ||
+        product.ownerEmail
     );
 
     const legacyTargets = legacyTargetEmail
