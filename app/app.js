@@ -2424,19 +2424,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 }
 
                 const updatedAt = Date.now();
-                const validatedStockBefore = isWalletPayment && Number.isFinite(Number(sale.walletStockBefore))
-                    ? Number(sale.walletStockBefore)
-                    : currentStock;
-                const validatedStockAfter = isWalletPayment && Number.isFinite(Number(sale.walletStockAfter))
-                    ? Number(sale.walletStockAfter)
-                    : Math.max(0, currentStock - quantity);
-                if (isWalletPayment && currentStock !== validatedStockBefore) {
-                    const error = new Error('El inventario cambió después del cobro y no coincide con el movimiento de cartera validado.');
-                    error.code = 'WALLET_INVENTORY_STATE_MISMATCH';
-                    error.productId = productId;
-                    throw error;
-                }
-                const remainingStock = isWalletPayment ? validatedStockAfter : Math.max(0, currentStock - quantity);
+                const remainingStock = Math.max(0, currentStock - quantity);
                 const inventoryPatch = {
                     stock: remainingStock,
                     availableStock: remainingStock,
@@ -2642,13 +2630,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             const quantity = Math.max(1, Math.floor(Number(payloadProduct.quantity || payloadProduct.productQuantity || 1)) || 1);
             const unitPrice = Number(payloadProduct.unitPrice ?? payloadProduct.productUnitPrice ?? payloadProduct.price ?? sourceProduct.price ?? 0);
             const lineTotal = Number((unitPrice * quantity).toFixed(2));
-            const saleSellerId = walletPaymentId
-                ? String(payloadProduct.walletOwnerId || payloadProduct.ownerId || seller.id || '').trim()
-                : (seller.id || payloadProduct.ownerId || '');
-            const walletValidatedSaleId = walletPaymentId ? String(payloadProduct.walletSaleId || '').trim() : '';
-            const effectiveSaleId = walletValidatedSaleId || id;
+            const saleSellerId = seller.id || payloadProduct.ownerId || '';
             const sale = {
-                saleId: effectiveSaleId,
+                saleId: id,
                 orderSaleId: baseId,
                 cartItemCount: payloadProducts.length,
                 orderQuantityTotal,
@@ -2660,13 +2644,9 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 ...(walletPaymentId ? {
                     walletPaymentId,
                     walletPaymentMovementId: walletMovementId,
-                    walletPaymentItemIndex: Number.isInteger(Number(payloadProduct.walletPaymentItemIndex))
-                        ? Number(payloadProduct.walletPaymentItemIndex)
-                        : index,
+                    walletPaymentItemIndex: index,
                     walletBuyerId,
-                    walletOrderSignature,
-                    walletStockBefore: Number(payloadProduct.walletStockBefore),
-                    walletStockAfter: Number(payloadProduct.walletStockAfter)
+                    walletOrderSignature
                 } : {}),
                 productId: payloadProduct.id || sourceProduct.id || '',
                 productName: payloadProduct.name || sourceProduct.name || '',
@@ -2691,11 +2671,11 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 updatedAt: Date.now()
             };
 
-            const result = await processCompletedSaleTransaction({ id: effectiveSaleId, sale, sourceProduct, seller, saleSellerId });
+            const result = await processCompletedSaleTransaction({ id, sale, sourceProduct, seller, saleSellerId });
             const savedSale = result.sale || sale;
             if (!result.alreadyRegistered && result.inventoryPatch) {
                 applyProductInventoryLocal(result.productId || sale.productId, result.inventoryPatch, saleSellerId);
-                applyCompletedSaleLocal(effectiveSaleId, savedSale);
+                applyCompletedSaleLocal(id, savedSale);
             }
             // En cartera, el espejo de venta se guarda dentro de la misma transacción
             // existente que actualiza inventario y comisión, para conservar atomicidad.
@@ -3093,13 +3073,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                     lineTotal: Number(paidItem.lineTotal),
                     totalPrice: Number(paidItem.lineTotal),
                     productTotal: Number(paidItem.lineTotal),
-                    // Datos autoritativos ya validados por Firestore durante el cobro.
-                    ownerId: paidItem.ownerId || product.ownerId || '',
-                    walletOwnerId: paidItem.ownerId || '',
-                    walletSaleId: paidItem.saleId || '',
-                    walletStockBefore: Number(paidItem.stockBefore),
-                    walletStockAfter: Number(paidItem.stockAfter),
-                    walletPaymentItemIndex: Number(paidItem.index)
+                    ownerId: paidItem.ownerId || product.ownerId || ''
                 };
             });
             const paidPayload = {
