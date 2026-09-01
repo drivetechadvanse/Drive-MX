@@ -2,69 +2,77 @@
 
 const {
   clean,
-  getDb,
+  getBearerToken,
+  decodeToken,
   parseBody,
-  verifyFirebaseUser,
   publicError,
   setCommonHeaders,
-  sendError
-} = require('../server/stripe/firebase-admin');
+  sendError,
+  refreshAdminIdToken
+} = require('../server/stripe/firebase-rest');
 const {
   loadStripeConfig,
   createStripeClient,
+  retrieveSession,
   validateStripeSession,
   finalizePaidCheckout,
-  markCheckoutStatus
+  markCheckoutStatus,
+  recoverPaidCheckouts
 } = require('../server/stripe/stripe-wallet');
 
 module.exports = async function handler(req, res) {
   setCommonHeaders(res, 'POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST, OPTIONS');
-    return res.status(405).json({ success: false, error: 'Método no permitido.', code: 'method-not-allowed' });
+    return res.status(405).json({ success: false, code: 'method-not-allowed', error: 'Método no permitido.' });
   }
 
   try {
-    const decoded = await verifyFirebaseUser(req);
+    const userToken = getBearerToken(req);
+    const decoded = decodeToken(userToken);
     const body = parseBody(req);
-    const sessionId = clean(body.sessionId);
-    if (!/^cs_(test|live)_[A-Za-z0-9]+$/.test(sessionId)) {
-      throw publicError('La referencia de Stripe no es válida.', 400, 'invalid-stripe-session-id');
+
+    if (body.recoverPending === true) {
+      const recovered = await recoverPaidCheckouts({ userToken, decoded });
+      return res.status(200).json({ success: true, ...recovered });
     }
 
-    const db = getDb();
-    const config = await loadStripeConfig(db);
+    const sessionId = clean(body.sessionId || body.checkoutSessionId || '');
+    if (!/^cs_(test|live)_[A-Za-z0-9_]+$/.test(sessionId)) {
+      throw publicError('La sesión de Stripe no es válida.', 400, 'invalid-stripe-session-id');
+    }
+
+    const config = await loadStripeConfig(userToken);
     const stripe = createStripeClient(config);
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const session = await retrieveSession(stripe, sessionId);
     const validated = validateStripeSession(session);
+
     if (validated.userId !== decoded.uid) {
-      throw publicError('La recarga de Stripe pertenece a otro usuario.', 403, 'stripe-session-user-mismatch');
+      throw publicError('Esta recarga no pertenece al usuario autenticado.', 403, 'stripe-session-user-mismatch');
     }
 
-    let result;
+    const adminToken = await refreshAdminIdToken(config.adminRefreshToken);
+
     if (session.payment_status === 'paid') {
-      result = await finalizePaidCheckout({ db, session, source: 'return-status' });
-    } else if (session.status === 'expired') {
-      result = await markCheckoutStatus({ db, session, status: 'Expirada', source: 'return-status' });
-    } else {
-      result = {
-        credited: false,
-        status: session.payment_status || session.status || 'processing',
-        userId: validated.userId,
-        rechargeId: validated.rechargeId,
-        amount: validated.amount
-      };
+      const result = await finalizePaidCheckout({ adminToken, session, source: 'embedded-checkout' });
+      return res.status(200).json({ success: true, ...result });
+    }
+
+    if (session.status === 'expired') {
+      const result = await markCheckoutStatus({ adminToken, session, status: 'Expirada', source: 'embedded-checkout' });
+      return res.status(200).json({ success: true, ...result });
     }
 
     return res.status(200).json({
       success: true,
-      checkoutSessionId: session.id,
-      paymentStatus: session.payment_status || '',
-      checkoutStatus: session.status || '',
-      ...result
+      credited: false,
+      status: session.payment_status || 'unpaid',
+      sessionStatus: session.status || '',
+      amount: validated.amount,
+      rechargeId: validated.rechargeId
     });
   } catch (error) {
-    return sendError(res, error, 'No se pudo confirmar la recarga con Stripe.');
+    return sendError(res, error);
   }
 };
+
