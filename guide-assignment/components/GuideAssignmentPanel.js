@@ -84,6 +84,9 @@ export function GuideAssignmentPanel(props = {}) {
       });
       setForm(createEmptyShipmentForm());
       setLastGuide(shipment.id);
+      if (shipment.labelEmailSent !== true) {
+        setCreateError(`La guía ${shipment.id} se creó correctamente, pero no se pudo enviar la etiqueta PDF: ${shipment.labelEmailError || 'Error de correo.'}`);
+      }
     } catch (error) {
       console.error('Crear guía de usuario:', error);
       setCreateError(error?.message || 'No se pudo crear la guía.');
@@ -233,4 +236,6 @@ export function GuideAssignmentPanel(props = {}) {
     )
   );
 }
+
+
 
