@@ -2630,7 +2630,13 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
             const quantity = Math.max(1, Math.floor(Number(payloadProduct.quantity || payloadProduct.productQuantity || 1)) || 1);
             const unitPrice = Number(payloadProduct.unitPrice ?? payloadProduct.productUnitPrice ?? payloadProduct.price ?? sourceProduct.price ?? 0);
             const lineTotal = Number((unitPrice * quantity).toFixed(2));
-            const saleSellerId = seller.id || payloadProduct.ownerId || '';
+            // En pagos con Cartera, payloadProduct.ownerId proviene del producto leído
+            // dentro de la transacción que confirmó el cobro. Esa referencia es la
+            // autoridad para registrar inventario/venta y evita mezclar un ownerId
+            // local desactualizado con el ownerId que Firestore ya validó.
+            const saleSellerId = walletPaymentId
+                ? String(payloadProduct.ownerId || '').trim()
+                : (seller.id || payloadProduct.ownerId || '');
             const sale = {
                 saleId: id,
                 orderSaleId: baseId,
@@ -2659,10 +2665,18 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                 productSizes: normalizeProductSizes(payloadProduct.sizes || sourceProduct.sizes || sourceProduct.medidas),
                 productColors: normalizeProductColors(payloadProduct.colors || sourceProduct.colors || sourceProduct.colores),
                 sellerId: saleSellerId,
-                sellerName: seller.name || payloadProduct.ownerName || 'Admin Central',
-                sellerEmail: seller.email || payloadProduct.ownerEmail || ADMIN_EMAIL,
-                sellerPhone: seller.phone || payloadProduct.ownerPhone || '-',
-                sellerNotificationEmail: seller.saleNotificationEmail || payloadProduct.sellerNotificationEmail || '',
+                sellerName: walletPaymentId
+                    ? (payloadProduct.ownerName || seller.name || 'Admin Central')
+                    : (seller.name || payloadProduct.ownerName || 'Admin Central'),
+                sellerEmail: walletPaymentId
+                    ? (payloadProduct.ownerEmail || seller.email || ADMIN_EMAIL)
+                    : (seller.email || payloadProduct.ownerEmail || ADMIN_EMAIL),
+                sellerPhone: walletPaymentId
+                    ? (payloadProduct.ownerPhone || seller.phone || '-')
+                    : (seller.phone || payloadProduct.ownerPhone || '-'),
+                sellerNotificationEmail: walletPaymentId
+                    ? (payloadProduct.sellerNotificationEmail || payloadProduct.saleNotificationEmail || seller.saleNotificationEmail || payloadProduct.ownerEmail || seller.email || '')
+                    : (seller.saleNotificationEmail || payloadProduct.sellerNotificationEmail || ''),
                 buyerName: payload.delivery?.fullName || '',
                 buyerEmail: payload.delivery?.email || '',
                 buyerPhone: payload.delivery?.phone || '',
