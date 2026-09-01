@@ -120,6 +120,10 @@
     const [supermarketPassword, setSupermarketPassword] = useState('');
     const [supermarketPasswordError, setSupermarketPasswordError] = useState('');
     const [supermarketUnlocking, setSupermarketUnlocking] = useState(false);
+    const supermarketSessionKey = `driveMxSupermarketUnlocked_${Core.safeDocumentId(getUserProfileId(sessionUser || {})) || 'anonimo'}`;
+    const [supermarketUnlocked, setSupermarketUnlocked] = useState(() => {
+      try { return global.sessionStorage?.getItem(supermarketSessionKey) === '1'; } catch (error) { return false; }
+    });
     const [userProductForm, setUserProductForm] = useState(() => createFormState());
     const [userProductImageFiles, setUserProductImageFiles] = useState([]);
     const [userProductUploading, setUserProductUploading] = useState(false);
@@ -141,7 +145,15 @@
     const publicList = Array.isArray(publicProducts?.products) ? publicProducts.products : [];
 
     useEffect(() => {
-      if (!sessionUser || sessionUser.role === 'admin') {
+      try {
+        setSupermarketUnlocked(global.sessionStorage?.getItem(supermarketSessionKey) === '1');
+      } catch (error) {
+        setSupermarketUnlocked(false);
+      }
+    }, [supermarketSessionKey]);
+
+    useEffect(() => {
+      if (!sessionUser) {
         setRfc('');
         return;
       }
@@ -397,10 +409,14 @@
         setUserProductForm((previous) => ({ ...previous, category }));
         return;
       }
+      if (supermarketUnlocked) {
+        setUserProductForm((previous) => ({ ...previous, category: 'supermercado' }));
+        return;
+      }
       setSupermarketPassword('');
       setSupermarketPasswordError('');
       setShowSupermarketPasswordModal(true);
-    }, []);
+    }, [supermarketUnlocked]);
 
     const closeSupermarketPasswordModal = useCallback(() => {
       if (supermarketUnlocking) return;
@@ -420,6 +436,8 @@
       setSupermarketPasswordError('');
       try {
         await verifyAdminPassword(password);
+        setSupermarketUnlocked(true);
+        try { global.sessionStorage?.setItem(supermarketSessionKey, '1'); } catch (storageError) {}
         setUserProductForm((previous) => ({ ...previous, category: 'supermercado' }));
         setShowSupermarketPasswordModal(false);
         setSupermarketPassword('');
@@ -428,7 +446,7 @@
       } finally {
         setSupermarketUnlocking(false);
       }
-    }, [supermarketPassword, verifyAdminPassword]);
+    }, [supermarketPassword, verifyAdminPassword, supermarketSessionKey]);
 
     const saveRfc = useCallback(async (event) => {
       event?.preventDefault?.();
@@ -722,10 +740,12 @@
       setSupermarketPassword('');
       setSupermarketPasswordError('');
       setSupermarketUnlocking(false);
+      setSupermarketUnlocked(false);
+      try { global.sessionStorage?.removeItem(supermarketSessionKey); } catch (error) {}
       setBusinessName('');
       setBusinessNameSaving(false);
       resetUserProductForm();
-    }, [resetUserProductForm]);
+    }, [resetUserProductForm, supermarketSessionKey]);
 
     return {
       userPanelProducts,
@@ -924,6 +944,7 @@
     }
   };
 })(window);
+
 
 
 
