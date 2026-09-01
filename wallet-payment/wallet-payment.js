@@ -165,6 +165,69 @@
     return paymentError(error?.message || GENERAL_ERROR, existingCode || 'wallet-payment-error');
   }
 
+  async function processWalletPaymentViaApi({ firebaseUser, paymentId, order } = {}) {
+    const currentUser = firebaseUser;
+    if (!currentUser?.uid || currentUser?.isAnonymous === true || typeof currentUser.getIdToken !== 'function') {
+      throw paymentError('Inicia sesión con el usuario propietario de la cartera.', 'wallet-auth-required');
+    }
+
+    const token = await currentUser.getIdToken();
+    let response;
+    try {
+      response = await fetch('/api/pay-with-wallet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ paymentId, order })
+      });
+    } catch (error) {
+      throw paymentError('No se pudo conectar con el servidor para procesar el pago con cartera.', 'wallet-payment-network', {
+        cause: clean(error?.message)
+      });
+    }
+
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      throw paymentError('El servidor devolvió una respuesta inválida al procesar la cartera.', 'wallet-payment-server-response', {
+        httpStatus: response.status
+      });
+    }
+
+    if (!response.ok || payload?.success !== true) {
+      const code = clean(payload?.code || `wallet-payment-http-${response.status}`).toLowerCase();
+      const message = clean(payload?.error || payload?.message || GENERAL_ERROR);
+      throw paymentError(message, code || 'wallet-payment-error', {
+        ...(payload?.details && typeof payload.details === 'object' ? payload.details : {}),
+        serverStage: clean(payload?.stage),
+        httpStatus: response.status
+      });
+    }
+
+    const sales = Array.isArray(payload.sales) ? payload.sales : [];
+    const normalizedProducts = sales.map((sale) => ({
+      id: clean(sale.productId),
+      name: clean(sale.productName),
+      quantity: Math.max(1, Math.floor(Number(sale.quantity ?? sale.productQuantity ?? 1)) || 1),
+      unitPrice: roundMoney(sale.unitPrice ?? sale.productUnitPrice ?? 0),
+      lineTotal: roundMoney(sale.productTotal ?? sale.productCost ?? 0),
+      ownerId: safeDocId(sale.sellerId || ''),
+      saleId: clean(sale.saleId),
+      sizes: Array.isArray(sale.productSizes) ? sale.productSizes : [],
+      colors: Array.isArray(sale.productColors) ? sale.productColors : []
+    })).filter((item) => item.id);
+
+    return {
+      ...payload,
+      movementId: clean(payload.movementId || `mov_purchase_${paymentId}`),
+      products: normalizedProducts,
+      serverFinalized: true
+    };
+  }
+
   async function readExistingWallet({ fbase, appId, user, Wallet } = {}) {
     const uid = safeDocId(user?.uid || user?.id || '');
     if (!uid) throw paymentError('No se pudo identificar al usuario autenticado.', 'wallet-user-invalid');
@@ -524,13 +587,10 @@
       setPaying(true);
       setError('');
       try {
-        const result = await processWalletPayment({
-          fbase,
-          appId,
-          Wallet,
+        const resolvedPaymentId = paymentId || getOrCreatePaymentId();
+        const result = await processWalletPaymentViaApi({
           firebaseUser: fbUser,
-          sessionUser,
-          paymentId: paymentId || getOrCreatePaymentId(),
+          paymentId: resolvedPaymentId,
           order
         });
         setWallet((previous) => previous ? ({ ...previous, balance: result.balanceAfter, updatedAt: result.paidAt, status: result.balanceAfter > 0 ? 'Activa' : 'Sin saldo' }) : previous);
