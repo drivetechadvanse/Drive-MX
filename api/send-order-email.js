@@ -97,10 +97,19 @@ function normalizeProducts(product = {}, products = []) {
     .filter((item) => item.id && item.name);
 }
 
-function productsHtml(orderProducts = []) {
+function productsHtml(orderProducts = [], options = {}) {
+  const includeSellerContact = options.includeSellerContact === true;
+
   return orderProducts
-    .map(
-      (item, index) => `
+    .map((item, index) => {
+      const sellerContactHtml = includeSellerContact
+        ? `
+          <p><b>Usuario vendedor:</b> ${escapeHtml(item.ownerName || "No registrado")}</p>
+          <p><b>Teléfono del vendedor:</b> ${escapeHtml(item.ownerPhone || "No registrado")}</p>
+        `
+        : "";
+
+      return `
         <div style="padding:12px 0; border-bottom:1px solid #e5e7eb;">
           <p><b>Producto ${index + 1}</b></p>
           <p><b>ID:</b> ${escapeHtml(item.id)}</p>
@@ -109,9 +118,10 @@ function productsHtml(orderProducts = []) {
           <p><b>Precio unitario:</b> $${money(item.unitPrice ?? item.price)}</p>
           <p><b>Total del producto:</b> $${money(item.lineTotal ?? item.totalPrice ?? item.productTotal)}</p>
           ${productOptionsHtml(item)}
+          ${sellerContactHtml}
         </div>
-      `
-    )
+      `;
+    })
     .join("");
 }
 
@@ -581,9 +591,10 @@ module.exports = async function handler(req, res) {
       : [];
 
     const targetsByEmail = new Map();
+    const baseReceiverKey = clean(receiverEmail).toLowerCase();
     [...explicitTargets, ...inferredTargets, ...legacyTargets].forEach((target) => {
       const targetKey = clean(target.to).toLowerCase();
-      if (!targetKey || targetsByEmail.has(targetKey)) return;
+      if (!targetKey || targetKey === baseReceiverKey || targetsByEmail.has(targetKey)) return;
       targetsByEmail.set(targetKey, target);
     });
 
@@ -629,7 +640,7 @@ module.exports = async function handler(req, res) {
         <h2>Nueva solicitud de compra</h2>
 
         <h3>Productos</h3>
-        ${productsHtml(orderProducts)}
+        ${productsHtml(orderProducts, { includeSellerContact: true })}
         <p><b>Subtotal productos:</b> $${money(orderSubtotal)}</p>
         <p><b>Gastos de envío:</b> $${money(orderShippingFee)}</p>
         <p><b>Total acumulado:</b> $${money(orderTotal)}</p>
@@ -681,9 +692,6 @@ module.exports = async function handler(req, res) {
 
           <h3>Productos de la compra</h3>
           ${saleProductsHtml}
-          <p><b>Subtotal productos:</b> $${money(orderSubtotal)}</p>
-          <p><b>Gastos de envío:</b> $${money(orderShippingFee)}</p>
-          <p><b>Total acumulado:</b> $${money(orderTotal)}</p>
 
           <hr />
 
@@ -701,11 +709,7 @@ module.exports = async function handler(req, res) {
         </div>
       `;
 
-      const saleText = `${saleMessage}\n\nProductos de la compra:\n${saleProductsText}\n\nSubtotal productos: $${money(
-        orderSubtotal
-      )}\nGastos de envío: $${money(orderShippingFee)}\nTotal acumulado: $${money(
-        orderTotal
-      )}\nProductos distintos: ${itemCount}\nUnidades totales: ${totalQuantity}\n\nComprador:\nNombre: ${clean(delivery.fullName)}\nTeléfono: ${clean(
+      const saleText = `${saleMessage}\n\nProductos de la compra:\n${saleProductsText}\n\nProductos distintos: ${itemCount}\nUnidades totales: ${totalQuantity}\n\nComprador:\nNombre: ${clean(delivery.fullName)}\nTeléfono: ${clean(
         delivery.phone
       )}\nCorreo: ${clean(delivery.email)}\nReferencias: ${clean(delivery.references)}`;
 
