@@ -56,6 +56,35 @@ export function AdminPanel(props = {}) {
           savePaymentSettings: props.savePaymentSettings,
           paymentSaving: props.paymentSaving
         }),
+        props.StripeWallet?.AdminStripeSettingsCard ? h(props.StripeWallet.AdminStripeSettingsCard, {
+          fbase: props.fbase,
+          sessionUser: props.sessionUser
+        }) : null,
+        props.userProductsManager ? h('div', { className: 'card-glass overflow-hidden' },
+          h('div', { className: 'bg-slate-50 border-b border-slate-100 px-6 py-4' },
+            h('h2', { className: 'text-[10px] font-black uppercase tracking-widest text-slate-400 drive-mx-panel-section-title' }, 'RFC Panel de Control'),
+            h('p', { className: 'text-[9px] font-bold text-slate-300 uppercase mt-1' }, 'RFC del administrador para la cuenta del Panel de Control')
+          ),
+          h('form', { onSubmit: props.userProductsManager.saveRfc || noop, className: 'p-6 grid md:grid-cols-[1fr_auto] gap-3 items-end' },
+            h('div', null,
+              h('label', { className: 'block text-[9px] font-black uppercase text-slate-400 mb-2' }, 'RFC del Panel de Control'),
+              h('input', {
+                required: true,
+                maxLength: 20,
+                autoCapitalize: 'characters',
+                className: 'input-field',
+                placeholder: 'RFC',
+                value: props.userProductsManager.rfc || '',
+                onChange: (event) => props.userProductsManager.setRfc?.(String(event.target.value || '').trim().toUpperCase().replace(/\s+/g, ''))
+              })
+            ),
+            h('button', {
+              disabled: props.userProductsManager.rfcSaving,
+              type: 'submit',
+              className: 'btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed'
+            }, props.userProductsManager.rfcSaving ? 'Guardando...' : 'Guardar RFC')
+          )
+        ) : null,
         WalletUI.AdminCommissionSettings ? h(WalletUI.AdminCommissionSettings, {
           settings: props.walletSettings,
           value: props.walletSettings?.globalCommissionPercent,
