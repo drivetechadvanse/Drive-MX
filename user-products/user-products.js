@@ -774,7 +774,7 @@
     };
   }
 
-  function UserProductsPanel({ manager, Icons = {} } = {}) {
+  function UserProductsPanel({ manager, Icons = {}, hideRfcSettings = false } = {}) {
     if (!manager) return null;
     const TrashIcon = Icons.Trash || (() => null);
     const Supermercado = global.DriveMxSupermercado || global.DriveMxSupermercadoCore || {};
@@ -807,18 +807,20 @@
           </div>
         )}
 
-        <div className="card-glass overflow-hidden">
-          <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
-            <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">RFC</h2>
-          </div>
-          <form onSubmit={saveRfc} className="p-6 grid md:grid-cols-[1fr_auto] gap-3 items-end">
-            <div>
-              <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">RFC obligatorio</label>
-              <input required maxLength="20" autoCapitalize="characters" className="input-field" placeholder="RFC" value={rfc || ''} onChange={(event) => setRfc(normalizeRfc(event.target.value))} />
+        {!hideRfcSettings && (
+          <div className="card-glass overflow-hidden">
+            <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
+              <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">RFC</h2>
             </div>
-            <button disabled={rfcSaving} type="submit" className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{rfcSaving ? 'Guardando...' : 'Guardar RFC'}</button>
-          </form>
-        </div>
+            <form onSubmit={saveRfc} className="p-6 grid md:grid-cols-[1fr_auto] gap-3 items-end">
+              <div>
+                <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">RFC obligatorio</label>
+                <input required maxLength="20" autoCapitalize="characters" className="input-field" placeholder="RFC" value={rfc || ''} onChange={(event) => setRfc(normalizeRfc(event.target.value))} />
+              </div>
+              <button disabled={rfcSaving} type="submit" className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{rfcSaving ? 'Guardando...' : 'Guardar RFC'}</button>
+            </form>
+          </div>
+        )}
 
         {BusinessStorefronts.BusinessNameSettings && (
           <BusinessStorefronts.BusinessNameSettings
@@ -922,6 +924,7 @@
     }
   };
 })(window);
+
 
 
 
