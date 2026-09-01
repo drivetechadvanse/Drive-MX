@@ -487,6 +487,8 @@ const App = () => {
     });
     const currentUserProducts = userProductsManager.currentUserProducts;
     const currentUserSales = userProductsManager.currentUserSales;
+    const currentUserRfc = String(userProductsManager.rfc || sessionUser?.rfc || '').trim().toUpperCase();
+    const userPanelRfcRequired = Boolean(sessionUser && sessionUser.role !== 'admin' && !currentUserRfc);
     const calculateShippingFee = useCallback((items = []) => {
         const productsForShipping = Array.isArray(items) ? items.filter(Boolean) : [];
         if (productsForShipping.length === 0) return 0;
@@ -3994,60 +3996,90 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                                 <p className="text-[10px] font-bold text-slate-400 uppercase">Panel de Usuario Registrado</p>
                                 <h1 className="text-3xl font-black uppercase tracking-tight">Acceso <span className="text-red-500">Usuario</span></h1>
                             </div>
-                            <div className="relative">
-                                <button type="button" onClick={() => setShowUserMenu(!showUserMenu)} className="w-12 h-12 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-600 hover:text-red-500 shadow-sm" aria-label="Abrir menú de usuario">
-                                    <Icons.Menu />
-                                </button>
-                                {showUserMenu && (
-                                    <div className="absolute right-0 top-14 w-56 bg-white border border-slate-100 rounded-2xl shadow-xl p-2 z-50 animate-slide">
-                                        <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-products-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Administración de Productos</button>
-                                        <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-drivers-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Conductores</button>
-                                        <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-sales-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Ventas Realizadas</button>
-                                        <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('wallet-movements-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Movimientos</button>
-                                        <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); setView('guide-assignment'); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Asignación de Guías</button>
-                                        <button type="button" onClick={openAssignmentsAccess} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Mis Asignaciones</button>
-                                    </div>
-                                )}
-                            </div>
+                            {!userPanelRfcRequired && (
+                                <div className="relative">
+                                    <button type="button" onClick={() => setShowUserMenu(!showUserMenu)} className="w-12 h-12 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-600 hover:text-red-500 shadow-sm" aria-label="Abrir menú de usuario">
+                                        <Icons.Menu />
+                                    </button>
+                                    {showUserMenu && (
+                                        <div className="absolute right-0 top-14 w-56 bg-white border border-slate-100 rounded-2xl shadow-xl p-2 z-50 animate-slide">
+                                            <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-products-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Administración de Productos</button>
+                                            <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-drivers-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Conductores</button>
+                                            <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('user-sales-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Ventas Realizadas</button>
+                                            <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); document.getElementById('wallet-movements-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Movimientos</button>
+                                            <button type="button" onClick={() => { if (!ensureAccountAllowed()) return; setShowUserMenu(false); setView('guide-assignment'); }} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Asignación de Guías</button>
+                                            <button type="button" onClick={openAssignmentsAccess} className="w-full text-left px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-600 hover:bg-red-50 hover:text-red-600">Mis Asignaciones</button>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
-                        <WalletUI.UserWalletCard
-                            user={sessionUser}
-                            wallet={currentUserWallet}
-                            rechargeAmount={walletRechargeAmount}
-                            onRechargeAmountChange={setWalletRechargeAmount}
-                            showRecharge={showWalletRecharge}
-                            onToggleRecharge={() => { if (!ensureAccountAllowed()) return; setShowWalletRecharge(prev => !prev); }}
-                            onCloseRecharge={() => { setShowWalletRecharge(false); setWalletRechargeAmount(''); }}
-                            rechargeProcessing={walletRechargeProcessing}
-                            stripeRechargeProcessing={stripeRechargeProcessing}
-                            settings={walletSettings}
-                            bankAccount={paymentSettings.bankAccount}
-                            onCreatePendingRecharge={createPendingWalletRechargeTransfer}
-                            onCreateStripeRecharge={createStripeWalletRecharge}
-                            blockedMessage={currentUserWalletBlockedMessage}
-                            userProductCount={currentUserProducts.filter(product => product.active !== false).length}
-                        />
+                        {userPanelRfcRequired ? (
+                            <div className="card-glass overflow-hidden">
+                                <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
+                                    <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">RFC obligatorio</h2>
+                                </div>
+                                <form onSubmit={userProductsManager.saveRfc} className="p-6 grid md:grid-cols-[1fr_auto] gap-3 items-end">
+                                    <div>
+                                        <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Ingresa RFC para continuar</label>
+                                        <input required maxLength="20" autoCapitalize="characters" className="input-field" placeholder="RFC" value={userProductsManager.rfc || ''} onChange={(event) => userProductsManager.setRfc(String(event.target.value || '').trim().toUpperCase().replace(/\s+/g, ''))} />
+                                    </div>
+                                    <button disabled={userProductsManager.rfcSaving} type="submit" className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{userProductsManager.rfcSaving ? 'Guardando...' : 'Guardar RFC'}</button>
+                                </form>
+                                <div className="px-6 pb-6">
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-red-500">Debes registrar tu RFC para utilizar cualquier función del Panel de Usuario.</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <>
+                                <WalletUI.UserWalletCard
+                                    user={sessionUser}
+                                    wallet={currentUserWallet}
+                                    rechargeAmount={walletRechargeAmount}
+                                    onRechargeAmountChange={setWalletRechargeAmount}
+                                    showRecharge={showWalletRecharge}
+                                    onToggleRecharge={() => { if (!ensureAccountAllowed()) return; setShowWalletRecharge(prev => !prev); }}
+                                    onCloseRecharge={() => { setShowWalletRecharge(false); setWalletRechargeAmount(''); }}
+                                    rechargeProcessing={walletRechargeProcessing}
+                                    stripeRechargeProcessing={stripeRechargeProcessing}
+                                    settings={walletSettings}
+                                    bankAccount={paymentSettings.bankAccount}
+                                    onCreatePendingRecharge={createPendingWalletRechargeTransfer}
+                                    onCreateStripeRecharge={createStripeWalletRecharge}
+                                    blockedMessage={currentUserWalletBlockedMessage}
+                                    userProductCount={currentUserProducts.filter(product => product.active !== false).length}
+                                />
 
-                        <WalletUI.WalletMovementsPanel movements={walletMovements} />
+                                <WalletUI.WalletMovementsPanel movements={walletMovements} />
 
-                        <UserProductsUI.UserProductsPanel manager={userProductsManager} Icons={Icons} />
+                                <UserProductsUI.UserProductsPanel manager={userProductsManager} Icons={Icons} hideRfcSettings />
 
-                        {ConductoresUI.ConductoresPanel && (
-                            <ConductoresUI.ConductoresPanel
-                                fbase={fbase}
-                                appId={appId}
-                                currentUser={sessionUser}
-                                ensureAccountAllowed={ensureAccountAllowed}
-                                onClaimed={packagesManager.onShipmentCreated}
-                            />
+                                {ConductoresUI.ConductoresPanel && (
+                                    <ConductoresUI.ConductoresPanel
+                                        fbase={fbase}
+                                        appId={appId}
+                                        currentUser={sessionUser}
+                                        ensureAccountAllowed={ensureAccountAllowed}
+                                        onClaimed={packagesManager.onShipmentCreated}
+                                    />
+                                )}
+
+                                <PackagesGuidesUI.UserAssignmentsPanel manager={packagesManager} Icons={Icons} />
+                            </>
                         )}
-
-                        <PackagesGuidesUI.UserAssignmentsPanel manager={packagesManager} Icons={Icons} />
                     </div>
                 )}
 
-                {view === 'guide-assignment' && GuideAssignmentUI.GuideAssignmentPanel && (
+                {view === 'guide-assignment' && userPanelRfcRequired && (
+                    <div className="w-full max-w-3xl card-glass p-6 animate-slide">
+                        <h2 className="text-xl font-black uppercase tracking-tight">RFC obligatorio</h2>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-red-500 mt-2">Registra tu RFC antes de utilizar cualquier función del Panel de Usuario.</p>
+                        <button type="button" onClick={() => setView('operator')} className="btn-primary h-11 px-5 mt-5">Registrar RFC</button>
+                    </div>
+                )}
+
+                {view === 'guide-assignment' && !userPanelRfcRequired && GuideAssignmentUI.GuideAssignmentPanel && (
                     <GuideAssignmentUI.GuideAssignmentPanel
                         fbase={fbase}
                         appId={appId}
