@@ -488,7 +488,7 @@ const App = () => {
     const currentUserProducts = userProductsManager.currentUserProducts;
     const currentUserSales = userProductsManager.currentUserSales;
     const currentUserRfc = String(userProductsManager.rfc || sessionUser?.rfc || '').trim().toUpperCase();
-    const userPanelRfcRequired = Boolean(sessionUser && sessionUser.role !== 'admin' && !currentUserRfc);
+    const userPanelRfcRequired = Boolean(sessionUser && !currentUserRfc);
     const calculateShippingFee = useCallback((items = []) => {
         const productsForShipping = Array.isArray(items) ? items.filter(Boolean) : [];
         if (productsForShipping.length === 0) return 0;
@@ -4015,23 +4015,25 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                             )}
                         </div>
 
-                        {userPanelRfcRequired ? (
-                            <div className="card-glass overflow-hidden">
-                                <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
-                                    <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">RFC obligatorio</h2>
+                        <div className="card-glass overflow-hidden">
+                            <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
+                                <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">RFC obligatorio</h2>
+                            </div>
+                            <form onSubmit={userProductsManager.saveRfc} className="p-6 grid md:grid-cols-[1fr_auto] gap-3 items-end">
+                                <div>
+                                    <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">RFC del usuario</label>
+                                    <input required maxLength="20" autoCapitalize="characters" className="input-field" placeholder="RFC" value={userProductsManager.rfc || ''} onChange={(event) => userProductsManager.setRfc(String(event.target.value || '').trim().toUpperCase().replace(/\s+/g, ''))} />
                                 </div>
-                                <form onSubmit={userProductsManager.saveRfc} className="p-6 grid md:grid-cols-[1fr_auto] gap-3 items-end">
-                                    <div>
-                                        <label className="block text-[9px] font-black uppercase text-slate-400 mb-2">Ingresa RFC para continuar</label>
-                                        <input required maxLength="20" autoCapitalize="characters" className="input-field" placeholder="RFC" value={userProductsManager.rfc || ''} onChange={(event) => userProductsManager.setRfc(String(event.target.value || '').trim().toUpperCase().replace(/\s+/g, ''))} />
-                                    </div>
-                                    <button disabled={userProductsManager.rfcSaving} type="submit" className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{userProductsManager.rfcSaving ? 'Guardando...' : 'Guardar RFC'}</button>
-                                </form>
+                                <button disabled={userProductsManager.rfcSaving} type="submit" className="btn-primary h-12 disabled:opacity-50 disabled:cursor-not-allowed">{userProductsManager.rfcSaving ? 'Guardando...' : 'Guardar RFC'}</button>
+                            </form>
+                            {userPanelRfcRequired && (
                                 <div className="px-6 pb-6">
                                     <p className="text-[10px] font-black uppercase tracking-widest text-red-500">Debes registrar tu RFC para utilizar cualquier función del Panel de Usuario.</p>
                                 </div>
-                            </div>
-                        ) : (
+                            )}
+                        </div>
+
+                        {!userPanelRfcRequired && (
                             <>
                                 <WalletUI.UserWalletCard
                                     user={sessionUser}
