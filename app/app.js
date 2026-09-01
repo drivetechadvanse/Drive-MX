@@ -1595,6 +1595,7 @@ const App = () => {
         const checkoutItem = createPurchasableProduct(product, requestedQuantity);
         if (!ensureSupermarketMinimumAllowed([checkoutItem])) return;
         if (!ensureCheckoutInventoryAllowed([checkoutItem])) return;
+        if (!ensureCheckoutWalletsAllowed([checkoutItem])) return;
         setCheckoutProductIds([]);
         setSelectedProductId(product.id);
         setSelectedProductQuantity(checkoutItem.quantity || 1);
