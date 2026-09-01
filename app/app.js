@@ -3967,6 +3967,7 @@ Comunícate al 5633535701 o 5617549756 para la recolección de tu paquete.`,
                         deleteCompletedSale={deleteCompletedSale}
                         ads={ads}
                         adminProductsManager={adminProductsManager}
+                        userProductsManager={userProductsManager}
                         registeredUsersPage={registeredUsersPage}
                         REGISTERED_USERS_PAGE_SIZE={REGISTERED_USERS_PAGE_SIZE}
                         setRegisteredUsersPage={setRegisteredUsersPage}
